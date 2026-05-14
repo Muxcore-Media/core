@@ -1,0 +1,30 @@
+# MuxCore binaries
+/cmd/muxcored/muxcored
+/cmd/muxcored/muxcored.exe
+
+# Go workspace
+go.work
+go.work.sum
+
+# Dependencies
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+/dist/
+/build/
+/tmp/
+
+# Environment
+.env
+.env.local
+*.local.yaml
