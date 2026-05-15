@@ -81,6 +81,9 @@
 - [x] Folder watcher and filesystem event contract (#73)
 - [x] Media info and codec analysis contract (#74)
 
+> Phase 2 infrastructure and contracts are complete. The modules below are a mix
+> of shipped and in-development — the unchecked items remain future work.
+
 ### Modules
 - [x] Distributed worker pool (`worker-pool`)
 - [x] Storage tiering engine (`storage-tiering`)

@@ -291,7 +291,7 @@ Compatibility enforcement is planned for the service registry.
 
 ## SDK
 
-The **Go SDK** (`sdk/go/`) is reserved for future SDK tooling. Currently, modules import contracts directly from `pkg/contracts/`.
+The **Go SDK** is the `pkg/contracts` package. Modules import it directly and call `contracts.Register()` in their `init()`. The `sdk/go/` directory is reserved for future higher-level SDK tooling (code generation, scaffolding).
 
 Future SDKs planned for:
 - TypeScript/JavaScript (UI plugins)
