@@ -22,6 +22,10 @@ func (m *Manager) Register(mod contracts.Module, deps []string) error {
 	return m.registry.Register(mod, deps)
 }
 
+func (m *Manager) Unregister(id string) error {
+	return m.registry.Unregister(id)
+}
+
 func (m *Manager) InitAll(ctx context.Context) error {
 	entries := m.registry.List()
 

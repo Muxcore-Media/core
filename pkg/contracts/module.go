@@ -106,9 +106,13 @@ type ModuleFactory func(deps ModuleDeps) Module
 
 // ModuleDeps provides modules with the core services they need during construction.
 type ModuleDeps struct {
-	Registry ServiceRegistry
-	EventBus EventBus
-	Routes   RouteRegistrar
+	Registry   ServiceRegistry
+	EventBus   EventBus
+	Routes     RouteRegistrar
+	Cluster    Cluster
+	Storage    StorageOrchestrator
+	WorkerPool WorkerPool
+	Audit      AuditLogger
 }
 
 // -- Auto-registration --

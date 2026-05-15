@@ -51,18 +51,18 @@
 
 **Goal:** Prove distributed architecture. Multi-node, failover, worker pools.
 
-- [ ] Multi-node clustering (#21)
-- [ ] Distributed worker pool (#22, renamed from "Distributed transcoding pool")
-- [ ] Worker failover and task redistribution (#23)
+- [x] Multi-node clustering (#21)
+- [x] Distributed worker pool (#22, renamed from "Distributed transcoding pool") — `worker-pool` module
+- [x] Worker failover and task redistribution (#23) — `worker-pool` module
 - [x] Storage abstraction and orchestrator layer (#53)
-- [ ] Storage policies — hot/cold tiering (#25)
-- [ ] Audit logging (#27)
-- [ ] Prometheus metrics + Grafana dashboards (#28)
+- [x] Storage policies — hot/cold tiering (#25) — `storage-tiering` module
+- [x] Audit logging (#27) — `audit-logger` module
+- [x] Prometheus metrics + Grafana dashboards (#28) — `prometheus-metrics` module
 - [x] DatabaseProvider contract (#61)
 - [x] CacheProvider contract (#62)
 - [x] Go Module SDK (#54)
 - [x] Configuration management system (#55)
-- [ ] gRPC protobuf contract definitions (#56)
+- [x] gRPC protobuf contract definitions (#56)
 - [x] Event schema and versioning system (#57)
 - [x] Module health checking and aggregation (#58)
 - [x] API rate limiting (#59)
@@ -76,12 +76,16 @@
 - [x] Import list contract (#68) — watchlist sync from external services
 - [x] Settings provider interface (#69) — UI composition for module config
 - [x] Multi-agent notification contract (#70)
-- [ ] Quality profile and release decision contract (#71)
-- [ ] Custom format and release profile contract (#72)
+- [x] Quality profile and release decision contract (#71)
+- [x] Custom format and release profile contract (#72)
 - [x] Folder watcher and filesystem event contract (#73)
-- [ ] Media info and codec analysis contract (#74)
+- [x] Media info and codec analysis contract (#74)
 
 ### Modules
+- [x] Distributed worker pool (`worker-pool`)
+- [x] Storage tiering engine (`storage-tiering`)
+- [x] Audit logger (`audit-logger`)
+- [x] Prometheus metrics (`prometheus-metrics`)
 - [ ] Native torrent engine
 - [ ] SABnzbd downloader
 - [ ] Debrid downloader

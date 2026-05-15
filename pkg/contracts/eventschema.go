@@ -107,6 +107,30 @@ type ModuleUnregisteredPayload struct {
 	ModuleID string `json:"module_id"`
 }
 
+// QualityDecisionPayload is the payload for quality.decision events.
+type QualityDecisionPayload struct {
+	ReleaseTitle string `json:"release_title"`
+	Profile      string `json:"profile"`
+	Accepted     bool   `json:"accepted"`
+	Reason       string `json:"reason"`
+	Score        int    `json:"score"`
+}
+
+// FormatMatchedPayload is the payload for format.matched events.
+type FormatMatchedPayload struct {
+	ReleaseTitle string `json:"release_title"`
+	Format       string `json:"format"`
+	Score        int    `json:"score"`
+}
+
+// MediaAnalyzedPayload is the payload for media.analyzed events.
+type MediaAnalyzedPayload struct {
+	Path       string  `json:"path"`
+	Codec      string  `json:"codec"`
+	Resolution string  `json:"resolution"`
+	Duration   float64 `json:"duration"`
+}
+
 // EventSchemaVersion is the current schema version for all event payloads.
 // When a breaking change is made, this is incremented.
 const EventSchemaVersion = "v1"

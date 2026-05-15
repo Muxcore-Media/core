@@ -12,16 +12,16 @@ import (
 type Registry struct {
 	mu          sync.RWMutex
 	modules     map[string]*Entry
-	capIndex    map[string]map[string]bool              // capability -> moduleID -> true
+	capIndex    map[string]map[string]bool // capability -> moduleID -> true
 	schemaIndex map[contracts.MediaType]contracts.MediaTypeSchema
 }
 
 type Entry struct {
-	Module   contracts.Module
-	Info     contracts.ModuleInfo
-	State    contracts.ModuleState
-	Health   error
-	Deps     []string
+	Module contracts.Module
+	Info   contracts.ModuleInfo
+	State  contracts.ModuleState
+	Health error
+	Deps   []string
 }
 
 func New() *Registry {
@@ -322,7 +322,7 @@ func (r *Registry) Resolve(id string) (contracts.ModuleEntry, error) {
 	if err != nil {
 		return contracts.ModuleEntry{}, err
 	}
-	return contracts.ModuleEntry{Info: entry.Info, Module: entry.Module}, nil
+	return contracts.ModuleEntry{Info: entry.Info, State: entry.State, Module: entry.Module}, nil
 }
 
 // ListAll returns every registered module, implementing contracts.ServiceRegistry.

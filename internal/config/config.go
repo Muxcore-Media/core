@@ -13,7 +13,18 @@ type Config struct {
 	Log      LogConfig      `json:"log"`
 	Database DatabaseConfig `json:"database"`
 	Cache    CacheConfig    `json:"cache"`
+	Cluster  ClusterConfig  `json:"cluster"`
 	Modules  map[string]any `json:"modules"` // per-module arbitrary config
+}
+
+// ClusterConfig holds multi-node clustering settings.
+type ClusterConfig struct {
+	Enabled     bool     `json:"enabled"`
+	NodeID      string   `json:"node_id"`
+	GRPCAddr    string   `json:"grpc_addr"`
+	SeedNodes   []string `json:"seed_nodes"`
+	GossipSecs  int      `json:"gossip_interval_secs"`
+	TimeoutSecs int      `json:"heartbeat_timeout_secs"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -55,7 +66,13 @@ func Default() *Config {
 		},
 		Database: DatabaseConfig{},
 		Cache:    CacheConfig{},
-		Modules:  make(map[string]any),
+		Cluster: ClusterConfig{
+			Enabled:     false,
+			GRPCAddr:    ":9090",
+			GossipSecs:  2,
+			TimeoutSecs: 10,
+		},
+		Modules: make(map[string]any),
 	}
 }
 
@@ -102,6 +119,18 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("MUXCORE_CACHE_URL"); v != "" {
 		cfg.Cache.URL = v
+	}
+	if v := os.Getenv("MUXCORE_CLUSTER_ENABLED"); v != "" {
+		cfg.Cluster.Enabled = v == "true" || v == "1"
+	}
+	if v := os.Getenv("MUXCORE_CLUSTER_NODE_ID"); v != "" {
+		cfg.Cluster.NodeID = v
+	}
+	if v := os.Getenv("MUXCORE_CLUSTER_GRPC_ADDR"); v != "" {
+		cfg.Cluster.GRPCAddr = v
+	}
+	if v := os.Getenv("MUXCORE_CLUSTER_SEEDS"); v != "" {
+		cfg.Cluster.SeedNodes = strings.Split(v, ",")
 	}
 
 	// Normalize case-sensitive fields so consumers don't need to handle

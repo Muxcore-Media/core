@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package muxcore.mesh.v1;
+
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/mesh/v1;meshv1";
+
+// ModuleMesh is the gRPC service mesh for inter-module communication.
+// Modules expose this to receive calls from other modules across nodes.
+service ModuleMesh {
+  // Call invokes a method on a remote module.
+  rpc Call(CallRequest) returns (CallResponse);
+  // StreamCall opens a bidirectional stream for long-running module interactions.
+  rpc StreamCall(stream CallRequest) returns (stream CallResponse);
+}
+
+message CallRequest {
+  // target_module is the ID of the module to invoke.
+  string target_module = 1;
+  // method is the named operation on the target module.
+  string method = 2;
+  // payload is the JSON-encoded request body.
+  bytes payload = 3;
+  // headers carry metadata (request ID, tracing context, auth tokens).
+  map<string, string> headers = 4;
+}
+
+message CallResponse {
+  // payload is the JSON-encoded response body.
+  bytes payload = 1;
+  // error is a non-empty string if the call failed.
+  string error = 2;
+  // headers carry response metadata.
+  map<string, string> headers = 3;
+}

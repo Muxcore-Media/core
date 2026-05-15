@@ -166,6 +166,13 @@ func (o *Orchestrator) List(ctx context.Context, prefix string) ([]contracts.Obj
 	return prov.List(ctx, prefix)
 }
 
+// ProviderCount returns the number of discovered storage providers.
+func (o *Orchestrator) ProviderCount() int {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return len(o.providers)
+}
+
 // CapabilityCheck returns which capability a provider supports for a key.
 func (o *Orchestrator) CapabilityCheck(ctx context.Context, key string) ([]string, error) {
 	prov, err := o.route(key)

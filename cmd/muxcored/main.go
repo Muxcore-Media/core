@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"context"
@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/api"
+	"github.com/Muxcore-Media/core/internal/cluster"
 	"github.com/Muxcore-Media/core/internal/config"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/module"
 	_ "github.com/Muxcore-Media/core/internal/presets" // build-tag-gated module selection
 	"github.com/Muxcore-Media/core/internal/registry"
+	"github.com/Muxcore-Media/core/internal/storage"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/google/uuid"
 )
@@ -52,12 +54,46 @@ func main() {
 	reg := registry.New()
 	mgr := module.NewManager(reg)
 
+	var cl contracts.Cluster
+	if cfg.Cluster.Enabled {
+		clusterCfg := cluster.Config{
+			NodeID:           cfg.Cluster.NodeID,
+			GRPCAddr:         cfg.Cluster.GRPCAddr,
+			HTTPAddr:         cfg.Server.Addr,
+			SeedNodes:        cfg.Cluster.SeedNodes,
+			GossipInterval:   secsToDuration(cfg.Cluster.GossipSecs, 2),
+			HeartbeatTimeout: secsToDuration(cfg.Cluster.TimeoutSecs, 10),
+		}
+		gc := cluster.NewGossipCluster(clusterCfg, bus)
+		transport := cluster.NewTransport(gc, clusterCfg.GRPCAddr)
+		if err := transport.Listen(); err != nil {
+			slog.Error("cluster transport", "error", err)
+			os.Exit(1)
+		}
+		if err := gc.Start(ctx); err != nil {
+			slog.Error("cluster start", "error", err)
+			os.Exit(1)
+		}
+		cl = gc
+		slog.Info("cluster started", "node_id", gc.LocalNode().ID, "seeds", cfg.Cluster.SeedNodes)
+	}
+
 	srv := api.NewServer(cfg.Server.Addr)
+
+	store := storage.NewOrchestrator(reg)
+	if err := store.Discover(); err != nil {
+		slog.Warn("storage discover", "error", err)
+	}
+	cache := storage.NewMemoryCache()
+	store.SetCache(cache)
+	slog.Info("storage orchestrator ready", "providers", store.ProviderCount())
 
 	deps := contracts.ModuleDeps{
 		Registry: reg,
 		EventBus: bus,
 		Routes:   srv,
+		Cluster:  cl,
+		Storage:  store,
 	}
 
 	for _, mod := range contracts.LoadRegistered(deps) {
@@ -148,7 +184,19 @@ func main() {
 	if err := mgr.StopAll(shutdownCtx); err != nil {
 		slog.Error("module shutdown", "error", err)
 	}
+	if cl != nil {
+		if err := cl.Stop(shutdownCtx); err != nil {
+			slog.Error("cluster shutdown", "error", err)
+		}
+	}
 	slog.Info("MuxCore stopped.")
+}
+
+func secsToDuration(secs, def int) time.Duration {
+	if secs <= 0 {
+		secs = def
+	}
+	return time.Duration(secs) * time.Second
 }
 
 func setupLogger(lc config.LogConfig) *slog.Logger {

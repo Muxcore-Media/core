@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Muxcore-Media/core/internal/trace"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 )
 
@@ -72,7 +73,8 @@ func (s *Server) SetAuthFunc(fn func(r *http.Request) (*contracts.Session, error
 //  1. Recovery (innermost — catches panics from the mux)
 //  2. Rate limit (if RateLimiter is set)
 //  3. Auth (if AuthFunc is set)
-//  4. Logging (outermost — logs all requests)
+//  4. Logging
+//  5. Trace (outermost — extracts/generates trace ID from request header)
 func (s *Server) rebuildChain() {
 	var h http.Handler = s.mux
 	h = recoveryMiddleware(h)
@@ -83,6 +85,7 @@ func (s *Server) rebuildChain() {
 		h = authMiddleware(s.AuthFunc)(h)
 	}
 	h = withLogging(h)
+	h = trace.HTTPMiddleware(h)
 	s.http.Handler = h
 }
 
@@ -163,6 +166,6 @@ func withLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
-		slog.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start))
+		slog.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start), "trace_id", trace.FromContext(r.Context()))
 	})
 }

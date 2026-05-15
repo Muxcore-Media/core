@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package muxcore.discovery.v1;
+
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1;discoveryv1";
+
+// DiscoveryService handles cluster membership and service discovery.
+service DiscoveryService {
+  // Join requests membership in the cluster.
+  rpc Join(JoinRequest) returns (JoinResponse);
+  // Leave gracefully removes a node from the cluster.
+  rpc Leave(LeaveRequest) returns (LeaveResponse);
+  // Heartbeat signals that a node is still alive.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  // Members returns the current cluster member list.
+  rpc Members(MembersRequest) returns (MembersResponse);
+  // Watch streams cluster membership changes.
+  rpc Watch(MembersRequest) returns (stream ClusterEvent);
+}
+
+message NodeInfo {
+  string id = 1;
+  string gprc_addr = 2;
+  string http_addr = 3;
+  // labels carry arbitrary node metadata for scheduling decisions.
+  map<string, string> labels = 4;
+  // modules lists the module IDs running on this node.
+  repeated string modules = 5;
+}
+
+message JoinRequest {
+  NodeInfo node = 1;
+}
+
+message JoinResponse {
+  // cluster_id uniquely identifies this cluster incarnation.
+  string cluster_id = 1;
+  // members is the full member list after the join.
+  repeated NodeInfo members = 2;
+  // leader_id is the current cluster leader.
+  string leader_id = 3;
+}
+
+message LeaveRequest {
+  string node_id = 1;
+}
+
+message LeaveResponse {}
+
+message HeartbeatRequest {
+  string node_id = 1;
+  // load carries optional load metrics for scheduling (CPU, memory, etc.).
+  map<string, double> load = 2;
+}
+
+message HeartbeatResponse {
+  // leader_id may change after leader election.
+  string leader_id = 1;
+}
+
+message MembersRequest {}
+
+message MembersResponse {
+  repeated NodeInfo members = 1;
+  string leader_id = 2;
+}
+
+message ClusterEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    TYPE_NODE_JOINED = 1;
+    TYPE_NODE_LEFT = 2;
+    TYPE_NODE_DEGRADED = 3;
+    TYPE_LEADER_CHANGED = 4;
+  }
+  Type type = 1;
+  NodeInfo node = 2;
+  string leader_id = 3;
+}

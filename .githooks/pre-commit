@@ -1,0 +1,21 @@
+#!/bin/bash
+# Pre-commit hook: runs fmt, lint, and tests on changed Go files.
+set -e
+
+# Only run if Go files changed
+changed=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true)
+if [ -z "$changed" ]; then
+    exit 0
+fi
+
+echo "==> Formatting..."
+gofmt -w -s $changed
+git add $changed
+
+echo "==> Vet..."
+go vet ./internal/... ./pkg/... ./cmd/... 2>&1 || true
+
+echo "==> Running tests..."
+go test -race -count=1 -timeout 60s ./internal/... ./pkg/... 2>&1
+
+echo "==> OK"

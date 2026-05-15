@@ -8,6 +8,7 @@ import (
 
 	"encoding/json"
 
+	"github.com/Muxcore-Media/core/internal/trace"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/google/uuid"
 )
@@ -38,6 +39,11 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 	if event.ID == "" {
 		event.ID = uuid.New().String()
 	}
+	if event.TraceID == "" {
+		if tid := trace.FromContext(ctx); tid != "" {
+			event.TraceID = tid
+		}
+	}
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now()
 	}
@@ -56,7 +62,11 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 	for _, s := range subs {
 		if s.eventType == event.Type || s.eventType == "*" {
 			go func(h contracts.EventHandler) {
-				if err := h(ctx, event); err != nil {
+				handlerCtx := context.Background()
+				if event.TraceID != "" {
+					handlerCtx = trace.WithTraceID(handlerCtx, event.TraceID)
+				}
+				if err := h(handlerCtx, event); err != nil {
 					// Log would go here — no silent drops in production
 					_ = err
 				}
@@ -166,6 +176,18 @@ func validateEventPayload(event contracts.Event) error {
 		return validatePayload[contracts.ModuleRegisteredPayload](event.Payload)
 	case contracts.EventModuleUnregistered:
 		return validatePayload[contracts.ModuleUnregisteredPayload](event.Payload)
+	case contracts.EventClusterNodeJoined:
+		return validatePayload[contracts.NodeJoinedPayload](event.Payload)
+	case contracts.EventClusterNodeLeft:
+		return validatePayload[contracts.NodeLeftPayload](event.Payload)
+	case contracts.EventClusterLeaderChanged:
+		return validatePayload[contracts.LeaderChangedPayload](event.Payload)
+	case contracts.EventQualityDecision:
+		return validatePayload[contracts.QualityDecisionPayload](event.Payload)
+	case contracts.EventFormatMatched:
+		return validatePayload[contracts.FormatMatchedPayload](event.Payload)
+	case contracts.EventMediaAnalyzed:
+		return validatePayload[contracts.MediaAnalyzedPayload](event.Payload)
 	default:
 		return nil // unknown event types pass through
 	}

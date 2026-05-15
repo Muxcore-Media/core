@@ -6,12 +6,13 @@ import (
 )
 
 type Event struct {
-	ID          string
-	Type        string
-	Source      string
-	Payload     []byte
-	Metadata    map[string]string
-	Timestamp   time.Time
+	ID        string
+	Type      string
+	Source    string
+	TraceID   string
+	Payload   []byte
+	Metadata  map[string]string
+	Timestamp time.Time
 }
 
 type EventHandler func(ctx context.Context, event Event) error
@@ -41,4 +42,7 @@ const (
 	EventModuleRegistered   = "module.registered"
 	EventModuleUnregistered = "module.unregistered"
 	EventModuleDegraded     = "module.degraded"
+	EventQualityDecision    = "quality.decision"
+	EventFormatMatched      = "format.matched"
+	EventMediaAnalyzed      = "media.analyzed"
 )

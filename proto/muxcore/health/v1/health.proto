@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package muxcore.health.v1;
+
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/health/v1;healthv1";
+
+// HealthService provides health checking for nodes and modules.
+service HealthService {
+  // Check returns the health status of a node or specific module.
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+  // Watch streams health status changes for a set of modules.
+  rpc Watch(HealthWatchRequest) returns (stream HealthCheckResponse);
+}
+
+message HealthCheckRequest {
+  // module_id, if set, checks a specific module. Empty checks the whole node.
+  string module_id = 1;
+}
+
+message HealthCheckResponse {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_HEALTHY = 1;
+    STATUS_DEGRADED = 2;
+    STATUS_UNHEALTHY = 3;
+  }
+  string node_id = 1;
+  string module_id = 2;
+  Status status = 3;
+  // error contains the last error message if status is unhealthy.
+  string error = 4;
+  // timestamp is the Unix timestamp (seconds) of the check.
+  int64 timestamp = 5;
+}
+
+message HealthWatchRequest {
+  // module_ids to watch; empty means watch all.
+  repeated string module_ids = 1;
+  // interval_seconds between health checks.
+  int32 interval_seconds = 2;
+}
