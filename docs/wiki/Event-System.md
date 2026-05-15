@@ -129,6 +129,24 @@ bus.Subscribe(ctx, "download.completed", func(ctx context.Context, event Event) 
 })
 ```
 
+## Notification Routing *(planned — #70)*
+
+Events are routed to notification channels based on **event type**, not which module published them. Users configure per-event-type rules:
+
+| Event type | Channels |
+|------------|----------|
+| `download.completed` | Discord |
+| `download.failed` | Discord, Email |
+| `media.requested` | Telegram |
+| `system.health.degraded` | Email, Pushover |
+| `transcode.failed` | Discord, Email |
+| `library.item.added` | Discord |
+| `system.backup.completed` | *(silent)* |
+
+A **notification router** (core or module) reads these rules and dispatches each event to the matching `NotificationProvider` modules. The router subscribes to ALL notifiable events; each notification module only receives the events it's been routed.
+
+This means multiple notification modules can coexist — Discord gets download events, Email gets system alerts, Telegram gets request notifications — all from the same event stream, with no module knowing about any other module's configuration.
+
 ## Event Persistence & Replay
 
 - **JetStream** stores events with configurable retention

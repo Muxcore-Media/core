@@ -45,7 +45,7 @@ type Session struct {
 - **Indexers** — Search torrent/usenet indexers (replaces Prowlarr)
 - **Metadata Providers** — TMDB, TVDB, AniDB, MusicBrainz
 - **Subtitle Providers** — OpenSubtitles, Subscene (replaces Bazarr)
-- **Notification Providers** — Discord, Telegram, Slack, email (replaces Notifiarr)
+- **Notification Providers** — Discord, Telegram, Slack, email (replaces Notifiarr). Users configure **per-event-type routing** — e.g. `download.completed` → Discord, `system.health.degraded` → Email, `media.requested` → Telegram. Multiple notification modules run simultaneously, each receiving only the event types routed to it.
 
 ### Contract
 ```go
