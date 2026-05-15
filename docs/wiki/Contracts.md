@@ -162,6 +162,41 @@ type MediaLibrary interface {
 }
 ```
 
+### MediaTypeSchema (media.go)
+
+Modules that own a media type declare their metadata schema via `MediaTypeSchemaProvider`. Core validates `MediaObject.Fields` against the registered schema on `Add()`.
+
+```go
+type MediaTypeSchema struct {
+    MediaType MediaType
+    Fields    []MediaFieldSchema
+    ModuleID  string
+}
+
+type MediaFieldSchema struct {
+    Key         string
+    Type        MediaFieldType  // string, int, float, bool, string_slice
+    Description string
+}
+
+type MediaTypeSchemaProvider interface {
+    MediaTypeSchema() MediaTypeSchema
+}
+```
+
+The `MediaObject` struct has a `Fields map[string]any` — modules declare what keys are valid for their media type, core validates on storage, and consumers discover schemas at runtime via `ServiceRegistry.MediaSchema(mediaType)`.
+
+Example: the movie module registers:
+```go
+Fields: []MediaFieldSchema{
+    {Key: "tmdb_id", Type: FieldTypeString},
+    {Key: "year",    Type: FieldTypeInt},
+    {Key: "quality", Type: FieldTypeString},
+}
+```
+
+A book module would register `author`, `isbn`, `pages`. A music module would register `artist`, `album`, `track_number`. Core never knows about these fields — it only validates types against the declared schema.
+
 ### Scheduler (scheduler.go)
 
 ```go

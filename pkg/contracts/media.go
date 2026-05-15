@@ -20,18 +20,48 @@ const (
 	MediaTypePodcast   MediaType = "podcast"
 )
 
+// MediaFieldType enumerates the types supported in media type schemas.
+type MediaFieldType string
+
+const (
+	FieldTypeString      MediaFieldType = "string"
+	FieldTypeInt         MediaFieldType = "int"
+	FieldTypeFloat       MediaFieldType = "float"
+	FieldTypeBool        MediaFieldType = "bool"
+	FieldTypeStringSlice MediaFieldType = "string_slice"
+)
+
+// MediaFieldSchema describes one field in a media type's metadata schema.
+type MediaFieldSchema struct {
+	Key         string
+	Type        MediaFieldType
+	Description string
+}
+
+// MediaTypeSchema is the complete metadata schema for a single media type.
+// Modules that own a media type register one of these at Init time.
+type MediaTypeSchema struct {
+	MediaType MediaType
+	Fields    []MediaFieldSchema
+	ModuleID  string
+}
+
+// MediaTypeSchemaProvider is an optional interface for modules that own a media type.
+// Core discovers schemas at Init time via type assertion.
+type MediaTypeSchemaProvider interface {
+	MediaTypeSchema() MediaTypeSchema
+}
+
+// MediaObject represents an item in the media library.
+// Core fields (ID, Type, Title, Assets) are universal. Type-specific metadata
+// lives in Fields, validated against the MediaTypeSchema registered by the
+// module that owns the media type.
 type MediaObject struct {
-	ID          string
-	Type        MediaType
-	Title       string
-	Year        int
-	Overview    string
-	Genres      []string
-	Rating      float64
-	PosterURL   string
-	BackdropURL string
-	Assets      []AssetRef
-	Metadata    map[string]any
+	ID     string
+	Type   MediaType
+	Title  string
+	Assets []AssetRef
+	Fields map[string]any
 }
 
 type AssetRef struct {

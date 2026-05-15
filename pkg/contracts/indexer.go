@@ -13,6 +13,7 @@ type IndexerResult struct {
 	PublishDate string
 	Categories  []string
 	Source      string
+	Extra       map[string]string // unknown Torznab/Newznab attributes preserved here
 }
 
 type SearchQuery struct {

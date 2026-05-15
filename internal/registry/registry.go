@@ -10,9 +10,10 @@ import (
 )
 
 type Registry struct {
-	mu       sync.RWMutex
-	modules  map[string]*Entry
-	capIndex map[string]map[string]bool // capability -> moduleID -> true
+	mu          sync.RWMutex
+	modules     map[string]*Entry
+	capIndex    map[string]map[string]bool              // capability -> moduleID -> true
+	schemaIndex map[contracts.MediaType]contracts.MediaTypeSchema
 }
 
 type Entry struct {
@@ -25,8 +26,9 @@ type Entry struct {
 
 func New() *Registry {
 	return &Registry{
-		modules:  make(map[string]*Entry),
-		capIndex: make(map[string]map[string]bool),
+		modules:     make(map[string]*Entry),
+		capIndex:    make(map[string]map[string]bool),
+		schemaIndex: make(map[contracts.MediaType]contracts.MediaTypeSchema),
 	}
 }
 
@@ -279,6 +281,39 @@ func (r *Registry) SupportsCapability(moduleID, cap string) bool {
 		return mods[moduleID]
 	}
 	return false
+}
+
+// RegisterMediaSchema registers a metadata schema for a media type, implementing contracts.ServiceRegistry.
+func (r *Registry) RegisterMediaSchema(schema contracts.MediaTypeSchema) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, exists := r.schemaIndex[schema.MediaType]; exists {
+		return fmt.Errorf("schema already registered for media type %q", schema.MediaType)
+	}
+	r.schemaIndex[schema.MediaType] = schema
+	return nil
+}
+
+// MediaSchema returns the schema for a media type, implementing contracts.ServiceRegistry.
+func (r *Registry) MediaSchema(mediaType contracts.MediaType) (contracts.MediaTypeSchema, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	schema, ok := r.schemaIndex[mediaType]
+	return schema, ok
+}
+
+// MediaSchemas returns all registered media type schemas, implementing contracts.ServiceRegistry.
+func (r *Registry) MediaSchemas() []contracts.MediaTypeSchema {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	schemas := make([]contracts.MediaTypeSchema, 0, len(r.schemaIndex))
+	for _, s := range r.schemaIndex {
+		schemas = append(schemas, s)
+	}
+	return schemas
 }
 
 // Resolve returns a module entry by ID, implementing contracts.ServiceRegistry.

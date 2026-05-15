@@ -74,6 +74,16 @@ type ServiceRegistry interface {
 	Resolve(id string) (ModuleEntry, error)
 	// ListAll returns every registered module.
 	ListAll() []ModuleEntry
+
+	// RegisterMediaSchema registers a metadata schema for a media type.
+	// Returns an error if a schema for the same MediaType already exists.
+	RegisterMediaSchema(schema MediaTypeSchema) error
+
+	// MediaSchema returns the schema for a given media type, if registered.
+	MediaSchema(mediaType MediaType) (MediaTypeSchema, bool)
+
+	// MediaSchemas returns all registered media type schemas.
+	MediaSchemas() []MediaTypeSchema
 }
 
 // ModuleEntry is a handle to a registered module, providing its info
