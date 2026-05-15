@@ -1,14 +1,18 @@
 # MuxCore
 
-**Distributed media orchestration platform with a plugin-first architecture.**
+**Distributed, media-agnostic, module-first. The media orchestration platform the *arr stack couldn't be.**
 
-MuxCore is not "another \*arr stack." It is a distributed media orchestration platform where every capability is abstracted behind interfaces and contracts. Modules can be embedded, external processes, remote network services, or distributed agents — the system is HA-aware and horizontally scalable from day one.
+## The Problem
 
-Conceptually, MuxCore is closer to Kubernetes, Nomad, Home Assistant, and Jellyfin than to a monolithic media manager.
+The *arr stack hits a resource ceiling. It's monolithic C# — you can't split the load across nodes. Each media type needs its own program: Radarr for movies, Sonarr for TV, Lidarr for music, Readarr for books. Your 1080p and 4K libraries? Two separate instances. Content pipelines are rigid: torrents and Usenet, take it or leave it. As your library grows, the interface slows to a crawl.
 
-## Core Philosophy
+This wasn't bad engineering. It was just designed for a smaller world.
 
-**Core = orchestration only.** MuxCore should do as little as possible — it provides the fabric. Everything else is a module.
+## What MuxCore Is
+
+MuxCore is the distributed rewrite. Every capability — downloading, indexing, metadata, transcoding, playback, storage — is a **module behind a contract**. Modules communicate over an event bus, not direct calls. Fire up more nodes to split the load. One platform for movies, TV, music, books, podcasts, comics, and any media type you name.
+
+The core itself does as little as possible. It provides the fabric — event bus, API gateway, scheduler, service registry, module lifecycle — and gets out of the way. Everything else is a module you install from the marketplace.
 
 ## Architecture
 
@@ -41,17 +45,47 @@ Conceptually, MuxCore is closer to Kubernetes, Nomad, Home Assistant, and Jellyf
      └───────────────┘   └───────────────┘
 ```
 
+## For Self-Hosters
+
+- **Setup wizard** — pick your starter modules and you're off. No config files to hand-edit.
+- **Module marketplace** — browse, install, and configure modules from the web UI. Don't hunt GitHub for connectors.
+- **One platform, all media** — stop running separate instances of Radarr, Sonarr, Lidarr, and Readarr. Name a media type, attach a module, done.
+- **Distributed by default** — add a second node and the scheduler splits the load. No single point of failure.
+- **Snappy interface** — Vue 3 + Tailwind, not a sluggish web portal that chokes on a large library.
+
+## For Developers
+
+Every capability in MuxCore is a Go interface. Implement it, register it, and the platform discovers it.
+
+```go
+type Downloader interface {
+    Add(ctx context.Context, task DownloadTask) (string, error)
+    Remove(ctx context.Context, id string, deleteData bool) error
+    Pause(ctx context.Context, id string) error
+    Resume(ctx context.Context, id string) error
+    Status(ctx context.Context, id string) (DownloadInfo, error)
+    List(ctx context.Context) ([]DownloadInfo, error)
+}
+```
+
+- **Write once, run anywhere** — modules can be embedded in the core process, external binaries, remote services, or distributed agents.
+- **gRPC + protobuf** for the internal mesh. **NATS** for the event bus. **Go SDK** to start, multi-language later.
+- **Capability negotiation** — modules declare what they support. The platform adapts.
+- **Publish to the marketplace** — one registry, discoverable by every MuxCore instance.
+
+See [Module System](https://github.com/Muxcore-Media/core/wiki/Module-System) and [Contracts](https://github.com/Muxcore-Media/core/wiki/Contracts) for the full interface surface.
+
 ## Module Types
 
-| Type | Description | Replaces |
-|------|-------------|----------|
-| **Provider** | Indexers, metadata, subtitles, notifications | Prowlarr, Bazarr, Notifiarr |
-| **Downloader** | Torrent engines, Usenet bridges, debrid | qBittorrent, SABnzbd |
-| **Media Manager** | Movie, TV, music, book management | Radarr, Sonarr, Lidarr, Readarr |
-| **Processor** | Transcoding, analysis, AI tagging | Tdarr |
-| **Playback** | Streaming, DLNA, watch state sync | Jellyfin |
-| **Workflow** | Request → Download → Process → Import pipelines | _New capability_ |
-| **Storage** | Local FS, S3, SMB, NFS, Ceph, Glacier | _New capability_ |
+| Type | Description |
+|------|-------------|
+| **Provider** | Indexers, metadata, subtitles, notifications — any data source |
+| **Downloader** | Torrent engines, Usenet bridges, debrid services, direct HTTP |
+| **Media Manager** | User-defined media types backed by modules. Create `"movie"`, `"comic-book"`, `"movie-4k"` — any string, any module. Multiple instances of the same type coexist with different configurations. |
+| **Processor** | Transcoding, media analysis, thumbnail generation, AI tagging |
+| **Playback** | Streaming, DLNA, watch state sync, transcoding proxy |
+| **Workflow** | End-to-end pipelines: request → search → download → verify → transcode → import → notify |
+| **Storage** | Local FS, S3, SMB, NFS, Ceph, Glacier — abstracted behind object IDs |
 
 ## Design Principles
 
@@ -63,13 +97,15 @@ Conceptually, MuxCore is closer to Kubernetes, Nomad, Home Assistant, and Jellyf
 
 ## Tech Stack
 
-- **Language:** Go
-- **External API:** REST + OpenAPI
-- **Internal Mesh:** gRPC + protobuf
-- **Event Bus:** NATS (pub/sub, request/reply, streaming)
-- **Database:** PostgreSQL (persistent state) + Redis (ephemeral/caching)
-- **Storage:** Abstracted blob layer (S3-compatible)
-- **Frontend:** Vue 3 + TypeScript + Tailwind + Pinia
+| Layer | Technology |
+|-------|------------|
+| Language | Go |
+| External API | REST + OpenAPI |
+| Internal Mesh | gRPC + protobuf |
+| Event Bus | NATS (pub/sub, request/reply, streaming) |
+| Database | PostgreSQL (persistent) + Redis (ephemeral/caching) |
+| Storage | Abstracted blob layer (S3-compatible) |
+| Frontend | Vue 3 + TypeScript + Tailwind + Pinia |
 
 ## Repository Structure
 

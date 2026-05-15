@@ -57,7 +57,19 @@ type Downloader interface {
 
 **Organize and manage media collections.**
 
-### Examples
+Media types are **user-defined and open-ended** — not restricted to a fixed list. Each time you add a new media type, you name it (any string) and associate a module with it. You can create a `"movie"` media type and attach a movie module, then create a `"comic-book"` media type and attach a comic book module. Any string works as a media type name.
+
+### Multiple instances of the same type
+
+You can run **multiple instances of the same media type simultaneously**, each with different modules or configurations:
+
+- Three `"movie"` types — `"movie-720p"`, `"movie-1080p"`, `"movie-4k"` — each backed by the same movie module but configured for different resolutions.
+- The same module can be reused across types, or different modules can handle the same type.
+- Since the playback module is itself modular, you could build a playback module that supports resolution switching across these duplicated types, rather than relying on on-the-fly transcoding.
+
+The possibilities are open-ended: name any media type, wire any module, run as many copies as you need.
+
+### Example media types (not exhaustive)
 - **Movie Manager** — Replaces Radarr
 - **TV Manager** — Replaces Sonarr
 - **Book Manager** — Replaces Readarr
@@ -65,6 +77,7 @@ type Downloader interface {
 - **Manga/Comic Manager** — New capability
 - **Audiobook Manager** — New capability
 - **Podcast Manager** — New capability
+- **Any custom type** — Name it, associate a module, and it works
 
 ### Contract
 ```go
@@ -78,7 +91,7 @@ type MediaLibrary interface {
 ```
 
 ### Key Feature
-**Unified media graph.** A single metadata system spans movies, TV, books, manga, music, audiobooks, and podcasts — not separate databases per media type.
+**Unified media graph.** A single metadata system spans any media type you define — not separate databases per type.
 
 ---
 

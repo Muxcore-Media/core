@@ -2,6 +2,11 @@ package contracts
 
 import "context"
 
+// MediaType is a user-defined string that names a media type (e.g. "movie", "comic-book", "4k-movie").
+// The constants below are common examples, not an exhaustive list — any string can be a media type.
+// Each media type is associated with a module that handles its behavior. Multiple instances of the
+// same type can coexist with different modules or configurations (e.g. "movie-720p", "movie-1080p",
+// "movie-4k" all backed by the same or different movie modules).
 type MediaType string
 
 const (

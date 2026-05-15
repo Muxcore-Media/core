@@ -1,18 +1,20 @@
 # Welcome to the MuxCore Wiki
 
-**MuxCore is a distributed media orchestration platform with a plugin-first architecture.**
+**MuxCore is a distributed, media-agnostic, module-first media orchestration platform.**
 
-It is not "another \*arr stack." Every capability is abstracted behind interfaces and contracts. Modules can be embedded, external processes, remote network services, or distributed agents.
+## Why MuxCore
 
-## The Core Differentiator
+The *arr stack was built for a smaller world. It's monolithic — one process, one node, one ceiling. Each media type needs its own program. Your 1080p and 4K libraries? Two separate Sonarr instances. Content pipelines are rigid, the interface bogs down under a large library, and when a node goes down nothing takes over.
 
-Where existing media stacks are monoliths with hardcoded integrations, MuxCore is an **orchestration platform** where:
+MuxCore is the distributed rewrite. Every capability is a module behind a contract. Modules communicate over an event bus, not direct calls. Fire up more nodes. Name any media type. The platform adapts.
 
-- Every capability is a **module behind a contract**
-- Modules communicate via an **event bus**, not direct calls
-- Storage is **fully abstracted** — modules never touch filesystem paths
-- The system is **HA-aware and horizontally scalable** from day one
-- You can have **multiple modules per capability** (e.g., two downloader modules, three transcoding agents)
+## How It Works
+
+- **Every capability is a module behind a contract** — downloading, indexing, transcoding, playback, storage are all interfaces
+- **Modules communicate via an event bus** — `media.requested`, `download.completed`, `transcode.failed`, not direct calls
+- **Storage is fully abstracted** — modules never touch filesystem paths, everything goes through object IDs
+- **HA-aware and horizontally scalable** — add nodes, split the load, survive failures
+- **Multiple modules per capability** — two downloaders, three transcoding agents, five storage backends, all active simultaneously
 
 ## Quick Navigation
 
