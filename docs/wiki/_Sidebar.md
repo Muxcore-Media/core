@@ -9,5 +9,6 @@
 - [Workflow Engine](Workflow-Engine)
 - [Security Model](Security-Model)
 - [Contracts](Contracts)
+- [Marketplace](Marketplace)
 - [Deployment](Deployment)
 - [Roadmap](Roadmap)

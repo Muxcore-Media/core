@@ -22,7 +22,7 @@
          │              │              │
  ┌───────▼──────┐ ┌─────▼─────┐ ┌──────▼──────┐
  │ Event Bus    │ │ Scheduler │ │ Service Reg │
- │   (NATS)     │ │           │ │             │
+ │ (in-memory)  │ │ (module)  │ │             │
  └───────┬──────┘ └─────┬─────┘ └──────┬──────┘
          │              │              │
          └──────┬───────┴───────┬──────┘
@@ -48,16 +48,15 @@
 - Handles auth, rate limiting, routing
 - Composes UI panels from registered modules
 
-### Event Bus (NATS)
-- Pub/sub for loose coupling
-- Request/reply for synchronous queries
-- Streaming for ordered event processing
-- Clustered for HA
+### Event Bus
+- Core provides an in-memory pub/sub bus for bootstrapping and single-node
+- NATS available as a module (`eventbus-nats`) for distributed messaging
+- Pub/sub for loose coupling, request/reply for synchronous queries
 
 ### Scheduler
-- Cron-based scheduled tasks
-- One-shot delayed tasks
-- Distributed task ownership via Redis locks
+- Cron-based scheduling provided by the `scheduler-cron` module
+- Publishes `scheduler.task.execute` events on the bus
+- Replaceable — swap in a distributed scheduler module without touching core
 
 ### Service Registry
 - Module registration and discovery
@@ -107,14 +106,16 @@ Module A  ──(NATS req)──>  Event Bus  ──(NATS rep)──>  Module A
 
 ## Design Decisions
 
-### External Services vs Embedded Plugins
+### Compile-Time Modules vs External Services
 
-**Decision: External services over gRPC/NATS (not Go `.so` plugins)**
+**Decision: Compile-time modules for MVP, external services planned for later phases**
 
 | Approach | Pros | Cons |
 |----------|------|------|
-| Go plugins (.so) | Fast, shared memory | Fragile, platform issues, version coupling, poor sandboxing |
-| **External services (chosen)** | Distributed by default, language agnostic, crash isolation, independent updates, HA-friendly | More complexity, network overhead |
+| **Compile-time (chosen for MVP)** | No network overhead, simple deployment, single binary option | Must recompile to add modules, all Go |
+| External services (planned) | Language agnostic, crash isolation, independent updates, HA-friendly | More complexity, network overhead |
+
+Modules are compiled into the core binary via blank imports + build tags. The `-tags default` preset bundles essential modules. Future phases will support external modules over gRPC/NATS.
 
 ### Event-Driven vs Direct RPC
 

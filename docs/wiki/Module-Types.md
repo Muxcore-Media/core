@@ -1,6 +1,6 @@
 # Module Types
 
-MuxCore defines **8 formal module classes**. Each class has a defined contract (Go interface + protobuf definition).
+MuxCore defines **12 formal module kinds**. Each kind has a defined contract (Go interface + protobuf definition). Modules of any kind can be added without modifying core.
 
 ---
 
@@ -199,3 +199,80 @@ type MediaLibrary interface {
 - **Object IDs, never paths** — modules don't know where data physically lives
 
 See [Storage Abstraction](Storage-Abstraction) for the full design.
+
+---
+
+## 9. UI Modules
+
+**User interfaces and dashboards.**
+
+### Examples
+- **Admin UI** — HTMX + Go templates + Tailwind CSS module dashboard
+- **Media Browser** — SvelteKit-based media exploration and discovery
+- **Setup Wizard** — Guided first-time configuration
+
+### Contract
+```go
+// UI modules use RouteRegistrar to register HTTP handlers:
+type RouteRegistrar interface {
+    Handle(pattern string, handler http.Handler)
+    HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}
+```
+
+---
+
+## 10. API Modules
+
+**API endpoints beyond core /health.**
+
+### Examples
+- **REST API** — `/api/v1/modules`, `/api/v1/modules/{id}`
+- **GraphQL API** — Alternative query interface
+- **gRPC Gateway** — gRPC-to-REST translation
+
+### Contract
+API modules use `RouteRegistrar` like UI modules. They typically depend on `ServiceRegistry` to serve module data.
+
+---
+
+## 11. Event Bus Modules
+
+**Distributed messaging backends.** The core provides an in-memory event bus. Event bus modules add distributed alternatives.
+
+### Examples
+- **NATS** — Clustered pub/sub with JetStream persistence
+- **Kafka** — High-throughput event streaming
+- **RabbitMQ** — AMQP-based messaging
+- **Redis Streams** — Lightweight distributed messaging
+
+### Contract
+```go
+type EventBus interface {
+    Publish(ctx context.Context, event Event) error
+    Subscribe(ctx context.Context, eventType string, handler EventHandler) error
+    Unsubscribe(ctx context.Context, eventType string, handler EventHandler) error
+    Request(ctx context.Context, event Event, timeout time.Duration) (Event, error)
+}
+```
+
+---
+
+## 12. Scheduler Modules
+
+**Task scheduling and execution.**
+
+### Examples
+- **Cron Scheduler** — In-process cron-based scheduling
+- **Distributed Scheduler** — Redis-backed with exactly-once guarantees
+- **Kubernetes CronJobs** — Cloud-native scheduling
+
+### Contract
+```go
+type Scheduler interface {
+    Schedule(ctx context.Context, task Task) (string, error)
+    Cancel(ctx context.Context, taskID string) error
+    Status(ctx context.Context, taskID string) (TaskStatus, error)
+}
+```
+

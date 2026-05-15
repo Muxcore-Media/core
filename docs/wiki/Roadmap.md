@@ -7,32 +7,43 @@
 **Goal:** Prove the architecture. Compete with \*arr on simplicity while demonstrating modularity.
 
 ### Core
-- [ ] Module system (lifecycle, registry)
-- [ ] Event bus (NATS pub/sub)
-- [ ] Basic scheduler
-- [ ] REST API gateway
-- [ ] Web UI shell (HTMX + Go templates + Tailwind CSS)
+- [x] Module system (lifecycle, registry)
+- [x] Event bus (in-memory pub/sub; NATS available as module)
+- [x] Basic scheduler (extracted to `scheduler-cron` module)
+- [x] REST API gateway (extracted to `api-rest` module)
+- [x] Web UI shell (HTMX + Go templates + Tailwind CSS, extracted to `admin-ui` module)
+- [x] ServiceRegistry + RouteRegistrar interfaces
+- [x] Auto-registration via `contracts.Register()`
+- [x] Default preset (`-tags default`)
 
 ### Modules
-- [ ] Auth: Local accounts + API tokens provider
-- [ ] Downloader: qBittorrent connector
-- [ ] Indexer: Jackett/Prowlarr connector
-- [ ] Media Manager: Movies (basic Radarr replacement)
-- [ ] Media Library: Simple scan + import
+- [x] Auth: Local accounts + API tokens provider
+- [x] Downloader: qBittorrent connector
+- [x] Indexer: Jackett/Prowlarr connector
+- [x] Media Manager: Movies (basic Radarr replacement)
+- [x] Media Library: Simple scan + import
 - [ ] Playback: Jellyfin connector
-- [ ] Notification: Discord provider
+- [x] Notification: Discord provider
+- [x] Workflow Engine: request → search → download → import → notify
 
 ### Features
-- [ ] Request a movie
-- [ ] Search indexers
-- [ ] Download via qBittorrent
-- [ ] Import into library
-- [ ] Notify on completion
+- [x] Request a movie
+- [x] Search indexers
+- [x] Download via qBittorrent
+- [x] Import into library
+- [x] Notify on completion
 
 ### Deployment
-- [ ] Docker Compose (single node)
+- [x] Docker Compose (single node)
 - [ ] Setup wizard
 - [ ] Basic configuration UI
+
+### Marketplace
+- [x] Marketplace catalog format (`catalog.json`)
+- [x] Module metadata format (`muxcore.json`)
+- [x] Official marketplace repo (`marketplace-catalog`)
+- [x] Official vs third-party distinction (by GitHub org)
+- [ ] Marketplace browser in admin UI
 
 ---
 
@@ -68,7 +79,7 @@
 - [ ] Helm chart
 - [ ] Multi-tenant support
 - [ ] Language-agnostic module SDK (Python, TypeScript, Rust)
-- [ ] Module marketplace / registry
+- [ ] Module marketplace / registry (runtime install)
 - [ ] OpenTelemetry tracing
 - [ ] gRPC module mesh with mTLS
 - [ ] Module sandboxing (gVisor)

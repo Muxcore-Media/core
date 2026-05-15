@@ -28,7 +28,8 @@ MuxCore is the distributed rewrite. Every capability is a module behind a contra
 | [Workflow Engine](Workflow-Engine) | Orchestration, retries, idempotency, pipelines |
 | [Security Model](Security-Model) | RBAC, API tokens, SSO/OIDC, sandboxing |
 | [Contracts](Contracts) | Interface definitions and API contracts |
-| [Deployment](Deployment) | Phase 1-3 deployment strategy |
+| [Marketplace](Marketplace) | Module marketplace system, catalog format, official vs third-party |
+| [Deployment](Deployment) | Phase 1-3 deployment strategy, build presets |
 | [Roadmap](Roadmap) | MVP scope and long-term vision |
 
 ## Conceptual Precedent

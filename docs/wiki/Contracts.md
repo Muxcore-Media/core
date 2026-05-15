@@ -32,9 +32,59 @@ type Module interface {
     Stop(ctx context.Context) error
     Health(ctx context.Context) error
 }
+
+type ModuleKind string
+const (
+    ModuleKindAuth, ModuleKindProvider, ModuleKindDownloader,
+    ModuleKindMediaManager, ModuleKindProcessor, ModuleKindPlayback,
+    ModuleKindWorkflow, ModuleKindStorage, ModuleKindUI,
+    ModuleKindAPI, ModuleKindEventBus, ModuleKindScheduler
+)
 ```
 
 Every module implements this. The core manages the lifecycle.
+
+### ServiceRegistry (module.go)
+
+```go
+type ServiceRegistry interface {
+    FindByKind(kind ModuleKind) []ModuleEntry
+    Resolve(id string) (ModuleEntry, error)
+    ListAll() []ModuleEntry
+}
+
+type ModuleEntry struct {
+    Info   ModuleInfo
+    Module Module
+}
+```
+
+Modules use this to discover each other at runtime. `FindByKind` returns all modules of a given kind. `Resolve` looks up a module by ID. The returned `ModuleEntry.Module` can be type-asserted to a specific capability interface (e.g., `contracts.Downloader`).
+
+### RouteRegistrar (module.go)
+
+```go
+type RouteRegistrar interface {
+    Handle(pattern string, handler http.Handler)
+    HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}
+```
+
+Modules register HTTP handlers with the core API server during `Start()`. Core owns the HTTP mux; modules add routes to it.
+
+### ModuleFactory + ModuleDeps (module.go)
+
+```go
+type ModuleFactory func(deps ModuleDeps) Module
+
+type ModuleDeps struct {
+    Registry ServiceRegistry
+    EventBus EventBus
+    Routes   RouteRegistrar
+}
+```
+
+Modules call `contracts.Register(factory)` in their `init()` function. Core calls all registered factories with the runtime dependencies, creating module instances.
 
 ### EventBus (events.go)
 

@@ -8,23 +8,34 @@ MuxCore is designed for a **phased deployment journey** — from simple single-n
 
 ```
 docker-compose.yml
-├── muxcore          (core service)
+├── muxcore          (core service, includes compiled-in modules)
 ├── postgres         (database)
 ├── redis            (cache/queues)
-├── nats             (event bus)
-└── modules:
-    ├── downloader-qbittorrent
-    ├── indexer-jackett
-    ├── media-movies
-    └── notifier-discord
+├── nats             (optional event bus for future scaling)
+└── modules/         (compiled into binary via -tags default)
+    ├── admin-ui
+    ├── api-rest
+    └── scheduler-cron
 ```
 
 ### Characteristics
 - Single `docker-compose up`
-- All modules on one machine
+- All modules compiled into one binary (default preset)
+- In-memory event bus (zero external dependencies for single-node)
 - Local filesystem storage
-- Simple setup wizard
 - **Just as easy as installing Sonarr**
+
+### Build Options
+
+```bash
+# Default preset — includes admin UI, REST API, cron scheduler
+go build -tags default ./cmd/muxcored
+
+# Bare core — zero modules, just the fabric
+go build ./cmd/muxcored
+
+# Custom preset — create your own imports file with the modules you want
+```
 
 ---
 
