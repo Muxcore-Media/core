@@ -61,15 +61,15 @@
 - [ ] DatabaseProvider contract (#61)
 - [ ] CacheProvider contract (#62)
 - [ ] Go Module SDK (#54)
-- [ ] Configuration management system (#55)
+- [x] Configuration management system (#55)
 - [ ] gRPC protobuf contract definitions (#56)
 - [ ] Event schema and versioning system (#57)
-- [ ] Module health checking and aggregation (#58)
+- [x] Module health checking and aggregation (#58)
 - [ ] API rate limiting (#59)
 - [ ] Module dependency resolution (#60)
-- [ ] Multi-kind module registration (#63) — one module, multiple Kinds
-- [ ] Capability-based service discovery (#64) — FindByCapability
-- [ ] Auth gateway middleware (#65) — session validation, RBAC enforcement
+- [x] Multi-kind module registration (#63) — one module, multiple Kinds
+- [x] Capability-based service discovery (#64) — FindByCapability
+- [x] Auth gateway middleware (#65) — session validation, RBAC enforcement
 - [ ] Tag system contract (#66)
 - [ ] Automated backup and restore contract (#67)
 - [ ] Import list contract (#68) — watchlist sync from external services
