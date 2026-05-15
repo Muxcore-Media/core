@@ -1,0 +1,48 @@
+{{template "base" .}}
+
+{{define "title"}}Modules - MuxCore{{end}}
+
+{{define "content"}}
+<div class="p-6">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-semibold">Modules</h1>
+        <span class="text-sm text-gray-400">{{len .Modules}} registered</span>
+    </div>
+
+    {{if .Modules}}
+    <div class="space-y-3">
+        {{range .Modules}}
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-5">
+            <div class="flex justify-between items-start">
+                <div>
+                    <h3 class="font-medium">{{.Info.Name}}</h3>
+                    <p class="text-sm text-gray-400 mt-0.5">{{.Info.Description}}</p>
+                </div>
+                <span class="inline-flex items-center gap-1.5 text-xs">
+                    <span class="w-2 h-2 rounded-full {{if eq .State "running"}}bg-green-400{{else}}bg-gray-500{{end}}"></span>
+                    {{.State}}
+                </span>
+            </div>
+            <div class="flex gap-3 mt-3 text-xs text-gray-500">
+                <span>ID: {{.Info.ID}}</span>
+                <span>v{{.Info.Version}}</span>
+                <span class="bg-gray-800 px-2 py-0.5 rounded-full">{{.Info.Kind}}</span>
+            </div>
+            {{if .Info.Capabilities}}
+            <div class="flex gap-1.5 mt-2">
+                {{range .Info.Capabilities}}
+                <span class="text-xs bg-brand-900/50 text-brand-300 px-2 py-0.5 rounded-full">{{.}}</span>
+                {{end}}
+            </div>
+            {{end}}
+        </div>
+        {{end}}
+    </div>
+    {{else}}
+    <div class="bg-gray-900 rounded-xl border border-gray-800 p-12 text-center text-gray-500">
+        <p class="text-lg">No modules installed.</p>
+        <p class="text-sm mt-2">Install modules from the marketplace or register them via configuration.</p>
+    </div>
+    {{end}}
+</div>
+{{end}}

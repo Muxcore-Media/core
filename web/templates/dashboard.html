@@ -1,0 +1,60 @@
+{{template "base" .}}
+
+{{define "title"}}Dashboard - MuxCore{{end}}
+
+{{define "content"}}
+<div class="p-6">
+    <h1 class="text-2xl font-semibold mb-6">Dashboard</h1>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+            <p class="text-sm text-gray-400">Modules</p>
+            <p class="text-3xl font-bold mt-1">{{.ModuleCount}}</p>
+        </div>
+        <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+            <p class="text-sm text-gray-400">API Status</p>
+            <p class="text-3xl font-bold mt-1 text-green-400">Online</p>
+        </div>
+        <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+            <p class="text-sm text-gray-400">Event Bus</p>
+            <p class="text-3xl font-bold mt-1 text-green-400">Connected</p>
+        </div>
+    </div>
+
+    <h2 class="text-lg font-semibold mb-3">Registered Modules</h2>
+    {{if .Modules}}
+    <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-gray-800 text-left text-gray-400">
+                    <th class="px-4 py-3">Name</th>
+                    <th class="px-4 py-3">Kind</th>
+                    <th class="px-4 py-3">Version</th>
+                    <th class="px-4 py-3">State</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Modules}}
+                <tr class="border-b border-gray-800/50 hover:bg-gray-800/50 transition-colors">
+                    <td class="px-4 py-3 font-medium">{{.Info.Name}}</td>
+                    <td class="px-4 py-3"><span class="text-xs bg-gray-800 px-2 py-0.5 rounded-full">{{.Info.Kind}}</span></td>
+                    <td class="px-4 py-3 text-gray-400">{{.Info.Version}}</td>
+                    <td class="px-4 py-3">
+                        <span class="inline-flex items-center gap-1 text-xs">
+                            <span class="w-1.5 h-1.5 rounded-full {{if eq .State "running"}}bg-green-400{{else}}bg-gray-500{{end}}"></span>
+                            {{.State}}
+                        </span>
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{else}}
+    <div class="bg-gray-900 rounded-xl border border-gray-800 p-8 text-center text-gray-500">
+        <p>No modules registered yet.</p>
+        <p class="text-sm mt-1">Modules will appear here once registered with the system.</p>
+    </div>
+    {{end}}
+</div>
+{{end}}

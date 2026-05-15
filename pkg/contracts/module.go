@@ -1,6 +1,9 @@
 package contracts
 
-import "context"
+import (
+	"context"
+	"net/http"
+)
 
 type ModuleKind string
 
@@ -13,6 +16,10 @@ const (
 	ModuleKindPlayback     ModuleKind = "playback"
 	ModuleKindWorkflow     ModuleKind = "workflow"
 	ModuleKindStorage      ModuleKind = "storage"
+	ModuleKindUI           ModuleKind = "ui"
+	ModuleKindAPI          ModuleKind = "api"
+	ModuleKindEventBus     ModuleKind = "eventbus"
+	ModuleKindScheduler    ModuleKind = "scheduler"
 )
 
 type ModuleState string
@@ -42,4 +49,59 @@ type Module interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
 	Health(ctx context.Context) error
+}
+
+// ServiceRegistry provides runtime discovery of registered modules.
+// Modules receive this to find and communicate with other modules.
+type ServiceRegistry interface {
+	// FindByKind returns all registered modules of the given kind.
+	FindByKind(kind ModuleKind) []ModuleEntry
+	// Resolve returns a single module by ID.
+	Resolve(id string) (ModuleEntry, error)
+	// ListAll returns every registered module.
+	ListAll() []ModuleEntry
+}
+
+// ModuleEntry is a handle to a registered module, providing its info
+// and the underlying Module instance for interface type assertion.
+type ModuleEntry struct {
+	Info   ModuleInfo
+	Module Module
+}
+
+// RouteRegistrar lets modules register HTTP handlers with the core API server.
+type RouteRegistrar interface {
+	Handle(pattern string, handler http.Handler)
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}
+
+// ModuleFactory is a constructor for a module. Modules call module.Register
+// in their init() to make themselves available for auto-loading.
+type ModuleFactory func(deps ModuleDeps) Module
+
+// ModuleDeps provides modules with the core services they need during construction.
+type ModuleDeps struct {
+	Registry ServiceRegistry
+	EventBus EventBus
+	Routes   RouteRegistrar
+}
+
+// -- Auto-registration --
+
+var registeredFactories []ModuleFactory
+
+// Register is called by module init() functions to make a module available
+// for auto-loading. Modules that call this are loaded when LoadRegistered is
+// called during bootstrap.
+func Register(factory ModuleFactory) {
+	registeredFactories = append(registeredFactories, factory)
+}
+
+// LoadRegistered creates all registered modules using the provided dependencies.
+func LoadRegistered(deps ModuleDeps) []Module {
+	modules := make([]Module, 0, len(registeredFactories))
+	for _, f := range registeredFactories {
+		modules = append(modules, f(deps))
+	}
+	return modules
 }

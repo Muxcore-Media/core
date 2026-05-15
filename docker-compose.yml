@@ -1,0 +1,58 @@
+services:
+  nats:
+    image: nats:2.11-alpine
+    command: -js -m 8222
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    healthcheck:
+      test: ["CMD", "nats", "server", "check", "connection"]
+      interval: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: muxcore
+      POSTGRES_PASSWORD: muxcore
+      POSTGRES_DB: muxcore
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U muxcore"]
+      interval: 5s
+      retries: 5
+
+  redis:
+    image: redis:8-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+  muxcore:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      MUXCORE_ADDR: ":8080"
+      MUXCORE_NATS_URL: "nats://nats:4222"
+      MUXCORE_LOG_FORMAT: json
+      MUXCORE_LOG_LEVEL: debug
+    depends_on:
+      nats:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:
