@@ -197,6 +197,39 @@ type Authorizer interface {
 }
 ```
 
+### DatabaseProvider (database.go) *(planned — #61)*
+
+```go
+type DatabaseProvider interface {
+    Open(ctx context.Context, connString string) error
+    Close(ctx context.Context) error
+    Health(ctx context.Context) error
+    Query(ctx context.Context, query string, args ...any) (Rows, error)
+    Exec(ctx context.Context, query string, args ...any) (Result, error)
+    Transaction(ctx context.Context, fn func(Tx) error) error
+    Migrate(ctx context.Context, migrations []Migration) error
+}
+```
+
+Core defines the contract. Implementations are modules: `database-postgres`, `database-sqlite`, `database-mysql`.
+
+### CacheProvider (cache.go) *(planned — #62)*
+
+```go
+type CacheProvider interface {
+    Get(ctx context.Context, key string) ([]byte, error)
+    Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
+    Delete(ctx context.Context, key string) error
+    Exists(ctx context.Context, key string) (bool, error)
+    Incr(ctx context.Context, key string, delta int64) (int64, error)
+    Lock(ctx context.Context, key string, ttl time.Duration) (Lock, error)
+    Publish(ctx context.Context, channel string, msg []byte) error
+    Subscribe(ctx context.Context, channel string) (<-chan []byte, error)
+}
+```
+
+Core defines the contract. Implementations are modules: `cache-redis`, `cache-valkey`, `cache-memcached`.
+
 ---
 
 ## Protobuf Contracts

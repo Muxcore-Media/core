@@ -186,8 +186,9 @@ See [Module System](https://github.com/Muxcore-Media/core/wiki/Module-System) an
 | Internal Mesh | gRPC + protobuf |
 | Event Bus (core) | In-memory pub/sub |
 | Event Bus (distributed) | NATS (via `eventbus-nats` module) |
-| Database | PostgreSQL (persistent, planned) + Redis (ephemeral/caching, planned) |
-| Storage | Abstracted blob layer (S3-compatible, planned) |
+| Database | Module-provided via DatabaseProvider contract (`database-postgres`, `database-sqlite`, etc.) |
+| Cache | Module-provided via CacheProvider contract (`cache-redis`, `cache-valkey`, etc.) |
+| Storage | Core orchestrator + module providers (S3, local, Ceph via StorageProvider contract) |
 | Core Admin UI | HTMX + Go templates + Tailwind CSS (via `admin-ui` module) |
 | Module UIs | SvelteKit + Tailwind CSS (user-facing media modules); any framework for third-party |
 
@@ -227,6 +228,8 @@ docker compose up
 | Discord Notifier | [notifier-discord](https://github.com/Muxcore-Media/notifier-discord) | provider |
 | Cron Scheduler | [scheduler-cron](https://github.com/Muxcore-Media/scheduler-cron) | scheduler |
 | Workflow Engine | [workflow-engine](https://github.com/Muxcore-Media/workflow-engine) | workflow |
+| PostgreSQL | [database-postgres](https://github.com/Muxcore-Media/database-postgres) | provider |
+| Redis Cache | [cache-redis](https://github.com/Muxcore-Media/cache-redis) | provider |
 
 Marketplace catalog: [marketplace-catalog](https://github.com/Muxcore-Media/marketplace-catalog)
 

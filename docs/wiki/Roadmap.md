@@ -51,14 +51,34 @@
 
 **Goal:** Prove distributed architecture. Multi-node, failover, worker pools.
 
-- [ ] Multi-node clustering
-- [ ] Distributed transcoding pool (GPU/CPU workers)
-- [ ] Worker failover and task redistribution
-- [ ] S3/MinIO storage provider
-- [ ] Storage policies (hot/cold tiering)
-- [ ] OIDC/SSO auth
-- [ ] Audit logging
-- [ ] Prometheus metrics + Grafana dashboards
+- [ ] Multi-node clustering (#21)
+- [ ] Distributed worker pool (#22, renamed from "Distributed transcoding pool")
+- [ ] Worker failover and task redistribution (#23)
+- [ ] Storage abstraction and orchestrator layer (#53)
+- [ ] Storage policies — hot/cold tiering (#25)
+- [ ] Audit logging (#27)
+- [ ] Prometheus metrics + Grafana dashboards (#28)
+- [ ] DatabaseProvider contract (#61)
+- [ ] CacheProvider contract (#62)
+- [ ] Go Module SDK (#54)
+- [ ] Configuration management system (#55)
+- [ ] gRPC protobuf contract definitions (#56)
+- [ ] Event schema and versioning system (#57)
+- [ ] Module health checking and aggregation (#58)
+- [ ] API rate limiting (#59)
+- [ ] Module dependency resolution (#60)
+- [ ] Multi-kind module registration (#63) — one module, multiple Kinds
+- [ ] Capability-based service discovery (#64) — FindByCapability
+- [ ] Auth gateway middleware (#65) — session validation, RBAC enforcement
+- [ ] Tag system contract (#66)
+- [ ] Automated backup and restore contract (#67)
+- [ ] Import list contract (#68) — watchlist sync from external services
+- [ ] Settings provider interface (#69) — UI composition for module config
+- [ ] Multi-agent notification contract (#70)
+- [ ] Quality profile and release decision contract (#71)
+- [ ] Custom format and release profile contract (#72)
+- [ ] Folder watcher and filesystem event contract (#73)
+- [ ] Media info and codec analysis contract (#74)
 
 ### Modules
 - [ ] Native torrent engine
@@ -68,6 +88,10 @@
 - [ ] Music Manager (Lidarr replacement)
 - [ ] Subtitle provider (Bazarr replacement)
 - [ ] Transcoder: FFmpeg with GPU support
+- [ ] PostgreSQL database provider (`database-postgres`)
+- [ ] Redis cache provider (`cache-redis`)
+- [ ] OIDC/SSO auth provider (`auth-oidc`)
+- [ ] S3/MinIO storage provider (`storage-s3`)
 
 ---
 
@@ -79,7 +103,7 @@
 - [ ] Helm chart
 - [ ] Multi-tenant support
 - [ ] Language-agnostic module SDK (Python, TypeScript, Rust)
-- [ ] Module marketplace / registry (runtime install)
+- [x] Module marketplace / registry (runtime install) (#40)
 - [ ] OpenTelemetry tracing
 - [ ] gRPC module mesh with mTLS
 - [ ] Module sandboxing (gVisor)

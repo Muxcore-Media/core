@@ -9,16 +9,14 @@ MuxCore is designed for a **phased deployment journey** — from simple single-n
 ```
 docker-compose.yml
 ├── muxcore          (core service, includes compiled-in modules)
-├── postgres         (database)
-├── redis            (cache/queues)
-├── nats             (optional event bus for future scaling)
+├── nats             (optional — only if using eventbus-nats module)
 └── modules/         (compiled into binary via -tags default)
     ├── admin-ui
     ├── api-rest
     └── scheduler-cron
 ```
 
-> **Note:** Phase 1 core does not require external dependencies. PostgreSQL, Redis, and NATS are planned for Phase 2.
+> **Note:** Phase 1 core has no external dependencies beyond the single binary. Database and cache are not needed for single-node — the in-memory event bus and local config files are sufficient. In Phase 2, database and cache are added as modules (`database-postgres`, `cache-redis`), not as core services.
 
 ### Characteristics
 - Single `docker-compose up`
@@ -49,9 +47,9 @@ go build ./cmd/muxcored
 ┌─────────────────────┐
 │   MuxCore Node 1    │  (primary)
 │   - Core services   │
-│   - PostgreSQL      │
-│   - Redis           │
 │   - NATS            │
+│   - DB module       │  (database-postgres, database-sqlite, etc.)
+│   - Cache module    │  (cache-redis, cache-valkey, etc.)
 └─────────┬───────────┘
           │
     ┌─────┴─────────────┐
@@ -66,9 +64,11 @@ go build ./cmd/muxcored
 ### New Capabilities
 - Distributed transcoding across multiple GPUs
 - Worker failover (if Worker 1 dies, tasks move to Worker 2)
-- Shared task queue (Redis-backed)
-- Shared metadata state (PostgreSQL)
+- Shared task queue (backed by cache module, e.g. cache-redis)
+- Shared metadata state (backed by database module, e.g. database-postgres)
 - Module mobility (move a module to a different node)
+
+> **Note:** PostgreSQL and Redis are not built into core. They are modules implementing the `DatabaseProvider` and `CacheProvider` contracts. Users pick their database and cache by installing the appropriate module — just like they pick a downloader or indexer.
 
 ---
 
