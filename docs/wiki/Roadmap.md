@@ -7,14 +7,14 @@
 **Goal:** Prove the architecture. Compete with \*arr on simplicity while demonstrating modularity.
 
 ### Core
-- [ ] Auth system (local accounts, API tokens)
 - [ ] Module system (lifecycle, registry)
 - [ ] Event bus (NATS pub/sub)
 - [ ] Basic scheduler
 - [ ] REST API gateway
-- [ ] Web UI shell (Vue 3 + Tailwind)
+- [ ] Web UI shell (HTMX + Go templates + Tailwind CSS)
 
 ### Modules
+- [ ] Auth: Local accounts + API tokens provider
 - [ ] Downloader: qBittorrent connector
 - [ ] Indexer: Jackett/Prowlarr connector
 - [ ] Media Manager: Movies (basic Radarr replacement)

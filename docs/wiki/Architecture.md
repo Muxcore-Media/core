@@ -4,8 +4,13 @@
 
 ```
                 ┌────────────────────┐
-                │     Web UI         │
-                │   (Vue 3 + TS)     │
+                │  Core Admin UI    │
+                │ (HTMX + Go tmpl)  │
+                └─────────┬──────────┘
+                          │
+                ┌─────────▼──────────┐
+                │  Module UIs        │
+                │ (SvelteKit / any)  │
                 └─────────┬──────────┘
                           │
                 ┌─────────▼──────────┐
@@ -60,11 +65,11 @@
 - Capability advertisement
 - Version tracking
 
-### Auth/RBAC
-- OIDC / SSO support
-- API token management
-- Per-module permissions
-- Audit logging
+### Auth Gateway
+- Validates sessions and enforces RBAC based on session roles/permissions
+- Actual authentication is delegated to **auth modules** (Plex, OAuth/OIDC, LDAP, local accounts)
+- Multiple auth modules can be active simultaneously — users sign in via any configured provider
+- Per-module permissions, API token management, audit logging
 
 ### Storage Orchestrator
 - Abstracts all storage behind object IDs

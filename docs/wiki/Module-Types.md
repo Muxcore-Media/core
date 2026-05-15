@@ -1,10 +1,43 @@
 # Module Types
 
-MuxCore defines **7 formal module classes**. Each class has a defined contract (Go interface + protobuf definition).
+MuxCore defines **8 formal module classes**. Each class has a defined contract (Go interface + protobuf definition).
 
 ---
 
-## 1. Provider Modules
+## 1. Authentication Modules
+
+**Handle user authentication.** The core provides the contract — it does not authenticate users itself. Auth modules tie MuxCore into existing identity infrastructure.
+
+### Examples
+- **Local Accounts** — Built-in username/password + API tokens
+- **Plex Auth** — Authenticate via Plex.tv accounts
+- **OAuth/OIDC** — Google, GitHub, Microsoft, Authentik, Authelia, Keycloak
+- **LDAP / Active Directory** — Enterprise directory integration
+- **Jellyfin/Emby Auth** — Reuse existing media server credentials
+
+### Contract
+```go
+type AuthProvider interface {
+    Authenticate(ctx context.Context, credentials any) (Session, error)
+    Validate(ctx context.Context, token string) (Session, error)
+    Revoke(ctx context.Context, token string) error
+}
+
+type Session struct {
+    UserID      string
+    Username    string
+    Roles       []string
+    Permissions []string
+    Token       string
+}
+```
+
+### Key Feature
+**Multiple auth providers simultaneously.** Users can sign in via Plex, LDAP, or local accounts — all active at once. Authorization (RBAC) is handled by the core based on the session the auth module returns.
+
+---
+
+## 2. Provider Modules
 
 **Provide data and services.** One-way data flow into the platform.
 
@@ -25,7 +58,7 @@ type Indexer interface {
 
 ---
 
-## 2. Downloader Modules
+## 3. Downloader Modules
 
 **Abstract download engines.** One contract, many implementations.
 
@@ -53,7 +86,7 @@ type Downloader interface {
 
 ---
 
-## 3. Media Management Modules
+## 4. Media Management Modules
 
 **Organize and manage media collections.**
 
@@ -95,7 +128,7 @@ type MediaLibrary interface {
 
 ---
 
-## 4. Processing Modules
+## 5. Processing Modules
 
 **Transform and analyze media.**
 
@@ -109,7 +142,7 @@ type MediaLibrary interface {
 
 ---
 
-## 5. Playback Modules
+## 6. Playback Modules
 
 **Serve and stream media.**
 
@@ -121,7 +154,7 @@ type MediaLibrary interface {
 
 ---
 
-## 6. Workflow Modules
+## 7. Workflow Modules
 
 **The most powerful module class.** Defines end-to-end pipelines.
 
@@ -148,7 +181,7 @@ type MediaLibrary interface {
 
 ---
 
-## 7. Storage Modules
+## 8. Storage Modules
 
 **Abstract all filesystem and object storage.**
 

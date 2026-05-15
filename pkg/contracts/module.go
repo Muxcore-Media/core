@@ -5,6 +5,7 @@ import "context"
 type ModuleKind string
 
 const (
+	ModuleKindAuth         ModuleKind = "auth"
 	ModuleKindProvider     ModuleKind = "provider"
 	ModuleKindDownloader   ModuleKind = "downloader"
 	ModuleKindMediaManager ModuleKind = "media_manager"

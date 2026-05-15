@@ -7,10 +7,14 @@ Most self-hosted media software has **terrible security**. MuxCore differentiate
 ## Features
 
 ### Authentication
-- **OIDC / SSO** — Authentik, Authelia, Keycloak, Google, GitHub
-- **Local accounts** — For simple setups, with TOTP 2FA
+
+Authentication is **module-driven** — the core does not authenticate users directly. Auth modules implement the `AuthProvider` contract and tie into existing identity infrastructure. Multiple auth modules can be active simultaneously.
+
+- **Auth modules** — Plex auth, OAuth/OIDC (Authentik, Authelia, Keycloak, Google, GitHub), LDAP/AD, local accounts with TOTP 2FA
 - **API tokens** — For programmatic access, scoped and revocable
 - **Module tokens** — Modules authenticate to the core, not to each other
+
+See [Module Types](Module-Types) — Authentication Modules for the full contract.
 
 ### Authorization (RBAC)
 
@@ -94,6 +98,6 @@ The core enforces these — a module cannot access more than declared.
 
 | Phase | Feature |
 |-------|---------|
-| MVP | Local auth, API tokens, basic RBAC |
-| Phase 2 | OIDC/SSO, audit logging, mTLS |
+| MVP | Local accounts auth module, API tokens, basic RBAC |
+| Phase 2 | OIDC/SSO auth module, LDAP auth module, audit logging, mTLS |
 | Phase 3 | Sandbox policies, network segmentation, SIEM integration |

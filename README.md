@@ -51,7 +51,7 @@ The core itself does as little as possible. It provides the fabric — event bus
 - **Module marketplace** — browse, install, and configure modules from the web UI. Don't hunt GitHub for connectors.
 - **One platform, all media** — stop running separate instances of Radarr, Sonarr, Lidarr, and Readarr. Name a media type, attach a module, done.
 - **Distributed by default** — add a second node and the scheduler splits the load. No single point of failure.
-- **Snappy interface** — Vue 3 + Tailwind, not a sluggish web portal that chokes on a large library.
+- **Snappy interface** — admin UI built with HTMX + Go templates + Tailwind CSS. User-facing media modules use SvelteKit + Tailwind CSS. No sluggish web portals.
 
 ## For Developers
 
@@ -79,6 +79,7 @@ See [Module System](https://github.com/Muxcore-Media/core/wiki/Module-System) an
 
 | Type | Description |
 |------|-------------|
+| **Authentication** | Plex auth, OAuth/OIDC, LDAP, local accounts — tie into existing user infrastructure instead of rebuilding it. The core provides the contract; modules handle the actual authentication. |
 | **Provider** | Indexers, metadata, subtitles, notifications — any data source |
 | **Downloader** | Torrent engines, Usenet bridges, debrid services, direct HTTP |
 | **Media Manager** | User-defined media types backed by modules. Create `"movie"`, `"comic-book"`, `"movie-4k"` — any string, any module. Multiple instances of the same type coexist with different configurations. |
@@ -105,7 +106,9 @@ See [Module System](https://github.com/Muxcore-Media/core/wiki/Module-System) an
 | Event Bus | NATS (pub/sub, request/reply, streaming) |
 | Database | PostgreSQL (persistent) + Redis (ephemeral/caching) |
 | Storage | Abstracted blob layer (S3-compatible) |
-| Frontend | Vue 3 + TypeScript + Tailwind + Pinia |
+| Core Admin UI | HTMX + Go templates + Tailwind CSS |
+| Module UIs | SvelteKit + Tailwind CSS (user-facing media modules); any framework for third-party modules |
+| Unified CSS | Core publishes a Tailwind config — modules extend it for consistent design |
 
 ## Repository Structure
 
@@ -122,7 +125,7 @@ muxcore/
 │   ├── transcoder-ffmpeg/
 │   └── notifier-discord/
 ├── agents/        ← distributed worker agents
-├── ui/            ← Vue 3 web UI
+├── ui/            ← Module UIs (SvelteKit for user-facing media modules)
 ├── deploy/        ← deployment configs
 └── docs/          ← documentation
 ```
