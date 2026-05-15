@@ -33,7 +33,7 @@
      │ Downloaders    Transcoding        │
      │ Indexers       AI Analysis        │
      │ Metadata       File Ops           │
-     │ Subtitles      ML Tasks           │
+     │ Sup.Content    ML Tasks           │
      │ Notifications  Replication        │
      │ Media Server   Worker Pool        │
      │ Storage                           │
@@ -94,7 +94,7 @@
 - Version compatibility checking
 - Process isolation (external modules)
 - **Multi-kind registration** — a single module can register under multiple `ModuleKind` values (e.g., Jellyfin as both `playback` AND `provider` AND `auth`). The registry indexes by all declared kinds.
-- **Capability-based discovery** — `FindByCapability(cap string)` complements `FindByKind(kind)`, enabling fine-grained service discovery (e.g., "find all modules that can search subtitles")
+- **Capability-based discovery** — `FindByCapability(cap string)` complements `FindByKind(kind)`, enabling fine-grained service discovery (e.g., "find all modules that provide supplementary content")
 
 ## Internal Communication
 

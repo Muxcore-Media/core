@@ -13,7 +13,7 @@ Sonarr: Search → Download → Move → Rename → Notify
 
 MuxCore makes workflows **explicit, configurable, and extensible**:
 ```
-User defines: Request → Metadata → Search → Download → Verify → Extract → Analyze → Transcode → Subtitle → Import → Notify
+User defines: Request → Metadata → Search → Download → Verify → Extract → Analyze → Transcode → Supplementary Content → Import → Notify
 ```
 
 ## Workflow Definition
@@ -77,8 +77,8 @@ steps:
     retry: 1
     timeout: 3600
 
-  - name: subtitle-fetch
-    handler: subtitle-bazarr
+  - name: content-fetch
+    handler: content-subtitle  # kind "subtitle" — also works for "lyrics" with a different handler
     retry: 2
     timeout: 120
 

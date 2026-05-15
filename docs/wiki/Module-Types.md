@@ -44,7 +44,7 @@ type Session struct {
 ### Examples
 - **Indexers** — Search torrent/usenet indexers (replaces Prowlarr)
 - **Metadata Providers** — TMDB, TVDB, AniDB, MusicBrainz
-- **Subtitle Providers** — OpenSubtitles, Subscene (replaces Bazarr)
+- **Supplementary Content Providers** — Subtitles, lyrics, chapter titles, alternate artwork (replaces Bazarr). Content kind strings are module-defined — a subtitle provider advertises `["content.subtitle"]`, a lyrics provider advertises `["content.lyrics"]`. Both implement the same `SupplementaryContentProvider` contract.
 - **Notification Providers** — Discord, Telegram, Slack, email (replaces Notifiarr). Users configure **per-event-type routing** — e.g. `download.completed` → Discord, `system.health.degraded` → Email, `media.requested` → Telegram. Multiple notification modules run simultaneously, each receiving only the event types routed to it.
 
 ### Contract
@@ -168,7 +168,7 @@ type MediaLibrary interface {
 6. Extraction (unpack, decompress)
 7. Media analysis (codec, quality)
 8. Transcoding (if needed)
-9. Subtitle fetch (if missing)
+9. Supplementary content fetch (if missing) — subtitles, lyrics, chapters
 10. Library import
 11. Notification sent
 ```

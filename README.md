@@ -63,7 +63,7 @@ Core itself has **one job**: provide the fabric and get out of the way. Event bu
         │ Torrent       │
         │ Indexers      │
         │ Metadata      │
-        │ Subtitle      │
+        │ Sup.Content   │
         │ Media Server  │
         └───────────────┘
 ```
@@ -175,7 +175,7 @@ See [Module System](https://github.com/Muxcore-Media/core/wiki/Module-System) an
 | Type | Description |
 |------|-------------|
 | **Authentication** | Plex auth, OAuth/OIDC, LDAP, local accounts — tie into existing user infrastructure |
-| **Provider** | Indexers, metadata, subtitles, notifications — any data source |
+| **Provider** | Indexers, metadata, supplementary content (subtitles, lyrics, chapters), notifications — any data source |
 | **Downloader** | Torrent engines, Usenet bridges, debrid services, direct HTTP |
 | **Media Manager** | User-defined media types backed by modules. Create `"movie"`, `"comic-book"`, `"movie-4k"` — any string, any module |
 | **Indexer** | Search torrent/usenet indexers via Torznab/Newznab APIs |

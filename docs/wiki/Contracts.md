@@ -203,6 +203,18 @@ Fields: []MediaFieldSchema{
 
 A book module would register `author`, `isbn`, `pages`. A music module would register `artist`, `album`, `track_number`. Core never knows about these fields — it only validates types against the declared schema.
 
+### SupplementaryContentProvider (content.go)
+
+```go
+type SupplementaryContentProvider interface {
+    Search(ctx context.Context, media MediaObject, kind string, language string) ([]ContentCandidate, error)
+    Fetch(ctx context.Context, candidate ContentCandidate) (*ContentResult, error)
+    SupportedKinds() []string
+}
+```
+
+Finds and fetches supplementary content for media objects — subtitles, lyrics, chapter titles, alternate artwork. Kind strings (`"subtitle"`, `"lyrics"`, `"chapters"`) are defined by modules, not core. A single module can support multiple kinds. Modules are discovered via `FindByCapability("content.subtitle")`.
+
 ### Scheduler (scheduler.go)
 
 ```go

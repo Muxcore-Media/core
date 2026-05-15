@@ -83,17 +83,23 @@ type ModuleDegradedPayload struct {
 	Error    string `json:"error"`
 }
 
-// SubtitleMissingPayload is the payload for subtitle.missing events.
-type SubtitleMissingPayload struct {
+// ContentMissingPayload is the payload for content.missing events.
+// Emitted when supplementary content (subtitles, lyrics, chapters, etc.) is needed
+// for a media object. The Kind field identifies the type of content needed.
+type ContentMissingPayload struct {
 	MediaID  string `json:"media_id"`
+	Kind     string `json:"kind"` // "subtitle", "lyrics", "chapters", etc.
 	Language string `json:"language"`
 }
 
-// SubtitleFetchedPayload is the payload for subtitle.fetched events.
-type SubtitleFetchedPayload struct {
+// ContentFetchedPayload is the payload for content.fetched events.
+// Emitted when supplementary content has been fetched for a media object.
+type ContentFetchedPayload struct {
 	MediaID  string `json:"media_id"`
+	Kind     string `json:"kind"`
 	Language string `json:"language"`
 	Provider string `json:"provider"`
+	Format   string `json:"format,omitempty"`
 }
 
 // ModuleRegisteredPayload is the payload for module.registered events.

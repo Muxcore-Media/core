@@ -168,10 +168,10 @@ func validateEventPayload(event contracts.Event) error {
 		return validatePayload[contracts.PlaybackStoppedPayload](event.Payload)
 	case contracts.EventModuleDegraded:
 		return validatePayload[contracts.ModuleDegradedPayload](event.Payload)
-	case contracts.EventSubtitleMissing:
-		return validatePayload[contracts.SubtitleMissingPayload](event.Payload)
-	case contracts.EventSubtitleFetched:
-		return validatePayload[contracts.SubtitleFetchedPayload](event.Payload)
+	case contracts.EventContentMissing:
+		return validatePayload[contracts.ContentMissingPayload](event.Payload)
+	case contracts.EventContentFetched:
+		return validatePayload[contracts.ContentFetchedPayload](event.Payload)
 	case contracts.EventModuleRegistered:
 		return validatePayload[contracts.ModuleRegisteredPayload](event.Payload)
 	case contracts.EventModuleUnregistered:

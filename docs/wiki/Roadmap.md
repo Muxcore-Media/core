@@ -94,7 +94,7 @@
 - [ ] Debrid downloader
 - [ ] TV Manager (Sonarr replacement)
 - [ ] Music Manager (Lidarr replacement)
-- [ ] Subtitle provider (Bazarr replacement)
+- [ ] Supplementary content provider — subtitles, lyrics, chapters (Bazarr replacement)
 - [ ] Transcoder: FFmpeg with GPU support
 - [x] PostgreSQL database provider (`database-postgres`)
 - [x] Redis cache provider (`cache-redis`)

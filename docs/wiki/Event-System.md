@@ -58,8 +58,8 @@ type Event struct {
 | `transcode.started` *(planned)* | Transcoder | UI, Notifier |
 | `transcode.completed` *(planned)* | Transcoder | Workflow Engine, Library |
 | `transcode.failed` *(planned)* | Transcoder | Workflow Engine, Notifier |
-| `subtitle.missing` *(planned)* | Media Manager | Subtitle Provider |
-| `subtitle.fetched` *(planned)* | Subtitle Provider | Media Manager |
+| `content.missing` | Media Manager | Supplementary Content Provider |
+| `content.fetched` | Supplementary Content Provider | Media Manager |
 | `library.item.added` *(planned)* | Media Manager | UI, Notifier, Playback |
 | `library.item.removed` *(planned)* | Media Manager | UI, Playback |
 
