@@ -4,11 +4,31 @@
 
 Core is the highway. Modules are the cars. Zero module code ships in the core binary.
 
+> **AI transparency:** Portions of this codebase may be written with AI
+> assistance. Every change — human, AI, or hybrid — goes through the same
+> rigorous pipeline: mandatory code review, automated testing, Dependabot
+> security scanning, and a capability-based security model that limits blast
+> radius regardless of code origin. We treat AI as a productivity tool, not
+> a replacement for judgment, and we take the security of every line seriously.
+
 ## The Problem
 
-The *arr stack hits a resource ceiling. It's monolithic C# — you can't split the load across nodes. Each media type needs its own program: Radarr for movies, Sonarr for TV, Lidarr for music, Readarr for books. Your 1080p and 4K libraries? Two separate instances. Content pipelines are rigid: torrents and Usenet, take it or leave it. As your library grows, the interface slows to a crawl.
+The *arr stack hits a resource ceiling. It's monolithic, almost entirely
+single-threaded C# — you can't split the load across nodes, and you can't
+saturate the cores you already have. Each media type needs its own program:
+Radarr for movies, Sonarr for TV, Lidarr for music, Readarr for books. Your
+1080p and 4K libraries? Two separate instances. Content pipelines are rigid:
+torrents and Usenet, take it or leave it. As your library grows, the interface
+slows to a crawl.
 
 This wasn't bad engineering. It was just designed for a smaller world.
+
+MuxCore is built from the ground up to make **zero assumptions** about your
+setup. There is no hardcoded list of media types, no baked-in download
+backends, no fixed UI. Everything is a module — you define what media you
+have, how it's acquired, and how it's served. 3D movies, comic books,
+archival images, VR180 footage, interactive fiction, audiobooks — if someone
+can write a module for it, core can orchestrate it.
 
 ## What MuxCore Is
 
