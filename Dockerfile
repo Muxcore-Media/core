@@ -6,7 +6,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -tags default -ldflags="-s -w" -o /muxcored ./cmd/muxcored
 
-FROM alpine:3.22
+FROM alpine:3.23
 
 RUN adduser -D -h /app muxcore
 WORKDIR /app
