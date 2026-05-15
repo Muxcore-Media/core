@@ -54,31 +54,31 @@
 - [ ] Multi-node clustering (#21)
 - [ ] Distributed worker pool (#22, renamed from "Distributed transcoding pool")
 - [ ] Worker failover and task redistribution (#23)
-- [ ] Storage abstraction and orchestrator layer (#53)
+- [x] Storage abstraction and orchestrator layer (#53)
 - [ ] Storage policies — hot/cold tiering (#25)
 - [ ] Audit logging (#27)
 - [ ] Prometheus metrics + Grafana dashboards (#28)
 - [x] DatabaseProvider contract (#61)
 - [x] CacheProvider contract (#62)
-- [ ] Go Module SDK (#54)
+- [x] Go Module SDK (#54)
 - [x] Configuration management system (#55)
 - [ ] gRPC protobuf contract definitions (#56)
-- [ ] Event schema and versioning system (#57)
+- [x] Event schema and versioning system (#57)
 - [x] Module health checking and aggregation (#58)
-- [ ] API rate limiting (#59)
+- [x] API rate limiting (#59)
 - [x] Module dependency resolution (#60)
 - [x] Multi-kind module registration (#63) — one module, multiple Kinds
 - [x] Capability-based service discovery (#64) — FindByCapability
 - [x] Auth gateway middleware (#65) — session validation, RBAC enforcement
 - [x] Module-defined metadata schema system (#75) — modules declare their media type's fields, core validates
 - [x] Tag system contract (#66)
-- [ ] Automated backup and restore contract (#67)
-- [ ] Import list contract (#68) — watchlist sync from external services
+- [x] Automated backup and restore contract (#67)
+- [x] Import list contract (#68) — watchlist sync from external services
 - [x] Settings provider interface (#69) — UI composition for module config
-- [ ] Multi-agent notification contract (#70)
+- [x] Multi-agent notification contract (#70)
 - [ ] Quality profile and release decision contract (#71)
 - [ ] Custom format and release profile contract (#72)
-- [ ] Folder watcher and filesystem event contract (#73)
+- [x] Folder watcher and filesystem event contract (#73)
 - [ ] Media info and codec analysis contract (#74)
 
 ### Modules
