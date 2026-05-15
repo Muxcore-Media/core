@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"encoding/json"
+
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/google/uuid"
 )
@@ -16,12 +18,20 @@ type sub struct {
 }
 
 type MemoryBus struct {
-	mu          sync.RWMutex
-	subscribers []sub
+	mu               sync.RWMutex
+	subscribers      []sub
+	EnableValidation bool // when true, validates payloads against known schemas
 }
 
 func NewMemoryBus() *MemoryBus {
 	return &MemoryBus{}
+}
+
+// SetValidation enables or disables payload schema validation on publish.
+func (b *MemoryBus) SetValidation(enabled bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.EnableValidation = enabled
 }
 
 func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
@@ -30,6 +40,12 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 	}
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now()
+	}
+
+	if b.EnableValidation {
+		if err := validateEventPayload(event); err != nil {
+			return fmt.Errorf("event validation failed: %w", err)
+		}
 	}
 
 	b.mu.RLock()
@@ -114,4 +130,51 @@ func (b *MemoryBus) Request(ctx context.Context, event contracts.Event, timeout 
 	case <-time.After(timeout):
 		return contracts.Event{}, fmt.Errorf("request timed out after %s", timeout)
 	}
+}
+
+func validateEventPayload(event contracts.Event) error {
+	switch event.Type {
+	case contracts.EventMediaRequested:
+		return validatePayload[contracts.MediaRequestedPayload](event.Payload)
+	case contracts.EventDownloadStarted:
+		return validatePayload[contracts.DownloadStartedPayload](event.Payload)
+	case contracts.EventDownloadCompleted:
+		return validatePayload[contracts.DownloadCompletedPayload](event.Payload)
+	case contracts.EventDownloadFailed:
+		return validatePayload[contracts.DownloadFailedPayload](event.Payload)
+	case contracts.EventTranscodeStarted:
+		return validatePayload[contracts.TranscodeStartedPayload](event.Payload)
+	case contracts.EventTranscodeCompleted:
+		return validatePayload[contracts.TranscodeCompletedPayload](event.Payload)
+	case contracts.EventTranscodeFailed:
+		return validatePayload[contracts.TranscodeFailedPayload](event.Payload)
+	case contracts.EventLibraryItemAdded:
+		return validatePayload[contracts.LibraryItemAddedPayload](event.Payload)
+	case contracts.EventLibraryItemRemoved:
+		return validatePayload[contracts.LibraryItemRemovedPayload](event.Payload)
+	case contracts.EventPlaybackStarted:
+		return validatePayload[contracts.PlaybackStartedPayload](event.Payload)
+	case contracts.EventPlaybackStopped:
+		return validatePayload[contracts.PlaybackStoppedPayload](event.Payload)
+	case contracts.EventModuleDegraded:
+		return validatePayload[contracts.ModuleDegradedPayload](event.Payload)
+	case contracts.EventSubtitleMissing:
+		return validatePayload[contracts.SubtitleMissingPayload](event.Payload)
+	case contracts.EventSubtitleFetched:
+		return validatePayload[contracts.SubtitleFetchedPayload](event.Payload)
+	case contracts.EventModuleRegistered:
+		return validatePayload[contracts.ModuleRegisteredPayload](event.Payload)
+	case contracts.EventModuleUnregistered:
+		return validatePayload[contracts.ModuleUnregisteredPayload](event.Payload)
+	default:
+		return nil // unknown event types pass through
+	}
+}
+
+func validatePayload[T any](payload []byte) error {
+	var v T
+	if err := json.Unmarshal(payload, &v); err != nil {
+		return fmt.Errorf("invalid payload for %T: %w", v, err)
+	}
+	return nil
 }

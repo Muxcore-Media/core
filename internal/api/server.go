@@ -15,6 +15,7 @@ type Server struct {
 	mux           *http.ServeMux
 	healthChecker func() map[string]error
 	AuthFunc      func(r *http.Request) (*contracts.Session, error)
+	RateLimiter   *RateLimiter
 }
 
 func NewServer(addr string) *Server {
@@ -29,6 +30,7 @@ func NewServer(addr string) *Server {
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+	s.RateLimiter = NewRateLimiter(100, time.Minute) // 100 req/min default
 	s.rebuildChain()
 	return s
 }
@@ -68,11 +70,15 @@ func (s *Server) SetAuthFunc(fn func(r *http.Request) (*contracts.Session, error
 
 // rebuildChain constructs the middleware chain in the correct order:
 //  1. Recovery (innermost — catches panics from the mux)
-//  2. Auth (if AuthFunc is set)
-//  3. Logging (outermost — logs all requests)
+//  2. Rate limit (if RateLimiter is set)
+//  3. Auth (if AuthFunc is set)
+//  4. Logging (outermost — logs all requests)
 func (s *Server) rebuildChain() {
 	var h http.Handler = s.mux
 	h = recoveryMiddleware(h)
+	if s.RateLimiter != nil {
+		h = rateLimitMiddleware(s.RateLimiter)(h)
+	}
 	if s.AuthFunc != nil {
 		h = authMiddleware(s.AuthFunc)(h)
 	}
