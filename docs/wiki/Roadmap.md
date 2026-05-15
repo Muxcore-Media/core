@@ -1,5 +1,7 @@
 # Roadmap
 
+> Tracked in [GitHub Project: MuxCore Roadmap](https://github.com/orgs/Muxcore-Media/projects/1)
+
 ## MVP (Initial Release)
 
 **Goal:** Prove the architecture. Compete with \*arr on simplicity while demonstrating modularity.
