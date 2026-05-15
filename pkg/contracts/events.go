@@ -40,4 +40,5 @@ const (
 	EventPlaybackStopped    = "playback.stopped"
 	EventModuleRegistered   = "module.registered"
 	EventModuleUnregistered = "module.unregistered"
+	EventModuleDegraded     = "module.degraded"
 )

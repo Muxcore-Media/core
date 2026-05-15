@@ -96,7 +96,7 @@ func (m *Module) Info() contracts.ModuleInfo {
     return contracts.ModuleInfo{
         ID:   "my-downloader",
         Name: "My Downloader",
-        Kind: contracts.ModuleKindDownloader,
+        Kinds: []contracts.ModuleKind{contracts.ModuleKindDownloader},
         // ...
     }
 }

@@ -36,7 +36,7 @@ func TestManagerLifecycle(t *testing.T) {
 			ID:      "test-module",
 			Name:    "Test Module",
 			Version: "1.0.0",
-			Kind:    contracts.ModuleKindProvider,
+			Kinds:   []contracts.ModuleKind{contracts.ModuleKindProvider},
 		},
 	}
 
@@ -73,8 +73,8 @@ func TestManagerLifecycle(t *testing.T) {
 	}
 
 	results := mgr.HealthCheck(ctx)
-	if len(results) != 0 {
-		t.Fatalf("expected healthy, got errors: %v", results)
+	if err := results["test-module"]; err != nil {
+		t.Fatalf("expected healthy, got error: %v", err)
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -98,7 +98,7 @@ func TestDependencyOrder(t *testing.T) {
 				ID:      id,
 				Name:    id,
 				Version: "1.0.0",
-				Kind:    contracts.ModuleKindProvider,
+				Kinds:   []contracts.ModuleKind{contracts.ModuleKindProvider},
 			},
 		}
 	}
@@ -129,7 +129,7 @@ func TestCircularDependency(t *testing.T) {
 				ID:      id,
 				Name:    id,
 				Version: "1.0.0",
-				Kind:    contracts.ModuleKindProvider,
+				Kinds:   []contracts.ModuleKind{contracts.ModuleKindProvider},
 			},
 		}
 	}

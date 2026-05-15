@@ -6,11 +6,15 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/Muxcore-Media/core/pkg/contracts"
 )
 
 type Server struct {
-	http *http.Server
-	mux  *http.ServeMux
+	http          *http.Server
+	mux           *http.ServeMux
+	healthChecker func() map[string]error
+	AuthFunc      func(r *http.Request) (*contracts.Session, error)
 }
 
 func NewServer(addr string) *Server {
@@ -21,11 +25,11 @@ func NewServer(addr string) *Server {
 
 	s.http = &http.Server{
 		Addr:         addr,
-		Handler:      withLogging(mux),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+	s.rebuildChain()
 	return s
 }
 
@@ -48,18 +52,92 @@ func (s *Server) HandleFunc(pattern string, handler func(http.ResponseWriter, *h
 	s.mux.HandleFunc(pattern, handler)
 }
 
+// SetHealthChecker sets a function that returns per-module health status.
+// The returned map must contain all registered module IDs; nil values indicate healthy.
+func (s *Server) SetHealthChecker(fn func() map[string]error) {
+	s.healthChecker = fn
+}
+
+// SetAuthFunc sets the authentication function for the middleware chain.
+// If fn is nil, auth is skipped (open mode). When called, the handler chain
+// is rebuilt to include or exclude the auth middleware.
+func (s *Server) SetAuthFunc(fn func(r *http.Request) (*contracts.Session, error)) {
+	s.AuthFunc = fn
+	s.rebuildChain()
+}
+
+// rebuildChain constructs the middleware chain in the correct order:
+//  1. Recovery (innermost — catches panics from the mux)
+//  2. Auth (if AuthFunc is set)
+//  3. Logging (outermost — logs all requests)
+func (s *Server) rebuildChain() {
+	var h http.Handler = s.mux
+	h = recoveryMiddleware(h)
+	if s.AuthFunc != nil {
+		h = authMiddleware(s.AuthFunc)(h)
+	}
+	h = withLogging(h)
+	s.http.Handler = h
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
+	// If health checker is set, include per-module health status
+	if s.healthChecker != nil {
+		moduleHealth := s.healthChecker()
+		degraded := false
+		modules := make(map[string]string, len(moduleHealth))
+		for id, err := range moduleHealth {
+			if err != nil {
+				modules[id] = err.Error()
+				degraded = true
+			} else {
+				modules[id] = "ok"
+			}
+		}
+
+		status := "ok"
+		httpStatus := http.StatusOK
+		if degraded {
+			status = "degraded"
+			httpStatus = http.StatusServiceUnavailable
+		}
+
+		if r.Header.Get("HX-Request") == "true" {
+			w.Header().Set("Content-Type", "text/html")
+			if degraded {
+				w.Write([]byte(`<span class="inline-flex items-center gap-1.5">
+	<span class="w-1.5 h-1.5 rounded-full bg-yellow-400"></span>
+	System: Degraded
+	</span>`))
+			} else {
+				w.Write([]byte(`<span class="inline-flex items-center gap-1.5">
+	<span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>
+	System: Online
+	</span>`))
+			}
+			return
+		}
+
+		writeJSON(w, httpStatus, map[string]any{
+			"status":  status,
+			"time":    time.Now().UTC().Format(time.RFC3339),
+			"modules": modules,
+		})
+		return
+	}
+
+	// No health checker — simple response
 	if r.Header.Get("HX-Request") == "true" {
 		w.Header().Set("Content-Type", "text/html")
 		w.Write([]byte(`<span class="inline-flex items-center gap-1.5">
-<span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>
-System: Online
-</span>`))
+	<span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>
+	System: Online
+	</span>`))
 		return
 	}
 

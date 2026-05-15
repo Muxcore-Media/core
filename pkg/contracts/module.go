@@ -11,6 +11,7 @@ const (
 	ModuleKindAuth         ModuleKind = "auth"
 	ModuleKindProvider     ModuleKind = "provider"
 	ModuleKindDownloader   ModuleKind = "downloader"
+	ModuleKindIndexer      ModuleKind = "indexer"
 	ModuleKindMediaManager ModuleKind = "media_manager"
 	ModuleKindProcessor    ModuleKind = "processor"
 	ModuleKindPlayback     ModuleKind = "playback"
@@ -34,13 +35,22 @@ const (
 )
 
 type ModuleInfo struct {
-	ID          string
-	Name        string
-	Version     string
-	Kind        ModuleKind
-	Description string
-	Author      string
+	ID           string
+	Name         string
+	Version      string
+	Kinds        []ModuleKind
+	Description  string
+	Author       string
 	Capabilities []string
+}
+
+// PrimaryKind returns the first kind for display purposes.
+// Modules with multiple kinds show their primary (first) kind in UIs.
+func (m ModuleInfo) PrimaryKind() string {
+	if len(m.Kinds) == 0 {
+		return "unknown"
+	}
+	return string(m.Kinds[0])
 }
 
 type Module interface {
@@ -56,6 +66,10 @@ type Module interface {
 type ServiceRegistry interface {
 	// FindByKind returns all registered modules of the given kind.
 	FindByKind(kind ModuleKind) []ModuleEntry
+	// FindByCapability returns all registered modules that declare the given capability.
+	FindByCapability(cap string) []ModuleEntry
+	// SupportsCapability checks whether a specific module supports the given capability.
+	SupportsCapability(moduleID, cap string) bool
 	// Resolve returns a single module by ID.
 	Resolve(id string) (ModuleEntry, error)
 	// ListAll returns every registered module.

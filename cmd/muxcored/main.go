@@ -1,50 +1,65 @@
-package main
+﻿package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/api"
+	"github.com/Muxcore-Media/core/internal/config"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/module"
 	_ "github.com/Muxcore-Media/core/internal/presets" // build-tag-gated module selection
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/pkg/contracts"
+	"github.com/google/uuid"
 )
 
 func main() {
+	configPath := os.Getenv("MUXCORE_CONFIG")
+	if configPath == "" {
+		configPath = "muxcore.json"
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			slog.Warn("no config file found, using defaults", "path", configPath)
+			cfg = config.Default()
+		} else {
+			slog.Error("load config", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	logger := setupLogger()
+	logger := setupLogger(cfg.Log)
 	slog.SetDefault(logger)
 
 	slog.Info("MuxCore starting...")
 
-	// Event bus
 	bus := events.NewMemoryBus()
 	slog.Info("event bus ready", "type", "memory")
 
-	// Module registry + manager
 	reg := registry.New()
 	mgr := module.NewManager(reg)
 
-	// API server (core provides only /health — all other routes come from modules)
-	srv := api.NewServer(envOrDefault("MUXCORE_ADDR", ":8080"))
+	srv := api.NewServer(cfg.Server.Addr)
 
-	// Build module dependencies
 	deps := contracts.ModuleDeps{
 		Registry: reg,
 		EventBus: bus,
 		Routes:   srv,
 	}
 
-	// Auto-load modules registered via init()
 	for _, mod := range contracts.LoadRegistered(deps) {
 		if err := mgr.Register(mod, nil); err != nil {
 			slog.Error("register module", "id", mod.Info().ID, "error", err)
@@ -54,7 +69,29 @@ func main() {
 
 	slog.Info("module registry ready", "count", reg.Count())
 
-	// Start API server
+	authModules := reg.FindByKind(contracts.ModuleKindAuth)
+	if len(authModules) > 0 {
+		if provider, ok := authModules[0].Module.(contracts.AuthProvider); ok {
+			srv.SetAuthFunc(func(r *http.Request) (*contracts.Session, error) {
+				token := r.Header.Get("Authorization")
+				if token == "" {
+					return nil, fmt.Errorf("missing Authorization header")
+				}
+				token = strings.TrimPrefix(token, "Bearer ")
+				session, err := provider.Validate(r.Context(), token)
+				if err != nil {
+					return nil, err
+				}
+				return &session, nil
+			})
+			slog.Info("auth middleware enabled", "provider", authModules[0].Info.ID)
+		}
+	}
+
+	srv.SetHealthChecker(func() map[string]error {
+		return mgr.HealthCheck(context.Background())
+	})
+
 	go func() {
 		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
 			slog.Error("api server", "error", err)
@@ -62,7 +99,6 @@ func main() {
 		}
 	}()
 
-	// Init + start all modules
 	if err := mgr.InitAll(ctx); err != nil {
 		slog.Error("init modules", "error", err)
 		os.Exit(1)
@@ -72,7 +108,33 @@ func main() {
 		os.Exit(1)
 	}
 
-	slog.Info("MuxCore running", "addr", envOrDefault("MUXCORE_ADDR", ":8080"))
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				results := mgr.HealthCheck(context.Background())
+				for id, err := range results {
+					if err != nil {
+						slog.Warn("module degraded", "id", id, "error", err)
+						payload, _ := json.Marshal(map[string]string{"module_id": id, "error": err.Error()})
+						bus.Publish(context.Background(), contracts.Event{
+							ID:        uuid.New().String(),
+							Type:      contracts.EventModuleDegraded,
+							Source:    "core",
+							Payload:   payload,
+							Timestamp: time.Now(),
+						})
+					}
+				}
+			}
+		}
+	}()
+
+	slog.Info("MuxCore running", "addr", cfg.Server.Addr)
 
 	<-ctx.Done()
 	slog.Info("shutting down...")
@@ -89,29 +151,20 @@ func main() {
 	slog.Info("MuxCore stopped.")
 }
 
-func envOrDefault(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
-
-func setupLogger() *slog.Logger {
+func setupLogger(lc config.LogConfig) *slog.Logger {
 	level := slog.LevelInfo
-	if v := os.Getenv("MUXCORE_LOG_LEVEL"); v != "" {
-		switch v {
-		case "debug":
-			level = slog.LevelDebug
-		case "warn":
-			level = slog.LevelWarn
-		case "error":
-			level = slog.LevelError
-		}
+	switch lc.Level {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
 	}
 
 	opts := &slog.HandlerOptions{Level: level}
 	var handler slog.Handler
-	if os.Getenv("MUXCORE_LOG_FORMAT") == "json" {
+	if lc.Format == "json" {
 		handler = slog.NewJSONHandler(os.Stdout, opts)
 	} else {
 		handler = slog.NewTextHandler(os.Stdout, opts)

@@ -3,14 +3,16 @@ package registry
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 )
 
 type Registry struct {
-	mu      sync.RWMutex
-	modules map[string]*Entry
+	mu       sync.RWMutex
+	modules  map[string]*Entry
+	capIndex map[string]map[string]bool // capability -> moduleID -> true
 }
 
 type Entry struct {
@@ -23,8 +25,22 @@ type Entry struct {
 
 func New() *Registry {
 	return &Registry{
-		modules: make(map[string]*Entry),
+		modules:  make(map[string]*Entry),
+		capIndex: make(map[string]map[string]bool),
 	}
+}
+
+// kindInterfaceMap maps each ModuleKind to the required contract interface.
+// Kinds not in this map have no required interface and skip validation.
+var kindInterfaceMap = map[contracts.ModuleKind]any{
+	contracts.ModuleKindAuth:         (*contracts.AuthProvider)(nil),
+	contracts.ModuleKindDownloader:   (*contracts.Downloader)(nil),
+	contracts.ModuleKindIndexer:      (*contracts.Indexer)(nil),
+	contracts.ModuleKindPlayback:     (*contracts.Playback)(nil),
+	contracts.ModuleKindMediaManager: (*contracts.MediaLibrary)(nil),
+	contracts.ModuleKindWorkflow:     (*contracts.WorkflowEngine)(nil),
+	contracts.ModuleKindStorage:      (*contracts.StorageProvider)(nil),
+	contracts.ModuleKindScheduler:    (*contracts.Scheduler)(nil),
 }
 
 func (r *Registry) Register(module contracts.Module, deps []string) error {
@@ -34,6 +50,17 @@ func (r *Registry) Register(module contracts.Module, deps []string) error {
 	}
 	if info.Name == "" {
 		return fmt.Errorf("module name is required")
+	}
+
+	// Validate that for each declared kind, the module implements the required interface.
+	for _, kind := range info.Kinds {
+		if iface, ok := kindInterfaceMap[kind]; ok {
+			// iface is a nil pointer to an interface type; dereference to get the interface type
+			ifaceType := reflect.TypeOf(iface).Elem()
+			if !reflect.TypeOf(module).Implements(ifaceType) {
+				return fmt.Errorf("module %q claims kind %q but does not implement the required interface", info.ID, kind)
+			}
+		}
 	}
 
 	r.mu.Lock()
@@ -49,6 +76,15 @@ func (r *Registry) Register(module contracts.Module, deps []string) error {
 		State:  contracts.ModuleStateRegistered,
 		Deps:   deps,
 	}
+
+	// Populate capability index.
+	for _, cap := range info.Capabilities {
+		if r.capIndex[cap] == nil {
+			r.capIndex[cap] = make(map[string]bool)
+		}
+		r.capIndex[cap][info.ID] = true
+	}
+
 	return nil
 }
 
@@ -56,9 +92,21 @@ func (r *Registry) Unregister(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.modules[id]; !exists {
+	entry, exists := r.modules[id]
+	if !exists {
 		return fmt.Errorf("module %q not found", id)
 	}
+
+	// Clean up capability index.
+	for _, cap := range entry.Info.Capabilities {
+		if mods, ok := r.capIndex[cap]; ok {
+			delete(mods, id)
+			if len(mods) == 0 {
+				delete(r.capIndex, cap)
+			}
+		}
+	}
+
 	delete(r.modules, id)
 	return nil
 }
@@ -91,11 +139,30 @@ func (r *Registry) ListByKind(kind contracts.ModuleKind) []*Entry {
 
 	var entries []*Entry
 	for _, e := range r.modules {
-		if e.Info.Kind == kind {
-			entries = append(entries, e)
+		for _, k := range e.Info.Kinds {
+			if k == kind {
+				entries = append(entries, e)
+				break
+			}
 		}
 	}
 	return entries
+}
+
+func (r *Registry) ListByCapability(cap string) []*Entry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if mods, ok := r.capIndex[cap]; ok {
+		entries := make([]*Entry, 0, len(mods))
+		for id := range mods {
+			if e, exists := r.modules[id]; exists {
+				entries = append(entries, e)
+			}
+		}
+		return entries
+	}
+	return nil
 }
 
 func (r *Registry) Discover(ctx context.Context, kind contracts.ModuleKind) []contracts.ModuleInfo {
@@ -191,6 +258,27 @@ func (r *Registry) FindByKind(kind contracts.ModuleKind) []contracts.ModuleEntry
 		result[i] = contracts.ModuleEntry{Info: e.Info, State: e.State, Module: e.Module}
 	}
 	return result
+}
+
+// FindByCapability returns module entries that declare the given capability, implementing contracts.ServiceRegistry.
+func (r *Registry) FindByCapability(cap string) []contracts.ModuleEntry {
+	entries := r.ListByCapability(cap)
+	result := make([]contracts.ModuleEntry, len(entries))
+	for i, e := range entries {
+		result[i] = contracts.ModuleEntry{Info: e.Info, State: e.State, Module: e.Module}
+	}
+	return result
+}
+
+// SupportsCapability checks whether a specific module supports the given capability, implementing contracts.ServiceRegistry.
+func (r *Registry) SupportsCapability(moduleID, cap string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if mods, ok := r.capIndex[cap]; ok {
+		return mods[moduleID]
+	}
+	return false
 }
 
 // Resolve returns a module entry by ID, implementing contracts.ServiceRegistry.

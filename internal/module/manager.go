@@ -85,9 +85,7 @@ func (m *Manager) HealthCheck(ctx context.Context) map[string]error {
 	for _, entry := range m.registry.List() {
 		err := entry.Module.Health(ctx)
 		m.registry.SetHealth(entry.Info.ID, err)
-		if err != nil {
-			results[entry.Info.ID] = err
-		}
+		results[entry.Info.ID] = err
 	}
 	return results
 }
