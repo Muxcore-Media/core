@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 
@@ -32,6 +31,11 @@ func (m *Manager) InitAll(ctx context.Context) error {
 	}
 
 	for _, entry := range order {
+		if _, err := m.registry.ResolveDeps(entry.Info.ID); err != nil {
+			slog.Warn("unresolved dependencies, skipping module", "id", entry.Info.ID, "error", err)
+			m.registry.SetState(entry.Info.ID, contracts.ModuleStateDegraded)
+			continue
+		}
 		slog.Info("initializing module", "id", entry.Info.ID, "version", entry.Info.Version)
 		if err := m.initOne(ctx, entry); err != nil {
 			return fmt.Errorf("init %q: %w", entry.Info.ID, err)
@@ -49,6 +53,11 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	}
 
 	for _, entry := range order {
+		if _, err := m.registry.ResolveDeps(entry.Info.ID); err != nil {
+			slog.Warn("unresolved dependencies, skipping module", "id", entry.Info.ID, "error", err)
+			m.registry.SetState(entry.Info.ID, contracts.ModuleStateDegraded)
+			continue
+		}
 		slog.Info("starting module", "id", entry.Info.ID)
 		if err := m.startOne(ctx, entry); err != nil {
 			return fmt.Errorf("start %q: %w", entry.Info.ID, err)
@@ -152,11 +161,6 @@ func (m *Manager) startupOrder(entries []*registry.Entry) ([]*registry.Entry, er
 			}
 		}
 	}
-
-	// Sort leaves (no deps) first, then by dependency count for deterministic ordering
-	sort.SliceStable(order, func(i, j int) bool {
-		return len(order[i].Deps) < len(order[j].Deps)
-	})
 
 	return order, nil
 }
