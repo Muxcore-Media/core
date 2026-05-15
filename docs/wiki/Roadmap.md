@@ -22,7 +22,7 @@
 - [x] Indexer: Jackett/Prowlarr connector
 - [x] Media Manager: Movies (basic Radarr replacement)
 - [x] Media Library: Simple scan + import
-- [ ] Playback: Jellyfin connector
+- [x] Playback: Jellyfin connector
 - [x] Notification: Discord provider
 - [x] Workflow Engine: request → search → download → import → notify
 
@@ -35,15 +35,15 @@
 
 ### Deployment
 - [x] Docker Compose (single node)
-- [ ] Setup wizard
-- [ ] Basic configuration UI
+- [x] Setup wizard
+- [x] Basic configuration UI
 
 ### Marketplace
 - [x] Marketplace catalog format (`catalog.json`)
 - [x] Module metadata format (`muxcore.json`)
 - [x] Official marketplace repo (`marketplace-catalog`)
 - [x] Official vs third-party distinction (by GitHub org)
-- [ ] Marketplace browser in admin UI
+- [x] Marketplace browser in admin UI
 
 ---
 

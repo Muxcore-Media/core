@@ -188,7 +188,7 @@ func (r *Registry) FindByKind(kind contracts.ModuleKind) []contracts.ModuleEntry
 	entries := r.ListByKind(kind)
 	result := make([]contracts.ModuleEntry, len(entries))
 	for i, e := range entries {
-		result[i] = contracts.ModuleEntry{Info: e.Info, Module: e.Module}
+		result[i] = contracts.ModuleEntry{Info: e.Info, State: e.State, Module: e.Module}
 	}
 	return result
 }
@@ -207,7 +207,7 @@ func (r *Registry) ListAll() []contracts.ModuleEntry {
 	entries := r.List()
 	result := make([]contracts.ModuleEntry, len(entries))
 	for i, e := range entries {
-		result[i] = contracts.ModuleEntry{Info: e.Info, Module: e.Module}
+		result[i] = contracts.ModuleEntry{Info: e.Info, State: e.State, Module: e.Module}
 	}
 	return result
 }

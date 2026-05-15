@@ -66,6 +66,7 @@ type ServiceRegistry interface {
 // and the underlying Module instance for interface type assertion.
 type ModuleEntry struct {
 	Info   ModuleInfo
+	State  ModuleState
 	Module Module
 }
 

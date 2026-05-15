@@ -1,6 +1,8 @@
 # MuxCore binaries
 /cmd/muxcored/muxcored
 /cmd/muxcored/muxcored.exe
+/muxcored.exe
+/muxcored.exe~
 
 # Go workspace
 go.work

@@ -12,6 +12,7 @@ import (
 	"github.com/Muxcore-Media/core/internal/api"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/module"
+	_ "github.com/Muxcore-Media/core/internal/presets" // build-tag-gated module selection
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 )
