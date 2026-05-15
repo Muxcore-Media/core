@@ -1,0 +1,209 @@
+# Contracts & API Reference
+
+## Overview
+
+All module capabilities are defined by **versioned contracts**. Contracts are the interface definition language of MuxCore — they define what a module must implement and what callers can expect.
+
+## Contract Layers
+
+### 1. Go Interfaces (Core SDK)
+
+For Go-native modules. Defined in `pkg/contracts/`.
+
+### 2. Protobuf Definitions (Language Agnostic)
+
+For external modules in any language. Defined in `proto/`.
+
+### 3. OpenAPI Spec (External API)
+
+For the REST API consumed by the UI and external tools.
+
+---
+
+## Core Contracts
+
+### Module (module.go)
+
+```go
+type Module interface {
+    Info() ModuleInfo
+    Init(ctx context.Context) error
+    Start(ctx context.Context) error
+    Stop(ctx context.Context) error
+    Health(ctx context.Context) error
+}
+```
+
+Every module implements this. The core manages the lifecycle.
+
+### EventBus (events.go)
+
+```go
+type EventBus interface {
+    Publish(ctx context.Context, event Event) error
+    Subscribe(ctx context.Context, eventType string, handler EventHandler) error
+    Unsubscribe(ctx context.Context, eventType string, handler EventHandler) error
+    Request(ctx context.Context, event Event, timeout time.Duration) (Event, error)
+}
+```
+
+The central nervous system of the platform.
+
+### StorageProvider (storage.go)
+
+```go
+type StorageProvider interface {
+    Put(ctx context.Context, key string, data io.Reader, size int64) error
+    Get(ctx context.Context, key string) (io.ReadCloser, error)
+    Delete(ctx context.Context, key string) error
+    Move(ctx context.Context, src, dst string) error
+    Exists(ctx context.Context, key string) (bool, error)
+    Stat(ctx context.Context, key string) (ObjectInfo, error)
+    List(ctx context.Context, prefix string) ([]ObjectInfo, error)
+}
+```
+
+Base interface all storage providers implement.
+
+### Storage Capabilities (storage.go)
+
+```go
+type Streamable interface { Stream(ctx, key string, offset, length int64) (io.ReadCloser, error) }
+type Seekable interface { Seek(ctx, key string, offset int64) (int64, error) }
+type Watchable interface { Watch(ctx, prefix string) (<-chan StorageEvent, error) }
+type AtomicMovable interface { AtomicMove(ctx, src, dst string) error }
+type Hardlinkable interface { Hardlink(ctx, src, dst string) error }
+```
+
+Optional capability interfaces for storage providers.
+
+### Downloader (downloader.go)
+
+```go
+type Downloader interface {
+    Add(ctx context.Context, task DownloadTask) (string, error)
+    Remove(ctx context.Context, id string, deleteData bool) error
+    Pause(ctx context.Context, id string) error
+    Resume(ctx context.Context, id string) error
+    Status(ctx context.Context, id string) (DownloadInfo, error)
+    List(ctx context.Context) ([]DownloadInfo, error)
+}
+```
+
+### Indexer (indexer.go)
+
+```go
+type Indexer interface {
+    Name() string
+    Search(ctx context.Context, query SearchQuery) ([]IndexerResult, error)
+    Capabilities(ctx context.Context) ([]string, error)
+}
+```
+
+### MediaLibrary (media.go)
+
+```go
+type MediaLibrary interface {
+    Add(ctx context.Context, obj MediaObject) error
+    Remove(ctx context.Context, id string) error
+    Get(ctx context.Context, id string) (MediaObject, error)
+    List(ctx context.Context, mediaType MediaType, offset, limit int) ([]MediaObject, error)
+    Search(ctx context.Context, query string) ([]MediaObject, error)
+}
+```
+
+### Scheduler (scheduler.go)
+
+```go
+type Scheduler interface {
+    Schedule(ctx context.Context, task Task) (string, error)
+    Cancel(ctx context.Context, taskID string) error
+    Status(ctx context.Context, taskID string) (TaskStatus, error)
+}
+```
+
+### WorkflowEngine (workflow.go)
+
+```go
+type WorkflowEngine interface {
+    Define(ctx context.Context, def WorkflowDefinition) error
+    Run(ctx context.Context, workflowID string, params map[string]any) (string, error)
+    Status(ctx context.Context, runID string) (WorkflowRun, error)
+    Cancel(ctx context.Context, runID string) error
+}
+```
+
+### AuthProvider / Authorizer (auth.go)
+
+```go
+type AuthProvider interface {
+    Authenticate(ctx context.Context, credentials any) (Session, error)
+    Validate(ctx context.Context, token string) (Session, error)
+    Revoke(ctx context.Context, token string) error
+}
+
+type Authorizer interface {
+    Can(ctx context.Context, session Session, action string, resource string) (bool, error)
+}
+```
+
+---
+
+## Protobuf Contracts
+
+For language-agnostic module communication. Stored in the `proto/` repository.
+
+### Example: Downloader Service
+
+```protobuf
+syntax = "proto3";
+package muxcore.downloader.v1;
+
+service Downloader {
+    rpc Add(AddRequest) returns (AddResponse);
+    rpc Remove(RemoveRequest) returns (RemoveResponse);
+    rpc Pause(PauseRequest) returns (PauseResponse);
+    rpc Resume(ResumeRequest) returns (ResumeResponse);
+    rpc Status(StatusRequest) returns (StatusResponse);
+    rpc List(ListRequest) returns (ListResponse);
+    rpc Watch(WatchRequest) returns (stream DownloadEvent);
+}
+
+message AddRequest {
+    string magnet_uri = 1;
+    string torrent_url = 2;
+    bytes nzb_data = 3;
+    string dest_path = 4;
+    string label = 5;
+    int32 priority = 6;
+}
+
+message AddResponse {
+    string id = 1;
+}
+```
+
+---
+
+## Contract Versioning
+
+Contracts follow **semantic versioning**:
+
+- **v1.0.0** → `Downloader/v1`
+- **v1.1.0** → `Downloader/v1` (backwards compatible)
+- **v2.0.0** → `Downloader/v2` (breaking change)
+
+The service registry enforces compatibility.
+
+## SDK
+
+The **Go SDK** (`sdk/go/`) provides:
+- Interface definitions (import and implement)
+- Client stubs (call other modules)
+- Utilities (auth, events, logging)
+- Testing helpers (mock event bus, mock storage)
+
+Future SDKs planned for:
+- TypeScript/JavaScript (UI plugins)
+- Python (AI/ML modules)
+- Rust (performance-critical modules)
