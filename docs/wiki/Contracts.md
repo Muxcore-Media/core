@@ -201,57 +201,23 @@ type Authorizer interface {
 
 ## Protobuf Contracts
 
-For language-agnostic module communication. Stored in the `proto/` repository.
-
-### Example: Downloader Service
-
-```protobuf
-syntax = "proto3";
-package muxcore.downloader.v1;
-
-service Downloader {
-    rpc Add(AddRequest) returns (AddResponse);
-    rpc Remove(RemoveRequest) returns (RemoveResponse);
-    rpc Pause(PauseRequest) returns (PauseResponse);
-    rpc Resume(ResumeRequest) returns (ResumeResponse);
-    rpc Status(StatusRequest) returns (StatusResponse);
-    rpc List(ListRequest) returns (ListResponse);
-    rpc Watch(WatchRequest) returns (stream DownloadEvent);
-}
-
-message AddRequest {
-    string magnet_uri = 1;
-    string torrent_url = 2;
-    bytes nzb_data = 3;
-    string dest_path = 4;
-    string label = 5;
-    int32 priority = 6;
-}
-
-message AddResponse {
-    string id = 1;
-}
-```
+Protobuf definitions planned for Phase 3 (language-agnostic module SDK).
 
 ---
 
 ## Contract Versioning
 
-Contracts follow **semantic versioning**:
+*(planned)* Contracts follow **semantic versioning**:
 
 - **v1.0.0** → `Downloader/v1`
 - **v1.1.0** → `Downloader/v1` (backwards compatible)
 - **v2.0.0** → `Downloader/v2` (breaking change)
 
-The service registry enforces compatibility.
+Compatibility enforcement is planned for the service registry.
 
 ## SDK
 
-The **Go SDK** (`sdk/go/`) provides:
-- Interface definitions (import and implement)
-- Client stubs (call other modules)
-- Utilities (auth, events, logging)
-- Testing helpers (mock event bus, mock storage)
+The **Go SDK** (`sdk/go/`) is reserved for future SDK tooling. Currently, modules import contracts directly from `pkg/contracts/`.
 
 Future SDKs planned for:
 - TypeScript/JavaScript (UI plugins)

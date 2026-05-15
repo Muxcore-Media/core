@@ -17,10 +17,11 @@ MuxCore uses events as the primary integration pattern. Modules publish events w
 | **Automation** | Workflow modules compose events into pipelines |
 | **Replay** | Events can be replayed for testing or recovery |
 
-## Event Bus (NATS)
+## Event Bus
 
-MuxCore uses **NATS** as its event bus:
+MuxCore provides an **in-memory event bus** by default. NATS is available as an optional module (`eventbus-nats`) for distributed messaging.
 
+When using the NATS module:
 - **Pub/Sub** — Fire and forget events
 - **Request/Reply** — Synchronous queries
 - **Streaming (JetStream)** — Ordered, persistent event streams
@@ -46,40 +47,40 @@ type Event struct {
 |-------|-----------|-------------------|
 | `media.requested` | UI / API | Workflow Engine |
 | `media.found` | Indexer | Workflow Engine |
-| `media.download.approved` | Media Manager | Downloader |
+| `media.download.approved` *(planned)* | Media Manager | Downloader |
 | `download.started` | Downloader | UI, Notifier |
-| `download.progress` | Downloader | UI |
+| `download.progress` *(planned)* | Downloader | UI |
 | `download.completed` | Downloader | Workflow Engine, Verifier |
 | `download.failed` | Downloader | Workflow Engine, Notifier |
-| `media.verified` | Verifier | Workflow Engine |
-| `media.extracted` | Extractor | Workflow Engine |
-| `media.analyzed` | Analyzer | Workflow Engine, Transcoder |
-| `transcode.started` | Transcoder | UI, Notifier |
-| `transcode.completed` | Transcoder | Workflow Engine, Library |
-| `transcode.failed` | Transcoder | Workflow Engine, Notifier |
-| `subtitle.missing` | Media Manager | Subtitle Provider |
-| `subtitle.fetched` | Subtitle Provider | Media Manager |
-| `library.item.added` | Media Manager | UI, Notifier, Playback |
-| `library.item.removed` | Media Manager | UI, Playback |
+| `media.verified` *(planned)* | Verifier | Workflow Engine |
+| `media.extracted` *(planned)* | Extractor | Workflow Engine |
+| `media.analyzed` *(planned)* | Analyzer | Workflow Engine, Transcoder |
+| `transcode.started` *(planned)* | Transcoder | UI, Notifier |
+| `transcode.completed` *(planned)* | Transcoder | Workflow Engine, Library |
+| `transcode.failed` *(planned)* | Transcoder | Workflow Engine, Notifier |
+| `subtitle.missing` *(planned)* | Media Manager | Subtitle Provider |
+| `subtitle.fetched` *(planned)* | Subtitle Provider | Media Manager |
+| `library.item.added` *(planned)* | Media Manager | UI, Notifier, Playback |
+| `library.item.removed` *(planned)* | Media Manager | UI, Playback |
 
 ### Playback
 | Event | Publisher | Typical Subscriber |
 |-------|-----------|-------------------|
-| `playback.started` | Playback Module | Watch State, Analytics |
-| `playback.stopped` | Playback Module | Watch State |
-| `playback.progress` | Playback Module | Watch State |
-| `playback.transcode.requested` | Playback Module | Transcoder |
+| `playback.started` *(planned)* | Playback Module | Watch State, Analytics |
+| `playback.stopped` *(planned)* | Playback Module | Watch State |
+| `playback.progress` *(planned)* | Playback Module | Watch State |
+| `playback.transcode.requested` *(planned)* | Playback Module | Transcoder |
 
 ### System
 | Event | Publisher | Typical Subscriber |
 |-------|-----------|-------------------|
-| `module.registered` | Module | Registry, UI |
-| `module.unregistered` | Module | Registry, UI |
-| `module.degraded` | Module | Registry, Notifier |
-| `worker.available` | Worker Agent | Scheduler |
-| `worker.offline` | Worker Agent | Scheduler |
-| `storage.rebalanced` | Storage Orchestrator | UI |
-| `system.backup.completed` | Backup Module | UI, Notifier |
+| `module.registered` *(planned)* | Module | Registry, UI |
+| `module.unregistered` *(planned)* | Module | Registry, UI |
+| `module.degraded` *(planned)* | Module | Registry, Notifier |
+| `worker.available` *(planned)* | Worker Agent | Scheduler |
+| `worker.offline` *(planned)* | Worker Agent | Scheduler |
+| `storage.rebalanced` *(planned)* | Storage Orchestrator | UI |
+| `system.backup.completed` *(planned)* | Backup Module | UI, Notifier |
 
 ## Event-Driven Workflow Example
 

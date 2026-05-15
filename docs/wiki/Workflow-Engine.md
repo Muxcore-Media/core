@@ -31,8 +31,9 @@ type WorkflowStep struct {
     Input   map[string]any // Parameters for this step
     Retry   int            // Max retry attempts
     Timeout int            // Timeout in seconds
-    OnFailure string       // "skip", "retry", "compensate", "fail"
 }
+
+// Advanced workflow features (conditional steps, parallel execution, compensation) planned for Phase 2.
 ```
 
 ### Example Workflow: Movie Import
@@ -55,7 +56,6 @@ steps:
     handler: downloader-qbittorrent
     retry: 1
     timeout: 0  # no timeout, download may take hours
-    on_failure: retry_with_fallback
 
   - name: verify
     handler: verifier-builtin
@@ -76,13 +76,11 @@ steps:
     handler: transcoder-ffmpeg
     retry: 1
     timeout: 3600
-    condition: "needs_transcoding == true"
 
   - name: subtitle-fetch
     handler: subtitle-bazarr
     retry: 2
     timeout: 120
-    condition: "subtitles_missing == true"
 
   - name: library-import
     handler: media-movies
@@ -112,52 +110,9 @@ The same request processed twice should not result in double downloads, double i
 idempotencyKey := hash(mediaType + imdbID + quality + season + episode)
 ```
 
-### Compensation
-On failure, the workflow can run **compensation steps** to undo partial work:
+### Advanced Features *(planned for Phase 2)*
 
-```yaml
-steps:
-  - name: import-to-library
-    handler: media-movies
-    on_failure: compensate
-    compensate:
-      - name: remove-from-library
-        handler: media-movies
-      - name: delete-downloaded-files
-        handler: storage-cleanup
-```
-
-### Conditional Steps
-Steps can have conditions:
-```yaml
-condition: "needs_transcoding == true"
-condition: "media_type == 'anime'"
-condition: "subtitles_count == 0"
-```
-
-### Parallel Steps
-Independent steps can run in parallel:
-```yaml
-- name: post-import
-  parallel:
-    - name: subtitle-fetch
-      handler: subtitle-bazarr
-    - name: thumbnail-generate
-      handler: processor-thumbnail
-    - name: notify
-      handler: notifier-discord
-```
-
-### Fallback Chains
-If the primary handler fails, try alternatives:
-```yaml
-- name: download
-  handlers:
-    - downloader-qbittorrent
-    - downloader-native
-    - downloader-sabnzbd
-  strategy: first-success
-```
+Advanced workflow features including compensation (undoing partial work on failure), conditional step execution, parallel step execution, and fallback handler chains are planned for Phase 2.
 
 ## Workflow Execution
 
@@ -176,16 +131,16 @@ MuxCore ships with sensible default workflows:
 
 | Workflow | Description |
 |----------|-------------|
-| `movie-request` | Full movie acquisition pipeline |
-| `tv-request` | TV episode acquisition |
-| `music-request` | Music album acquisition |
-| `book-request` | Book acquisition |
-| `media-transcode` | Transcoding pipeline |
-| `media-migrate` | Move media between storage providers |
-| `media-backup` | Backup to cold storage |
-| `library-scan` | Scan and import existing media |
+| `movie-request` *(planned)* | Full movie acquisition pipeline |
+| `tv-request` *(planned)* | TV episode acquisition |
+| `music-request` *(planned)* | Music album acquisition |
+| `book-request` *(planned)* | Book acquisition |
+| `media-transcode` *(planned)* | Transcoding pipeline |
+| `media-migrate` *(planned)* | Move media between storage providers |
+| `media-backup` *(planned)* | Backup to cold storage |
+| `library-scan` *(planned)* | Scan and import existing media |
 
-Users can modify any built-in workflow or define entirely new ones.
+Built-in workflows are planned. In Phase 1, workflows must be defined manually.
 
 ## Power Use Cases
 

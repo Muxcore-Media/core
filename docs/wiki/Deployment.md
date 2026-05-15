@@ -18,6 +18,8 @@ docker-compose.yml
     └── scheduler-cron
 ```
 
+> **Note:** Phase 1 core does not require external dependencies. PostgreSQL, Redis, and NATS are planned for Phase 2.
+
 ### Characteristics
 - Single `docker-compose up`
 - All modules compiled into one binary (default preset)
@@ -124,10 +126,14 @@ MuxCore should work across:
 
 ## Module Deployment
 
+### Phase 2+: Distributed Module Deployment *(planned)*
+
+Phase 1 uses compile-time modules (all modules compiled into a single binary).
+
 Each module gets its own container:
 
 ```yaml
-# docker-compose.yml (Phase 1)
+# docker-compose.yml (Phase 2)
 services:
   muxcore:
     image: muxcore-media/core:latest
@@ -135,13 +141,13 @@ services:
   downloader-qbittorrent:
     image: muxcore-media/module-downloader-qbittorrent:latest
     environment:
-      - MUXCORE_ADDR=muxcore:4222
+      - MUXCORE_ADDR=:8080
       - MODULE_TOKEN=${QBITTORRENT_TOKEN}
 
   media-movies:
     image: muxcore-media/module-media-movies:latest
     environment:
-      - MUXCORE_ADDR=muxcore:4222
+      - MUXCORE_ADDR=:8080
       - MODULE_TOKEN=${MEDIA_MOVIES_TOKEN}
 
   transcoder-ffmpeg:

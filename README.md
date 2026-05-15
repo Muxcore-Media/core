@@ -36,21 +36,21 @@ Core itself has **one job**: provide the fabric and get out of the way. Event bu
  └───────┬──────┘ └─────┬─────┘ └──────┬──────┘
          │              │              │
          └──────┬───────┴───────┬──────┘
-                │               │
-     ┌──────────▼───┐   ┌──────▼────────┐
-     │ Modules       │   │ Worker Agents │
-     │               │   │               │
-     │ Torrent       │   │ Transcoding   │
-     │ Indexers      │   │ Analysis      │
-     │ Metadata      │   │ ML Tasks      │
-     │ Subtitle      │   │ File Ops      │
-     │ Media Server  │   │ Etc           │
-     └───────────────┘   └───────────────┘
+                │
+        ┌───────▼───────┐
+        │   Modules     │
+        │               │
+        │ Torrent       │
+        │ Indexers      │
+        │ Metadata      │
+        │ Subtitle      │
+        │ Media Server  │
+        └───────────────┘
 ```
 
 ## Core vs Modules
 
-**Core** (`github.com/Muxcore-Media/core`) is infrastructure only. One dependency (`uuid`). No NATS, no cron, no web framework, no module code.
+**Core** (`github.com/Muxcore-Media/core`) is infrastructure only. One direct dependency (`uuid`). No NATS, no cron, no web framework, no module code. Builds with `-tags default` pull in additional module-level dependencies (e.g., `robfig/cron` from scheduler-cron), but those come from the modules, not core itself.
 
 | Package | Purpose |
 |---------|---------|
@@ -105,7 +105,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 
 - **Interfaces only** — modules import `pkg/contracts` and nothing else from core. No internal packages.
 - **Auto-discovery** — modules find each other via `ServiceRegistry.FindByKind()`. The core registry is the single source of truth.
-- **gRPC + protobuf** for the internal mesh. **NATS** available as a module for distributed messaging. **Go SDK** to start, multi-language later.
+- **gRPC + protobuf** for the internal mesh (planned). **NATS** available as a module for distributed messaging. **Go SDK** (planned) for writing modules in Go, multi-language later.
 - **Capability negotiation** — modules declare what they support. The platform adapts.
 - **Publish to a marketplace** — create a `muxcore.json`, push to GitHub, add your repo to a marketplace catalog.
 
@@ -186,8 +186,8 @@ See [Module System](https://github.com/Muxcore-Media/core/wiki/Module-System) an
 | Internal Mesh | gRPC + protobuf |
 | Event Bus (core) | In-memory pub/sub |
 | Event Bus (distributed) | NATS (via `eventbus-nats` module) |
-| Database | PostgreSQL (persistent) + Redis (ephemeral/caching) |
-| Storage | Abstracted blob layer (S3-compatible) |
+| Database | PostgreSQL (persistent, planned) + Redis (ephemeral/caching, planned) |
+| Storage | Abstracted blob layer (S3-compatible, planned) |
 | Core Admin UI | HTMX + Go templates + Tailwind CSS (via `admin-ui` module) |
 | Module UIs | SvelteKit + Tailwind CSS (user-facing media modules); any framework for third-party |
 
@@ -205,7 +205,7 @@ go build -tags default ./cmd/muxcored
 ./muxcored
 ```
 
-Or with Docker:
+Or with Docker (builds with default preset):
 
 ```bash
 docker compose up
@@ -221,6 +221,7 @@ docker compose up
 | qBittorrent | [downloader-qbittorrent](https://github.com/Muxcore-Media/downloader-qbittorrent) | downloader |
 | NATS Event Bus | [eventbus-nats](https://github.com/Muxcore-Media/eventbus-nats) | eventbus |
 | Jackett Indexer | [indexer-jackett](https://github.com/Muxcore-Media/indexer-jackett) | provider |
+| Jellyfin | [jellyfin](https://github.com/Muxcore-Media/jellyfin) | playback |
 | Media Library | [media-library](https://github.com/Muxcore-Media/media-library) | media_manager |
 | Movie Manager | [media-manager-movies](https://github.com/Muxcore-Media/media-manager-movies) | media_manager |
 | Discord Notifier | [notifier-discord](https://github.com/Muxcore-Media/notifier-discord) | provider |
@@ -231,7 +232,7 @@ Marketplace catalog: [marketplace-catalog](https://github.com/Muxcore-Media/mark
 
 ## License
 
-TBD
+GPL-3.0
 
 ---
 

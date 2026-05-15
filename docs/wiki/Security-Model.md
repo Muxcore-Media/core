@@ -50,7 +50,7 @@ policies:
     on: ["*"]
 ```
 
-### Module Permissions
+### Module Permissions *(planned for Phase 2)*
 
 Each module declares required permissions in its manifest:
 
@@ -67,7 +67,7 @@ permissions:
 
 The core enforces these — a module cannot access more than declared.
 
-### Network Security
+### Network Security *(planned for Phase 2/3)*
 - **Reverse proxy aware** — Works behind Traefik, Caddy, Nginx
 - **mTLS** — Between core and external modules
 - **Network policies** — Module-to-module communication is restricted by policy
@@ -79,7 +79,7 @@ The core enforces these — a module cannot access more than declared.
 - **Encryption in transit** — gRPC uses TLS, NATS uses TLS
 - **No secrets in logs** — Automatic redaction
 
-### Sandboxing
+### Sandboxing *(planned for Phase 3)*
 - **External modules** — Run as separate processes with limited OS permissions
 - **Docker/container isolation** — Recommended deployment pattern
 - **gVisor/Firecracker** — Optional microVM isolation for untrusted modules
