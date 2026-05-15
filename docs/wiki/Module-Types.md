@@ -1,6 +1,6 @@
 # Module Types
 
-MuxCore defines **12 formal module kinds**. Each kind has a defined contract (Go interface + protobuf definition). Modules of any kind can be added without modifying core.
+MuxCore defines **13 formal module kinds**. Each kind has a defined contract (Go interface + protobuf definition). Modules of any kind can be added without modifying core.
 
 ---
 

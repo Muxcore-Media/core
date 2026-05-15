@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/api"
-	"github.com/Muxcore-Media/core/internal/cluster"
 	"github.com/Muxcore-Media/core/internal/config"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/module"
@@ -54,30 +53,6 @@ func main() {
 	reg := registry.New()
 	mgr := module.NewManager(reg)
 
-	var cl contracts.Cluster
-	if cfg.Cluster.Enabled {
-		clusterCfg := cluster.Config{
-			NodeID:           cfg.Cluster.NodeID,
-			GRPCAddr:         cfg.Cluster.GRPCAddr,
-			HTTPAddr:         cfg.Server.Addr,
-			SeedNodes:        cfg.Cluster.SeedNodes,
-			GossipInterval:   secsToDuration(cfg.Cluster.GossipSecs, 2),
-			HeartbeatTimeout: secsToDuration(cfg.Cluster.TimeoutSecs, 10),
-		}
-		gc := cluster.NewGossipCluster(clusterCfg, bus)
-		transport := cluster.NewTransport(gc, clusterCfg.GRPCAddr)
-		if err := transport.Listen(); err != nil {
-			slog.Error("cluster transport", "error", err)
-			os.Exit(1)
-		}
-		if err := gc.Start(ctx); err != nil {
-			slog.Error("cluster start", "error", err)
-			os.Exit(1)
-		}
-		cl = gc
-		slog.Info("cluster started", "node_id", gc.LocalNode().ID, "seeds", cfg.Cluster.SeedNodes)
-	}
-
 	srv := api.NewServer(cfg.Server.Addr)
 
 	store := storage.NewOrchestrator(reg)
@@ -88,15 +63,37 @@ func main() {
 	store.SetCache(cache)
 	slog.Info("storage orchestrator ready", "providers", store.ProviderCount())
 
+	// Cluster is nil until a cluster module is discovered.
 	deps := contracts.ModuleDeps{
 		Registry: reg,
 		EventBus: bus,
 		Routes:   srv,
-		Cluster:  cl,
+		Cluster:  nil,
 		Storage:  store,
 	}
 
-	for _, mod := range contracts.LoadRegistered(deps) {
+	modules := contracts.LoadRegistered(deps)
+
+	// Discover infrastructure modules.
+	var cl contracts.Cluster
+	var wp contracts.WorkerPool
+	var al contracts.AuditLogger
+	for _, mod := range modules {
+		if c, ok := mod.(contracts.Cluster); ok {
+			cl = c
+		}
+		if w, ok := mod.(contracts.WorkerPool); ok {
+			wp = w
+		}
+		if a, ok := mod.(contracts.AuditLogger); ok {
+			al = a
+		}
+	}
+	deps.Cluster = cl
+	deps.WorkerPool = wp
+	deps.Audit = al
+
+	for _, mod := range modules {
 		if err := mgr.Register(mod, nil); err != nil {
 			slog.Error("register module", "id", mod.Info().ID, "error", err)
 			os.Exit(1)
@@ -134,6 +131,15 @@ func main() {
 			os.Exit(1)
 		}
 	}()
+
+	// Start cluster early so other modules can use it during Init/Start.
+	if cl != nil {
+		if err := cl.Start(ctx); err != nil {
+			slog.Error("cluster start", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("cluster started", "node_id", cl.LocalNode().ID)
+	}
 
 	if err := mgr.InitAll(ctx); err != nil {
 		slog.Error("init modules", "error", err)
@@ -190,13 +196,6 @@ func main() {
 		}
 	}
 	slog.Info("MuxCore stopped.")
-}
-
-func secsToDuration(secs, def int) time.Duration {
-	if secs <= 0 {
-		secs = def
-	}
-	return time.Duration(secs) * time.Second
 }
 
 func setupLogger(lc config.LogConfig) *slog.Logger {

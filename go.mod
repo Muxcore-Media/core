@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	github.com/Muxcore-Media/admin-ui v0.0.0
 	github.com/Muxcore-Media/api-rest v0.0.0
+	github.com/Muxcore-Media/cluster-gossip v0.0.0
 	github.com/Muxcore-Media/scheduler-cron v0.0.0
 	github.com/google/uuid v1.6.0
 	google.golang.org/grpc v1.81.1
@@ -22,5 +23,7 @@ require (
 replace github.com/Muxcore-Media/admin-ui => ../modules/admin-ui
 
 replace github.com/Muxcore-Media/api-rest => ../modules/api-rest
+
+replace github.com/Muxcore-Media/cluster-gossip => ../modules/cluster-gossip
 
 replace github.com/Muxcore-Media/scheduler-cron => ../modules/scheduler-cron

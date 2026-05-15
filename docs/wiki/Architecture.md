@@ -27,17 +27,17 @@
          │              │              │
          └──────┬───────┴───────┬──────┘
                 │               │
-     ┌──────────▼───┐   ┌──────▼────────┐
-     │ Modules       │   │ Worker Agents │
-     │               │   │               │
-     │ Downloaders   │   │ Transcoding   │
-     │ Indexers      │   │ AI Analysis   │
-     │ Metadata      │   │ File Ops      │
-     │ Subtitles     │   │ ML Tasks      │
-     │ Notifications │   │ Replication   │
-     │ Media Server  │   │               │
-     │ Storage       │   │               │
-     └───────────────┘   └───────────────┘
+     ┌──────────▼─────────────────────────┐
+     │ Modules (all capabilities)        │
+     │                                   │
+     │ Downloaders    Transcoding        │
+     │ Indexers       AI Analysis        │
+     │ Metadata       File Ops           │
+     │ Subtitles      ML Tasks           │
+     │ Notifications  Replication        │
+     │ Media Server   Worker Pool        │
+     │ Storage                           │
+     └───────────────────────────────────┘
 ```
 
 ## Core Services
@@ -47,6 +47,12 @@
 - Internal mesh: gRPC + protobuf
 - Handles auth, rate limiting, routing
 - Composes UI panels from registered modules
+
+### Cluster Membership
+- Not built into core — provided by a cluster module implementing `contracts.Cluster`
+- Gossip-based membership available as a module (`cluster-gossip`) with leader election and failure detection
+- Core discovers the cluster module from the registry at bootstrap; single-node deployments run without one
+- Modules receive the cluster via `ModuleDeps.Cluster` — nil when running standalone
 
 ### Event Bus
 - Core provides an in-memory pub/sub bus for bootstrapping and single-node

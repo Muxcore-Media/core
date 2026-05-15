@@ -53,13 +53,17 @@ func init() {
 
 ### ModuleDeps
 
-Core provides three services to every module during construction:
+Core provides seven services to every module during construction:
 
 | Service | Interface | Purpose |
 |---------|-----------|---------|
 | `EventBus` | `contracts.EventBus` | Publish and subscribe to events |
 | `Registry` | `contracts.ServiceRegistry` | Discover other modules at runtime |
 | `Routes` | `contracts.RouteRegistrar` | Register HTTP handlers with the core API server |
+| `Cluster` | `contracts.Cluster` | Cluster membership and leader election |
+| `Storage` | `contracts.StorageOrchestrator` | Storage abstraction behind object IDs |
+| `WorkerPool` | `contracts.WorkerPool` | Distributed worker pool for task execution |
+| `Audit` | `contracts.AuditLogger` | System-wide audit logging |
 
 Modules receive these via the factory and store what they need. A simple downloader module only needs the event bus. A web UI module needs the registry and routes.
 
@@ -139,24 +143,20 @@ Each module repo has a `muxcore.json` with metadata (name, description, version,
 
 **Official modules** are repos owned by the `Muxcore-Media` GitHub organization. Third-party modules are repos from any other org or user.
 
-## Versioning & Compatibility
+## Versioning & Compatibility *(planned)*
 
-- All modules follow **semantic versioning** (MAJOR.MINOR.PATCH)
-- Contracts are **versioned** (e.g., `Downloader/v1`)
-- The registry maintains a **compatibility matrix**
-- Modules can **negotiate capabilities** at connection time
+Contract versioning and a compatibility matrix are planned for a future release:
 
-### Capability Negotiation
+- Contract versioning (e.g., `Downloader/v1` vs `Downloader/v2`)
+- Registry-enforced compatibility matrix at module load time
+- Capability negotiation at module connection time
+- Runtime version negotiation between modules (e.g., "I support Downloader/v1" → "We agree on Downloader/v1")
 
-```
-Module A: "I support Downloader/v1, StreamingDownloader/v2"
-Module B: "I support Downloader/v1"
-→ They agree on Downloader/v1
-```
+Currently, modules type-assert against the latest contract interface and the registry does not enforce version compatibility.
 
-### Multi-Kind Modules *(planned — #63)*
+### Multi-Kind Modules
 
-A single module can register under **multiple `ModuleKind` values** simultaneously. For example, the Jellyfin module registers as:
+A single module can register under **multiple `ModuleKind` values** simultaneously. For example, a Jellyfin module could register as:
 
 ```go
 func (m *Module) Info() contracts.ModuleInfo {

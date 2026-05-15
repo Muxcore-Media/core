@@ -246,6 +246,7 @@ docker compose up
 | Media Library | [media-library](https://github.com/Muxcore-Media/media-library) | media_manager |
 | Movie Manager | [media-manager-movies](https://github.com/Muxcore-Media/media-manager-movies) | media_manager |
 | Discord Notifier | [notifier-discord](https://github.com/Muxcore-Media/notifier-discord) | provider |
+| Gossip Cluster | [cluster-gossip](https://github.com/Muxcore-Media/cluster-gossip) | provider |
 | Cron Scheduler | [scheduler-cron](https://github.com/Muxcore-Media/scheduler-cron) | scheduler |
 | Workflow Engine | [workflow-engine](https://github.com/Muxcore-Media/workflow-engine) | workflow |
 | PostgreSQL | [database-postgres](https://github.com/Muxcore-Media/database-postgres) | provider |

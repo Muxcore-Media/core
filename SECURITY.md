@@ -12,9 +12,8 @@ needed. Once 1.0 ships, a formal version support matrix will be published.
 
 ## Reporting a Vulnerability
 
-**Do not open a public issue.** Disclose security vulnerabilities privately to
-`security@muxcore.dev`. If that address does not yet exist, open a private
-vulnerability report via GitHub:
+**Do not open a public issue.** Disclose security vulnerabilities privately via
+GitHub's built-in vulnerability reporting:
 
 1. Go to the [Security Advisories](https://github.com/Muxcore-Media/core/security/advisories) tab
 2. Click **New draft security advisory**

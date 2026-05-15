@@ -49,17 +49,23 @@ Every module implements this. The core manages the lifecycle.
 ```go
 type ServiceRegistry interface {
     FindByKind(kind ModuleKind) []ModuleEntry
+    FindByCapability(cap string) []ModuleEntry
+    SupportsCapability(moduleID, cap string) bool
     Resolve(id string) (ModuleEntry, error)
     ListAll() []ModuleEntry
+    RegisterMediaSchema(schema MediaTypeSchema) error
+    MediaSchema(mediaType MediaType) (MediaTypeSchema, bool)
+    MediaSchemas() []MediaTypeSchema
 }
 
 type ModuleEntry struct {
     Info   ModuleInfo
+    State  ModuleState
     Module Module
 }
 ```
 
-Modules use this to discover each other at runtime. `FindByKind` returns all modules of a given kind. `Resolve` looks up a module by ID. The returned `ModuleEntry.Module` can be type-asserted to a specific capability interface (e.g., `contracts.Downloader`).
+Modules use this to discover each other at runtime. `FindByKind` returns all modules of a given kind. `FindByCapability` returns modules advertising a specific capability (e.g., `"playback.jellyfin"`). `Resolve` looks up a module by ID. `RegisterMediaSchema` lets modules declare metadata fields for their media type; core validates `MediaObject.Fields` against the registered schema. The returned `ModuleEntry.Module` can be type-asserted to a specific capability interface (e.g., `contracts.Downloader`).
 
 ### RouteRegistrar (module.go)
 
@@ -232,7 +238,7 @@ type Authorizer interface {
 }
 ```
 
-### DatabaseProvider (database.go) *(planned — #61)*
+### DatabaseProvider (database.go)
 
 ```go
 type DatabaseProvider interface {
@@ -248,7 +254,7 @@ type DatabaseProvider interface {
 
 Core defines the contract. Implementations are modules: `database-postgres`, `database-sqlite`, `database-mysql`.
 
-### CacheProvider (cache.go) *(planned — #62)*
+### CacheProvider (cache.go)
 
 ```go
 type CacheProvider interface {

@@ -51,7 +51,7 @@
 
 **Goal:** Prove distributed architecture. Multi-node, failover, worker pools.
 
-- [x] Multi-node clustering (#21)
+- [x] Multi-node clustering — extracted to `cluster-gossip` module (#21)
 - [x] Distributed worker pool (#22, renamed from "Distributed transcoding pool") — `worker-pool` module
 - [x] Worker failover and task redistribution (#23) — `worker-pool` module
 - [x] Storage abstraction and orchestrator layer (#53)
@@ -93,8 +93,8 @@
 - [ ] Music Manager (Lidarr replacement)
 - [ ] Subtitle provider (Bazarr replacement)
 - [ ] Transcoder: FFmpeg with GPU support
-- [ ] PostgreSQL database provider (`database-postgres`)
-- [ ] Redis cache provider (`cache-redis`)
+- [x] PostgreSQL database provider (`database-postgres`)
+- [x] Redis cache provider (`cache-redis`)
 - [ ] OIDC/SSO auth provider (`auth-oidc`)
 - [ ] S3/MinIO storage provider (`storage-s3`)
 
