@@ -154,6 +154,33 @@ Module B: "I support Downloader/v1"
 → They agree on Downloader/v1
 ```
 
+### Multi-Kind Modules *(planned — #63)*
+
+A single module can register under **multiple `ModuleKind` values** simultaneously. For example, the Jellyfin module registers as:
+
+```go
+func (m *Module) Info() contracts.ModuleInfo {
+    return contracts.ModuleInfo{
+        ID:    "jellyfin",
+        Kinds: []ModuleKind{ModuleKindPlayback, ModuleKindProvider, ModuleKindAuth},
+        Capabilities: []string{
+            "playback.jellyfin", "playback.session",
+            "provider.metadata", "provider.movie-images",
+            "auth.jellyfin-credentials",
+        },
+    }
+}
+```
+
+The registry indexes the module under ALL declared kinds. `FindByKind(ModuleKindProvider)` returns Jellyfin. The registry validates at registration that the module implements the required interfaces for each declared kind.
+
+**Discovery paths:**
+- **By kind:** `FindByKind(ModuleKindPlayback)` — broad category
+- **By capability:** `FindByCapability("playback.jellyfin")` — fine-grained (#64)
+- **By ID:** `Resolve("jellyfin")` — direct lookup
+
+This follows Home Assistant's pattern where a single integration declares `PLATFORMS = ["sensor", "binary_sensor", "switch", "light"]` and is discoverable under all of them.
+
 ## Module Isolation
 
 ### Embedded Modules (Compile-time)
