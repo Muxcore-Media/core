@@ -90,7 +90,7 @@ Core compiles with zero modules. Build with `-tags default` for the essential st
 - **Pick your modules** — start with the default preset or build from scratch. No unused code.
 - **Module marketplace** — add marketplace URLs in config. Browse and install modules from the admin UI. Official modules are verified by the Muxcore-Media org.
 - **One platform, all media** — stop running separate instances of Radarr, Sonarr, Lidarr, and Readarr. Name a media type, attach a module, done.
-- **Distributed by default** — add a second node, load the NATS event bus module, and the scheduler splits the load. No single point of failure.
+- **Horizontally scalable** — add a second node, load the NATS event bus module, and the scheduler splits the load. No single point of failure.
 - **Snappy interface** — admin UI built with HTMX + Go templates + Tailwind CSS. User-facing media modules use SvelteKit + Tailwind CSS.
 
 ## For Developers
@@ -125,7 +125,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 
 - **Interfaces only** — modules import `pkg/contracts` and nothing else from core. No internal packages.
 - **Auto-discovery** — modules find each other via `ServiceRegistry.FindByKind()`. The core registry is the single source of truth.
-- **gRPC + protobuf** for the internal mesh (planned). **NATS** available as a module for distributed messaging. **Go SDK** (planned) for writing modules in Go, multi-language later.
+- **gRPC + protobuf** for the internal mesh (planned). **NATS** available as a module for distributed messaging. **Go SDK** (`pkg/contracts`) for writing modules in Go, with multi-language planned later.
 - **Capability negotiation** — modules declare what they support. The platform adapts.
 - **Publish to a marketplace** — create a `muxcore.json`, push to GitHub, add your repo to a marketplace catalog.
 
@@ -178,6 +178,7 @@ See [Module System](https://github.com/Muxcore-Media/core/wiki/Module-System) an
 | **Provider** | Indexers, metadata, subtitles, notifications — any data source |
 | **Downloader** | Torrent engines, Usenet bridges, debrid services, direct HTTP |
 | **Media Manager** | User-defined media types backed by modules. Create `"movie"`, `"comic-book"`, `"movie-4k"` — any string, any module |
+| **Indexer** | Search torrent/usenet indexers via Torznab/Newznab APIs |
 | **Processor** | Transcoding, media analysis, thumbnail generation, AI tagging |
 | **Playback** | Streaming, DLNA, watch state sync, transcoding proxy |
 | **Workflow** | End-to-end pipelines: request → search → download → verify → transcode → import → notify |
@@ -251,6 +252,10 @@ docker compose up
 | Workflow Engine | [workflow-engine](https://github.com/Muxcore-Media/workflow-engine) | workflow |
 | PostgreSQL | [database-postgres](https://github.com/Muxcore-Media/database-postgres) | provider |
 | Redis Cache | [cache-redis](https://github.com/Muxcore-Media/cache-redis) | provider |
+| Audit Logger | [audit-logger](https://github.com/Muxcore-Media/audit-logger) | provider |
+| Prometheus | [prometheus-metrics](https://github.com/Muxcore-Media/prometheus-metrics) | provider |
+| Storage Tiering | [storage-tiering](https://github.com/Muxcore-Media/storage-tiering) | provider |
+| Worker Pool | [worker-pool](https://github.com/Muxcore-Media/worker-pool) | scheduler |
 
 Marketplace catalog: [marketplace-catalog](https://github.com/Muxcore-Media/marketplace-catalog)
 
