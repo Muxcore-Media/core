@@ -70,6 +70,7 @@
 - [x] Multi-kind module registration (#63) — one module, multiple Kinds
 - [x] Capability-based service discovery (#64) — FindByCapability
 - [x] Auth gateway middleware (#65) — session validation, RBAC enforcement
+- [x] Module-defined metadata schema system (#75) — modules declare their media type's fields, core validates
 - [ ] Tag system contract (#66)
 - [ ] Automated backup and restore contract (#67)
 - [ ] Import list contract (#68) — watchlist sync from external services
