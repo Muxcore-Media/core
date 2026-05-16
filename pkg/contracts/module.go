@@ -110,9 +110,11 @@ type ModuleDeps struct {
 	EventBus   EventBus
 	Routes     RouteRegistrar
 	Cluster    Cluster
+	Mesh       ModuleMeshClient
 	Storage    StorageOrchestrator
 	WorkerPool WorkerPool
 	Audit      AuditLogger
+	Tracer     Tracer
 }
 
 // -- Auto-registration --

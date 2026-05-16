@@ -10,9 +10,9 @@ All module capabilities are defined by **versioned contracts**. Contracts are th
 
 For Go-native modules. Defined in `pkg/contracts/`.
 
-### 2. Protobuf Definitions (Language Agnostic)
+### 2. Protobuf Definitions (Connector Protocol)
 
-For external modules in any language. Defined in `proto/`.
+Used by module connectors to bridge Go modules to foreign-language code. Defined in `proto/`.
 
 ### 3. OpenAPI Spec (External API)
 
@@ -287,7 +287,7 @@ Core defines the contract. Implementations are modules: `cache-redis`, `cache-va
 
 ## Protobuf Contracts
 
-Protobuf definitions planned for Phase 3 (language-agnostic module SDK).
+Protobuf definitions planned for Phase 3 (module connectors for non-Go languages).
 
 ---
 
@@ -301,11 +301,18 @@ Protobuf definitions planned for Phase 3 (language-agnostic module SDK).
 
 Compatibility enforcement is planned for the service registry.
 
-## SDK
+## SDK & Module Connectors
 
-The **Go SDK** is the `pkg/contracts` package. Modules import it directly and call `contracts.Register()` in their `init()`. The `sdk/go/` directory is reserved for future higher-level SDK tooling (code generation, scaffolding).
+### Go SDK
 
-Future SDKs planned for:
-- TypeScript/JavaScript (UI plugins)
-- Python (AI/ML modules)
-- Rust (performance-critical modules)
+The **Go SDK** is the `pkg/contracts` package — the only way to write a module that talks directly to core. Modules import it and call `contracts.Register()` in their `init()`. The `sdk/go/` directory is reserved for future higher-level SDK tooling (code generation, scaffolding).
+
+### Module Connectors (Non-Go Languages)
+
+Modules must be written in Go to register with core. For developers who want to use other languages, **module connectors** will be provided — thin Go modules that implement the standard module interface and forward calls to foreign-language code over gRPC, pipes, or FFI:
+
+- **TypeScript/JavaScript** — UI plugins, automation scripts
+- **Python** — AI/ML processing, content analysis
+- **Rust** — performance-critical workloads (transcoding, hashing)
+
+A connector is a Go module that wraps the foreign-language process. The Go side handles registration, health checks, and lifecycle, while the actual logic lives in the developer's language of choice. This keeps multi-language complexity out of core.

@@ -5,17 +5,23 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/Muxcore-Media/core/pkg/contracts"
-
 	"github.com/Muxcore-Media/core/internal/registry"
+	"github.com/Muxcore-Media/core/pkg/contracts"
 )
 
 type Manager struct {
 	registry *registry.Registry
+	tracer   contracts.Tracer
 }
 
 func NewManager(reg *registry.Registry) *Manager {
 	return &Manager{registry: reg}
+}
+
+// SetTracer configures the tracer for lifecycle span creation.
+// If not set, lifecycle operations produce no tracing spans.
+func (m *Manager) SetTracer(t contracts.Tracer) {
+	m.tracer = t
 }
 
 func (m *Manager) Register(mod contracts.Module, deps []string) error {
@@ -27,6 +33,12 @@ func (m *Manager) Unregister(id string) error {
 }
 
 func (m *Manager) InitAll(ctx context.Context) error {
+	if m.tracer != nil {
+		var span contracts.Span
+		span, ctx = m.tracer.Start(ctx, "manager.init-all", contracts.SpanKindInternal)
+		defer span.End()
+	}
+
 	entries := m.registry.List()
 
 	order, err := m.startupOrder(entries)
@@ -49,6 +61,12 @@ func (m *Manager) InitAll(ctx context.Context) error {
 }
 
 func (m *Manager) StartAll(ctx context.Context) error {
+	if m.tracer != nil {
+		var span contracts.Span
+		span, ctx = m.tracer.Start(ctx, "manager.start-all", contracts.SpanKindInternal)
+		defer span.End()
+	}
+
 	entries := m.registry.List()
 
 	order, err := m.startupOrder(entries)
@@ -71,6 +89,12 @@ func (m *Manager) StartAll(ctx context.Context) error {
 }
 
 func (m *Manager) StopAll(ctx context.Context) error {
+	if m.tracer != nil {
+		var span contracts.Span
+		span, ctx = m.tracer.Start(ctx, "manager.stop-all", contracts.SpanKindInternal)
+		defer span.End()
+	}
+
 	entries := m.registry.List()
 
 	// Shutdown in reverse order
@@ -94,6 +118,11 @@ func (m *Manager) StopAll(ctx context.Context) error {
 }
 
 func (m *Manager) HealthCheck(ctx context.Context) map[string]error {
+	if m.tracer != nil {
+		var span contracts.Span
+		span, ctx = m.tracer.Start(ctx, "manager.health-check", contracts.SpanKindInternal)
+		defer span.End()
+	}
 	results := make(map[string]error)
 	for _, entry := range m.registry.List() {
 		err := entry.Module.Health(ctx)
@@ -104,6 +133,11 @@ func (m *Manager) HealthCheck(ctx context.Context) map[string]error {
 }
 
 func (m *Manager) initOne(ctx context.Context, entry *registry.Entry) error {
+	if m.tracer != nil {
+		var span contracts.Span
+		span, ctx = m.tracer.Start(ctx, "module."+entry.Info.ID+".init", contracts.SpanKindInternal)
+		defer span.End()
+	}
 	m.registry.SetState(entry.Info.ID, contracts.ModuleStateStarting)
 	if err := entry.Module.Init(ctx); err != nil {
 		return err
@@ -114,6 +148,11 @@ func (m *Manager) initOne(ctx context.Context, entry *registry.Entry) error {
 func (m *Manager) startOne(ctx context.Context, entry *registry.Entry) error {
 	if entry.State == contracts.ModuleStateRunning {
 		return nil
+	}
+	if m.tracer != nil {
+		var span contracts.Span
+		span, ctx = m.tracer.Start(ctx, "module."+entry.Info.ID+".start", contracts.SpanKindInternal)
+		defer span.End()
 	}
 	m.registry.SetState(entry.Info.ID, contracts.ModuleStateStarting)
 	if err := entry.Module.Start(ctx); err != nil {

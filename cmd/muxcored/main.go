@@ -19,6 +19,7 @@ import (
 	_ "github.com/Muxcore-Media/core/internal/presets" // build-tag-gated module selection
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/storage"
+	"github.com/Muxcore-Media/core/internal/trace"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/google/uuid"
 )
@@ -47,15 +48,25 @@ func main() {
 
 	slog.Info("MuxCore starting...")
 
+	tracer, traceShutdown, err := trace.InitProvider(cfg.Trace)
+	if err != nil {
+		slog.Warn("trace init failed, using noop", "error", err)
+		tracer = trace.NewNoopTracer()
+		traceShutdown = func(ctx context.Context) error { return nil }
+	}
+
 	bus := events.NewMemoryBus()
+	bus.SetTracer(tracer)
 	slog.Info("event bus ready", "type", "memory")
 
 	reg := registry.New()
 	mgr := module.NewManager(reg)
+	mgr.SetTracer(tracer)
 
 	srv := api.NewServer(cfg.Server.Addr)
 
 	store := storage.NewOrchestrator(reg)
+	store.SetTracer(tracer)
 	if err := store.Discover(); err != nil {
 		slog.Warn("storage discover", "error", err)
 	}
@@ -70,6 +81,7 @@ func main() {
 		Routes:   srv,
 		Cluster:  nil,
 		Storage:  store,
+		Tracer:   tracer,
 	}
 
 	modules := contracts.LoadRegistered(deps)
@@ -194,6 +206,9 @@ func main() {
 		if err := cl.Stop(shutdownCtx); err != nil {
 			slog.Error("cluster shutdown", "error", err)
 		}
+	}
+	if err := traceShutdown(shutdownCtx); err != nil {
+		slog.Error("trace shutdown", "error", err)
 	}
 	slog.Info("MuxCore stopped.")
 }

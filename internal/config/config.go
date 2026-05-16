@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -13,6 +14,7 @@ type Config struct {
 	Log      LogConfig      `json:"log"`
 	Database DatabaseConfig `json:"database"`
 	Cache    CacheConfig    `json:"cache"`
+	Trace    TraceConfig    `json:"trace"`
 	Modules  map[string]any `json:"modules"` // per-module arbitrary config
 }
 
@@ -41,6 +43,16 @@ type CacheConfig struct {
 	URL    string `json:"url"`
 }
 
+// TraceConfig controls OpenTelemetry tracing export.
+// Default exporter is "" (noop) — zero telemetry leaves the process.
+// Set exporter to "otlp" and endpoint to send spans via OTLP gRPC.
+// Set exporter to "stdout" for development-local console output.
+type TraceConfig struct {
+	Exporter   string  `json:"exporter"`    // "" (noop), "otlp", "stdout"
+	Endpoint   string  `json:"endpoint"`    // OTLP gRPC endpoint (e.g. "localhost:4317")
+	SampleRate float64 `json:"sample_rate"` // 0.0–1.0, default 1.0
+}
+
 // Default returns a Config populated with sensible defaults.
 func Default() *Config {
 	return &Config{
@@ -55,7 +67,11 @@ func Default() *Config {
 		},
 		Database: DatabaseConfig{},
 		Cache:    CacheConfig{},
-		Modules:  make(map[string]any),
+		Trace: TraceConfig{
+			Exporter:   "",
+			SampleRate: 1.0,
+		},
+		Modules: make(map[string]any),
 	}
 }
 
@@ -103,6 +119,19 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("MUXCORE_CACHE_URL"); v != "" {
 		cfg.Cache.URL = v
 	}
+	if v := os.Getenv("MUXCORE_TRACE_EXPORTER"); v != "" {
+		cfg.Trace.Exporter = v
+	}
+	if v := os.Getenv("MUXCORE_TRACE_ENDPOINT"); v != "" {
+		cfg.Trace.Endpoint = v
+	}
+	if v := os.Getenv("MUXCORE_TRACE_SAMPLE_RATE"); v != "" {
+		rate, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return nil, fmt.Errorf("MUXCORE_TRACE_SAMPLE_RATE must be a float between 0.0 and 1.0, got %q", v)
+		}
+		cfg.Trace.SampleRate = rate
+	}
 	// Normalize case-sensitive fields so consumers don't need to handle
 	// mixed case from env vars or config files.
 	cfg.Log.Level = strings.ToLower(cfg.Log.Level)
@@ -136,6 +165,17 @@ func (c *Config) validate() error {
 	validFormats := map[string]bool{"text": true, "json": true}
 	if !validFormats[strings.ToLower(c.Log.Format)] {
 		errs = append(errs, fmt.Sprintf("log.format must be one of: text, json (got %q)", c.Log.Format))
+	}
+
+	validExporters := map[string]bool{"": true, "otlp": true, "stdout": true}
+	if !validExporters[strings.ToLower(c.Trace.Exporter)] {
+		errs = append(errs, fmt.Sprintf("trace.exporter must be one of: (empty), otlp, stdout (got %q)", c.Trace.Exporter))
+	}
+	if c.Trace.Exporter == "otlp" && c.Trace.Endpoint == "" {
+		errs = append(errs, "trace.endpoint is required when trace.exporter is otlp")
+	}
+	if c.Trace.SampleRate < 0.0 || c.Trace.SampleRate > 1.0 {
+		errs = append(errs, fmt.Sprintf("trace.sample_rate must be between 0.0 and 1.0 (got %f)", c.Trace.SampleRate))
 	}
 
 	if len(errs) > 0 {

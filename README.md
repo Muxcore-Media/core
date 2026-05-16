@@ -125,7 +125,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 
 - **Interfaces only** — modules import `pkg/contracts` and nothing else from core. No internal packages.
 - **Auto-discovery** — modules find each other via `ServiceRegistry.FindByKind()`. The core registry is the single source of truth.
-- **gRPC + protobuf** for the internal mesh (planned). **NATS** available as a module for distributed messaging. **Go SDK** (`pkg/contracts`) for writing modules in Go, with multi-language planned later.
+- **gRPC + protobuf** for the internal mesh (planned). **NATS** available as a module for distributed messaging. **Go SDK** (`pkg/contracts`) for writing modules in Go. Module connectors planned for non-Go languages.
 - **Capability negotiation** — modules declare what they support. The platform adapts.
 - **Publish to a marketplace** — create a `muxcore.json`, push to GitHub, add your repo to a marketplace catalog.
 

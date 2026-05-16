@@ -19,6 +19,7 @@ type Orchestrator struct {
 	providers map[string]contracts.StorageProvider
 	policies  []RoutingPolicy
 	cache     CacheLayer
+	tracer    contracts.Tracer
 }
 
 // RoutingPolicy decides which provider handles a given key.
@@ -44,8 +45,19 @@ func NewOrchestrator(reg contracts.ServiceRegistry) *Orchestrator {
 	}
 }
 
+// SetTracer configures the tracer for storage operation span creation.
+// If not set, storage operations produce no tracing spans.
+func (o *Orchestrator) SetTracer(t contracts.Tracer) {
+	o.tracer = t
+}
+
 // Discover finds all registered storage modules and adds them to the pool.
 func (o *Orchestrator) Discover() error {
+	if o.tracer != nil {
+		var span contracts.Span
+		span, _ = o.tracer.Start(context.Background(), "storage.discover", contracts.SpanKindInternal)
+		defer span.End()
+	}
 	entries := o.registry.FindByKind(contracts.ModuleKindStorage)
 	for _, entry := range entries {
 		provider, ok := entry.Module.(contracts.StorageProvider)
@@ -95,6 +107,12 @@ func (o *Orchestrator) route(key string) (contracts.StorageProvider, error) {
 
 // Put stores data using the routed provider.
 func (o *Orchestrator) Put(ctx context.Context, key string, data io.Reader, size int64) error {
+	if o.tracer != nil {
+		var span contracts.Span
+		span, ctx = o.tracer.Start(ctx, "storage.put", contracts.SpanKindClient)
+		defer span.End()
+		span.SetAttribute("storage.key", key)
+	}
 	prov, err := o.route(key)
 	if err != nil {
 		return err
@@ -104,6 +122,12 @@ func (o *Orchestrator) Put(ctx context.Context, key string, data io.Reader, size
 
 // Get retrieves data, checking cache first.
 func (o *Orchestrator) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	if o.tracer != nil {
+		var span contracts.Span
+		span, ctx = o.tracer.Start(ctx, "storage.get", contracts.SpanKindClient)
+		defer span.End()
+		span.SetAttribute("storage.key", key)
+	}
 	// Check cache
 	o.mu.RLock()
 	cache := o.cache
@@ -123,6 +147,12 @@ func (o *Orchestrator) Get(ctx context.Context, key string) (io.ReadCloser, erro
 
 // Delete removes data.
 func (o *Orchestrator) Delete(ctx context.Context, key string) error {
+	if o.tracer != nil {
+		var span contracts.Span
+		span, ctx = o.tracer.Start(ctx, "storage.delete", contracts.SpanKindClient)
+		defer span.End()
+		span.SetAttribute("storage.key", key)
+	}
 	prov, err := o.route(key)
 	if err != nil {
 		return err
@@ -132,6 +162,12 @@ func (o *Orchestrator) Delete(ctx context.Context, key string) error {
 
 // Exists checks whether data exists at the given key.
 func (o *Orchestrator) Exists(ctx context.Context, key string) (bool, error) {
+	if o.tracer != nil {
+		var span contracts.Span
+		span, ctx = o.tracer.Start(ctx, "storage.exists", contracts.SpanKindClient)
+		defer span.End()
+		span.SetAttribute("storage.key", key)
+	}
 	prov, err := o.route(key)
 	if err != nil {
 		return false, err
@@ -141,6 +177,12 @@ func (o *Orchestrator) Exists(ctx context.Context, key string) (bool, error) {
 
 // Stat returns metadata for the given key.
 func (o *Orchestrator) Stat(ctx context.Context, key string) (contracts.ObjectInfo, error) {
+	if o.tracer != nil {
+		var span contracts.Span
+		span, ctx = o.tracer.Start(ctx, "storage.stat", contracts.SpanKindClient)
+		defer span.End()
+		span.SetAttribute("storage.key", key)
+	}
 	prov, err := o.route(key)
 	if err != nil {
 		return contracts.ObjectInfo{}, err
@@ -150,6 +192,13 @@ func (o *Orchestrator) Stat(ctx context.Context, key string) (contracts.ObjectIn
 
 // Move moves data from src to dst, using atomic move if the provider supports it.
 func (o *Orchestrator) Move(ctx context.Context, src, dst string) error {
+	if o.tracer != nil {
+		var span contracts.Span
+		span, ctx = o.tracer.Start(ctx, "storage.move", contracts.SpanKindClient)
+		defer span.End()
+		span.SetAttribute("storage.src", src)
+		span.SetAttribute("storage.dst", dst)
+	}
 	prov, err := o.route(src)
 	if err != nil {
 		return err
@@ -159,6 +208,12 @@ func (o *Orchestrator) Move(ctx context.Context, src, dst string) error {
 
 // List returns all objects under the given prefix.
 func (o *Orchestrator) List(ctx context.Context, prefix string) ([]contracts.ObjectInfo, error) {
+	if o.tracer != nil {
+		var span contracts.Span
+		span, ctx = o.tracer.Start(ctx, "storage.list", contracts.SpanKindClient)
+		defer span.End()
+		span.SetAttribute("storage.prefix", prefix)
+	}
 	prov, err := o.route(prefix)
 	if err != nil {
 		return nil, err

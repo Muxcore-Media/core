@@ -1,0 +1,30 @@
+# Global owner — fallback for all files
+* @TheMinecraftGuyGuru
+
+# These paths are singled out for clarity. They all resolve to the same
+# owner, but listing them explicitly makes the security surface visible
+# and allows more granular rules later without re-auditing the tree.
+
+# Core infrastructure
+/internal/          @TheMinecraftGuyGuru
+/cmd/               @TheMinecraftGuyGuru
+/pkg/               @TheMinecraftGuyGuru
+
+# Contracts — every module depends on these
+/pkg/contracts/     @TheMinecraftGuyGuru
+
+# Security-sensitive subsystems
+/internal/events/   @TheMinecraftGuyGuru
+/internal/module/   @TheMinecraftGuyGuru
+/internal/registry/ @TheMinecraftGuyGuru
+/internal/auth/     @TheMinecraftGuyGuru
+
+# Build, CI, and deployment
+/.github/           @TheMinecraftGuyGuru
+/scripts/           @TheMinecraftGuyGuru
+/Makefile           @TheMinecraftGuyGuru
+/Dockerfile         @TheMinecraftGuyGuru
+
+# API contracts
+/proto/             @TheMinecraftGuyGuru
+/sdk/               @TheMinecraftGuyGuru

@@ -109,7 +109,7 @@ Module A  ──(NATS req)──>  Event Bus  ──(NATS rep)──>  Module A
 **Modules never call each other directly.** This ensures:
 - Crash isolation — one module failure doesn't cascade
 - Independent updates — modules can be upgraded separately
-- Language agnosticism — future modules can be in any language
+- Language agnosticism — module connectors bridge to non-Go code without touching core
 - Testability — modules can be mocked via event replay
 
 ## Design Decisions
@@ -121,9 +121,11 @@ Module A  ──(NATS req)──>  Event Bus  ──(NATS rep)──>  Module A
 | Approach | Pros | Cons |
 |----------|------|------|
 | **Compile-time (chosen for MVP)** | No network overhead, simple deployment, single binary option | Must recompile to add modules, all Go |
-| External services (planned) | Language agnostic, crash isolation, independent updates, HA-friendly | More complexity, network overhead |
+| External services (planned) | Crash isolation, independent updates, HA-friendly | More complexity, network overhead |
 
-Modules are compiled into the core binary via blank imports + build tags. The `-tags default` preset bundles essential modules. Future phases will support external modules over gRPC/NATS.
+Modules are compiled into the core binary via blank imports + build tags. The `-tags default` preset bundles essential modules. Future phases will support external modules over gRPC/NATS for distributed deployment.
+
+**Non-Go languages:** Modules must be written in Go to interface directly with core. Developers who want to use other languages are welcome to do so — module connectors (thin translation layers that wrap the Go module interface and forward calls to foreign-language code via gRPC, pipes, or FFI) will be provided in the future. This keeps the core and module contract surface Go-only while leaving the door open for Python, TypeScript, Rust, and others.
 
 ### Event-Driven vs Direct RPC
 

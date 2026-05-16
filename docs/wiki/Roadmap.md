@@ -105,12 +105,12 @@
 
 ## Phase 3: Platform
 
-**Goal:** Become a true orchestration platform. K8s-native, multi-tenant, language-agnostic modules.
+**Goal:** Become a true orchestration platform. K8s-native, with module connectors for non-Go languages.
 
 - [ ] Kubernetes operator
 - [ ] Helm chart
-- [ ] Multi-tenant support
-- [ ] Language-agnostic module SDK (Python, TypeScript, Rust)
+
+- [ ] Module connectors for non-Go languages (Python, TypeScript, Rust)
 - [x] Module marketplace / registry (runtime install) (#40)
 - [ ] OpenTelemetry tracing
 - [ ] gRPC module mesh with mTLS
@@ -136,7 +136,7 @@
 | **Distributed transcoding pool** | GPU workers anywhere on the network |
 | **Intelligent orchestration** | Move workload to idle GPU, auto-balance storage, predictive pre-transcoding |
 | **Unified media graph** | Single metadata system across movies, TV, books, manga, music, audiobooks, podcasts |
-| **Multi-tenant** | Almost nonexistent in homelab media — could be huge |
+
 | **Cross-media awareness** | Request an anime → discovers manga + light novel adaptations |
 | **Storage abstraction** | Local, S3, Ceph, Glacier — transparent to the user |
 
