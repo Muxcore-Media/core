@@ -13,7 +13,7 @@ import (
 )
 
 // createOTLPProvider builds an OTLP gRPC exporter and TracerProvider.
-func createOTLPProvider(endpoint string) (*sdktrace.TracerProvider, func(context.Context) error, error) {
+func createOTLPProvider(endpoint string, sampleRate float64) (*sdktrace.TracerProvider, func(context.Context) error, error) {
 	exp, err := otlptracegrpc.New(
 		context.Background(),
 		otlptracegrpc.WithEndpoint(endpoint),
@@ -31,15 +31,10 @@ func createOTLPProvider(endpoint string) (*sdktrace.TracerProvider, func(context
 		return nil, nil, err
 	}
 
-	rate, err := parseSampleRate()
-	if err != nil {
-		return nil, nil, err
-	}
-
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exp),
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(rate))),
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(sampleRate))),
 	)
 	otel.SetTracerProvider(tp)
 

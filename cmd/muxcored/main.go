@@ -48,10 +48,11 @@ func main() {
 
 	slog.Info("MuxCore starting...")
 
-	tracer, traceShutdown, err := trace.InitProvider()
+	tracer, traceShutdown, err := trace.InitProvider(cfg.Trace)
 	if err != nil {
 		slog.Warn("trace init failed, using noop", "error", err)
 		tracer = trace.NewNoopTracer()
+		traceShutdown = func(ctx context.Context) error { return nil }
 	}
 
 	bus := events.NewMemoryBus()
