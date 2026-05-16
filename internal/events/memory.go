@@ -63,7 +63,7 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 
 	if b.tracer != nil {
 		var span contracts.Span
-		span, ctx = b.tracer.Start(ctx, "event.publish."+event.Type, contracts.SpanKindProducer)
+		span, _ = b.tracer.Start(ctx, "event.publish."+event.Type, contracts.SpanKindProducer)
 		defer span.End()
 		span.SetAttribute("event.id", event.ID)
 		span.SetAttribute("event.type", event.Type)
