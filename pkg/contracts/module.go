@@ -113,6 +113,7 @@ type ModuleDeps struct {
 	Storage    StorageOrchestrator
 	WorkerPool WorkerPool
 	Audit      AuditLogger
+	Tracer     Tracer
 }
 
 // -- Auto-registration --
