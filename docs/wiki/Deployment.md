@@ -109,7 +109,7 @@ go build ./cmd/muxcored
 - NATS Cluster
 - Helm chart deployment
 - GitOps (Flux/Argo)
-- Multi-tenant support
+
 
 ---
 
