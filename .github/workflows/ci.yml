@@ -41,6 +41,7 @@ jobs:
           go-version: "1.26"
       - name: Clone module dependencies
         run: |
+          rm -rf ../modules
           mkdir -p ../modules
           git clone --depth 1 https://github.com/Muxcore-Media/admin-ui.git ../modules/admin-ui
           git clone --depth 1 https://github.com/Muxcore-Media/api-rest.git ../modules/api-rest
