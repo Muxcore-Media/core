@@ -701,11 +701,11 @@ func TestDiscover(t *testing.T) {
 		ID: "b", Name: "B", Kinds: []contracts.ModuleKind{contracts.ModuleKindProvider},
 	}}, nil)
 
-	infos := r.Discover(nil, contracts.ModuleKindProvider)
+	infos := r.Discover(context.Background(), contracts.ModuleKindProvider)
 	if len(infos) != 2 {
 		t.Fatalf("expected 2 infos, got %d", len(infos))
 	}
-	if len(r.Discover(nil, contracts.ModuleKindUI)) != 0 {
+	if len(r.Discover(context.Background(), contracts.ModuleKindUI)) != 0 {
 		t.Fatal("expected 0 infos for unmatched kind")
 	}
 }

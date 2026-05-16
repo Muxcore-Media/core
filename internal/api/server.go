@@ -76,17 +76,17 @@ func (s *Server) SetAuthFunc(fn func(r *http.Request) (*contracts.Session, error
 //  4. Logging
 //  5. Trace (outermost — extracts/generates trace ID from request header)
 func (s *Server) rebuildChain() {
-	var h http.Handler = s.mux
-	h = recoveryMiddleware(h)
+	middlewares := []func(http.Handler) http.Handler{
+		recoveryMiddleware,
+	}
 	if s.RateLimiter != nil {
-		h = rateLimitMiddleware(s.RateLimiter)(h)
+		middlewares = append(middlewares, rateLimitMiddleware(s.RateLimiter))
 	}
 	if s.AuthFunc != nil {
-		h = authMiddleware(s.AuthFunc)(h)
+		middlewares = append(middlewares, authMiddleware(s.AuthFunc))
 	}
-	h = withLogging(h)
-	h = trace.HTTPMiddleware(h)
-	s.http.Handler = h
+	middlewares = append(middlewares, withLogging, trace.HTTPMiddleware)
+	s.http.Handler = chain(s.mux, middlewares...)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
