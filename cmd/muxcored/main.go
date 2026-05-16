@@ -56,14 +56,17 @@ func main() {
 	}
 
 	bus := events.NewMemoryBus()
+	bus.SetTracer(tracer)
 	slog.Info("event bus ready", "type", "memory")
 
 	reg := registry.New()
 	mgr := module.NewManager(reg)
+	mgr.SetTracer(tracer)
 
 	srv := api.NewServer(cfg.Server.Addr)
 
 	store := storage.NewOrchestrator(reg)
+	store.SetTracer(tracer)
 	if err := store.Discover(); err != nil {
 		slog.Warn("storage discover", "error", err)
 	}

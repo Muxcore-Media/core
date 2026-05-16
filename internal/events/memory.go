@@ -21,11 +21,18 @@ type sub struct {
 type MemoryBus struct {
 	mu               sync.RWMutex
 	subscribers      []sub
-	EnableValidation bool // when true, validates payloads against known schemas
+	EnableValidation bool             // when true, validates payloads against known schemas
+	tracer           contracts.Tracer // optional tracer for span creation
 }
 
 func NewMemoryBus() *MemoryBus {
 	return &MemoryBus{}
+}
+
+// SetTracer configures the tracer for event bus span creation.
+// If not set, event operations produce no tracing spans.
+func (b *MemoryBus) SetTracer(t contracts.Tracer) {
+	b.tracer = t
 }
 
 // SetValidation enables or disables payload schema validation on publish.
@@ -54,6 +61,14 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 		}
 	}
 
+	if b.tracer != nil {
+		var span contracts.Span
+		span, ctx = b.tracer.Start(ctx, "event.publish."+event.Type, contracts.SpanKindProducer)
+		defer span.End()
+		span.SetAttribute("event.id", event.ID)
+		span.SetAttribute("event.type", event.Type)
+	}
+
 	b.mu.RLock()
 	subs := make([]sub, len(b.subscribers))
 	copy(subs, b.subscribers)
@@ -65,6 +80,13 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 				handlerCtx := context.Background()
 				if event.TraceID != "" {
 					handlerCtx = trace.WithTraceID(handlerCtx, event.TraceID)
+				}
+				if b.tracer != nil {
+					var span contracts.Span
+					span, handlerCtx = b.tracer.Start(handlerCtx, "event.handle."+event.Type, contracts.SpanKindConsumer)
+					defer span.End()
+					span.SetAttribute("event.id", event.ID)
+					span.SetAttribute("event.type", event.Type)
 				}
 				if err := h(handlerCtx, event); err != nil {
 					// Log would go here — no silent drops in production
