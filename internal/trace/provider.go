@@ -8,10 +8,10 @@ import (
 	"github.com/Muxcore-Media/core/pkg/contracts"
 )
 
-// InitProvider initializes the OpenTelemetry tracing provider from a TraceConfig.
-// Returns a contracts.Tracer and a shutdown function that flushes pending spans.
-// If no exporter is configured, returns a noop tracer — zero telemetry leaves
-// the process.
+// InitProvider initializes the OpenTelemetry tracing provider from config.
+// Returns a contracts.Tracer and a shutdown function that flushes pending
+// spans. If no exporter is configured, returns a noop tracer — zero telemetry
+// leaves the process.
 func InitProvider(cfg config.TraceConfig) (contracts.Tracer, func(context.Context) error, error) {
 	switch cfg.Exporter {
 	case "":

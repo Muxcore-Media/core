@@ -3,7 +3,6 @@ package trace
 import (
 	"context"
 	"net/http"
-	"strconv"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -93,8 +92,8 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 
 		// Record the captured status code on the span.
 		span.SetAttributes(semconv.HTTPResponseStatusCode(rec.status))
-		if rec.status >= 400 {
-			span.SetStatus(codes.Error, "HTTP "+strconv.Itoa(rec.status))
+		if rec.status >= 500 {
+			span.SetStatus(codes.Error, http.StatusText(rec.status))
 		}
 	})
 }

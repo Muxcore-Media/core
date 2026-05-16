@@ -16,10 +16,10 @@ import (
 	"github.com/Muxcore-Media/core/internal/config"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/module"
-	"github.com/Muxcore-Media/core/internal/trace"
 	_ "github.com/Muxcore-Media/core/internal/presets" // build-tag-gated module selection
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/storage"
+	"github.com/Muxcore-Media/core/internal/trace"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/google/uuid"
 )
