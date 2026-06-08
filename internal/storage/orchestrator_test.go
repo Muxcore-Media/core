@@ -118,6 +118,17 @@ func (r *mockRegistry) ListAll() []contracts.ModuleEntry {
 	return result
 }
 
+func (r *mockRegistry) StartupOrder() ([]string, error) {
+	ids := make([]string, 0, len(r.providers))
+	for id := range r.providers {
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func (r *mockRegistry) DependencyGraph(id string) ([]string, error) { return nil, nil }
+
+
 type mockModule struct {
 	contracts.StorageProvider
 	info contracts.ModuleInfo

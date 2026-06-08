@@ -32,8 +32,14 @@ type WorkerTask struct {
 	StartedAt     time.Time
 	CompletedAt   time.Time
 	LastHeartbeat time.Time
-	Error         string
-	Meta         map[string]any
+	Error          string
+	Meta           map[string]any
+
+	// IdempotencyKey is an optional key that executors use with
+	// IdempotencyProvider to prevent duplicate execution. When a task
+	// is reassigned after a node failure, the new executor checks this
+	// key before re-executing. If empty, no idempotency guard is applied.
+	IdempotencyKey string
 }
 
 // WorkerPool schedules tasks across cluster nodes and tracks their lifecycle.
@@ -42,6 +48,12 @@ type WorkerPool interface {
 	Status(ctx context.Context, taskID string) (WorkerTask, error)
 	Cancel(ctx context.Context, taskID string) error
 	List(ctx context.Context, filter *WorkerTaskFilter) ([]WorkerTask, error)
+
+	// Reassign moves a task from a dead or unresponsive node to a new one.
+	// If the task is already completed or cancelled, Reassign returns an error.
+	// The new node should re-execute the task from scratch unless the executor
+	// checks IdempotencyKey against an IdempotencyProvider.
+	Reassign(ctx context.Context, taskID, newNode string) error
 }
 
 // WorkerTaskFilter narrows task queries.

@@ -7,6 +7,7 @@ require (
 )
 
 require (
+	github.com/Muxcore-Media/contracts-reconciler v0.0.0-20260526214139-5692629c5d6e // indirect
 	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.34.0 // indirect

@@ -229,6 +229,84 @@ func (r *Registry) resolveDeps(entry *Entry, resolved map[string]bool, visiting 
 	return nil
 }
 
+// StartupOrder returns all module IDs in dependency-respecting order.
+// Modules in DependsOn appear before the module that depends on them.
+// Returns an error if a dependency cycle is detected.
+func (r *Registry) StartupOrder() ([]string, error) {
+	r.mu.RLock()
+	ids := make([]string, 0, len(r.modules))
+	for id := range r.modules {
+		ids = append(ids, id)
+	}
+	r.mu.RUnlock()
+
+	// Build adjacency: for each module, resolve its deps
+	resolved := make(map[string]bool)
+	ordered := make([]string, 0, len(ids))
+
+	var visit func(id string, visiting map[string]bool) error
+	visit = func(id string, visiting map[string]bool) error {
+		if resolved[id] {
+			return nil
+		}
+		if visiting[id] {
+			return fmt.Errorf("circular dependency detected: %q", id)
+		}
+		visiting[id] = true
+
+		r.mu.RLock()
+		entry, ok := r.modules[id]
+		r.mu.RUnlock()
+		if !ok {
+			visiting[id] = false
+			return fmt.Errorf("module %q not found during ordering", id)
+		}
+
+		for _, depID := range entry.Deps {
+			if err := visit(depID, visiting); err != nil {
+				return err
+			}
+		}
+
+		visiting[id] = false
+		resolved[id] = true
+		ordered = append(ordered, id)
+		return nil
+	}
+
+	for _, id := range ids {
+		if err := visit(id, make(map[string]bool)); err != nil {
+			return nil, err
+		}
+	}
+
+	return ordered, nil
+}
+
+// DependencyGraph returns all module IDs that list the given module
+// in their DependsOn. Useful for understanding the impact of stopping
+// or removing a module.
+func (r *Registry) DependencyGraph(id string) ([]string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if _, ok := r.modules[id]; !ok {
+		return nil, fmt.Errorf("module %q not found", id)
+	}
+
+	var dependents []string
+	for _, entry := range r.modules {
+		for _, depID := range entry.Deps {
+			if depID == id {
+				dependents = append(dependents, entry.Info.ID)
+				break
+			}
+		}
+	}
+	return dependents, nil
+}
+
+
 func (r *Registry) Count() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

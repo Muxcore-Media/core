@@ -9,7 +9,7 @@ import (
 // ModuleKind is a user-defined string that categorizes a module's role.
 // Core has no opinion about what kinds exist — modules and consumers define them.
 // Common conventions (defined in contract repos, not here): "auth", "downloader",
-// "indexer", "media_manager", "playback", "storage", "workflow", "transcoder", etc.
+// "indexer", "media_manager", "playback", "storage", "workflow", "transcoder". The WorkflowEngine is discovered via "workflow.engine".
 type ModuleKind string
 
 // ContractDeclaration describes a typed contract that a module implements.
@@ -42,7 +42,7 @@ type ModuleInfo struct {
 	Author       string
 	Capabilities []string              // granular capability strings for routing/discovery
 	Contracts    []ContractDeclaration // typed contracts this module implements
-	DependsOn    []string              // module IDs this module requires to be initialized first
+	DependsOn    []string              // module IDs that must be initialized before this module starts. Cycles detected by Registry.StartupOrder().
 }
 
 type Module interface {
@@ -66,6 +66,15 @@ type Registry interface {
 	SupportsCapability(moduleID, cap string) bool
 	Resolve(id string) (ModuleEntry, error)
 	ListAll() []ModuleEntry
+
+	// StartupOrder returns module IDs in dependency-respecting order.
+	// Modules listed in DependsOn appear before the module that depends on them.
+	// Returns an error if a dependency cycle is detected.
+	StartupOrder() ([]string, error)
+
+	// DependencyGraph returns modules that list the given ID in their DependsOn.
+	// Useful for understanding the impact of stopping or removing a module.
+	DependencyGraph(id string) ([]string, error)
 }
 
 type ModuleEntry struct {

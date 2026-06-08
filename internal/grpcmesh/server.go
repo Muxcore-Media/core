@@ -9,13 +9,16 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	meshv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/mesh/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
@@ -33,6 +36,11 @@ type Server struct {
 
 	// Client provides remote call routing. Set after construction.
 	client *Client
+
+	// audit is an optional audit logger for recording gRPC calls.
+	audit contracts.AuditLogger
+	// nodeID identifies this node in audit entries.
+	nodeID string
 }
 
 // NewServer creates a new mesh server.
@@ -56,6 +64,20 @@ func (s *Server) SetClient(c *Client) {
 	s.client = c
 }
 
+// SetAuditLogger attaches an audit logger for recording gRPC calls.
+func (s *Server) SetAuditLogger(a contracts.AuditLogger) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.audit = a
+}
+
+// SetNodeID sets the node identifier for audit entries.
+func (s *Server) SetNodeID(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nodeID = id
+}
+
 // RegisterWithGRPC registers this server with a gRPC server.
 func (s *Server) RegisterWithGRPC(srv *grpc.Server) {
 	meshv1.RegisterModuleMeshServer(srv, s)
@@ -72,6 +94,31 @@ func (s *Server) Call(ctx context.Context, req *meshv1.CallRequest) (*meshv1.Cal
 
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "module %q not found on this node", target)
+	}
+
+	// Audit the gRPC call if an audit logger is configured.
+	s.mu.RLock()
+	auditLogger := s.audit
+	nodeID := s.nodeID
+	s.mu.RUnlock()
+	if auditLogger != nil {
+		// Extract peer identity for the audit record.
+		sourceAddr := "unknown"
+		if p, ok := peer.FromContext(ctx); ok {
+			sourceAddr = p.Addr.String()
+		}
+		entry := contracts.AuditEntry{
+			ID:        uuid.New().String(),
+			Timestamp: time.Now(),
+			Actor:     sourceAddr,
+			Action:    "grpc.call",
+			Resource:  target,
+			Details: map[string]string{
+				"method": method,
+			},
+			NodeID: nodeID,
+		}
+		_ = auditLogger.Log(ctx, entry)
 	}
 
 	result, err := handler.HandleCall(ctx, method, req.GetPayload())
@@ -105,6 +152,30 @@ func (s *Server) StreamCall(stream meshv1.ModuleMesh_StreamCallServer) error {
 
 		if !ok {
 			return status.Errorf(codes.NotFound, "module %q not found on this node", target)
+		}
+
+		// Audit the gRPC streaming call if an audit logger is configured.
+		s.mu.RLock()
+		auditLogger := s.audit
+		nodeID := s.nodeID
+		s.mu.RUnlock()
+		if auditLogger != nil {
+			sourceAddr := "unknown"
+			if p, ok := peer.FromContext(stream.Context()); ok {
+				sourceAddr = p.Addr.String()
+			}
+			entry := contracts.AuditEntry{
+				ID:        uuid.New().String(),
+				Timestamp: time.Now(),
+				Actor:     sourceAddr,
+				Action:    "grpc.stream_call",
+				Resource:  target,
+				Details: map[string]string{
+					"method": method,
+				},
+				NodeID: nodeID,
+			}
+			_ = auditLogger.Log(stream.Context(), entry)
 		}
 
 		result, err := handler.HandleCall(stream.Context(), method, req.GetPayload())
@@ -143,6 +214,14 @@ type Client struct {
 	mu      sync.RWMutex
 	cluster    contracts.Cluster            // optional; when set, cross-node routing becomes available
 	callPolicy contracts.CallPolicyProvider // optional; when set, call access control is enforced
+	// transportCreds are the TLS credentials used for cross-node gRPC connections.
+	// When nil (no TLS configured), cross-node routing is disabled rather than
+	// falling back to insecure plaintext.
+	transportCreds credentials.TransportCredentials
+	// audit is an optional audit logger for recording outbound mesh calls.
+	audit  contracts.AuditLogger
+	// nodeID identifies this node in audit entries.
+	nodeID string
 }
 
 // NewClient creates a mesh client backed by the given server.
@@ -165,6 +244,29 @@ func (c *Client) SetCallPolicy(policy contracts.CallPolicyProvider) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.callPolicy = policy
+}
+
+// SetTransportCredentials sets the TLS credentials used for cross-node gRPC connections.
+// When nil, cross-node routing is disabled — the mesh will only route to local modules.
+// This prevents accidental plaintext fallback in production.
+func (c *Client) SetTransportCredentials(creds credentials.TransportCredentials) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.transportCreds = creds
+}
+
+// SetAuditLogger attaches an audit logger for recording outbound mesh calls.
+func (c *Client) SetAuditLogger(a contracts.AuditLogger) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.audit = a
+}
+
+// SetNodeID sets the node identifier for audit entries.
+func (c *Client) SetNodeID(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.nodeID = id
 }
 
 // Call dispatches a call to the target module.
@@ -200,7 +302,11 @@ func (c *Client) Call(ctx context.Context, targetModule, method string, payload 
 			for _, modID := range member.ModuleIDs {
 				if modID == targetModule {
 					// Build gRPC connection to the remote node
-					conn, err := grpc.Dial(member.GRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+					// Require TLS for cross-node routing. Never fall back to insecure plaintext.
+				if c.transportCreds == nil {
+					return nil, fmt.Errorf("%w: cross-node routing requires TLS — no transport credentials configured", ErrRemoteRoutingUnavailable)
+				}
+				conn, err := grpc.Dial(member.GRPCAddr, grpc.WithTransportCredentials(c.transportCreds))
 					if err != nil {
 						return nil, fmt.Errorf("%w: failed to dial remote node %q at %s: %w", ErrRemoteRoutingUnavailable, member.ID, member.GRPCAddr, err)
 					}
@@ -244,8 +350,7 @@ func (c *Client) RegisterHandler(moduleID string, handler contracts.MeshHandler)
 
 // GRPCTransportCredentials creates transport credentials for the gRPC server
 // from certificate and key files. If cert and key are both empty, returns
-// (nil, nil) to signal that no TLS is configured and the caller should fall
-// back to insecure mode.
+// (nil, nil) only when MUXCORE_INSECURE_DISABLE_TLS is set to true or 1.
 //
 // Environment variables:
 //
@@ -254,6 +359,9 @@ func (c *Client) RegisterHandler(moduleID string, handler contracts.MeshHandler)
 //	MUXCORE_GRPC_MTLS_ENABLED — if "true" or "1", enable mutual TLS
 func GRPCTransportCredentials(certFile, keyFile, caCertFile string, mtlsEnabled bool) (credentials.TransportCredentials, error) {
 	if certFile == "" && keyFile == "" {
+		if os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "true" || os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "1" {
+			return nil, nil // insecure mode explicitly enabled
+		}
 		return nil, fmt.Errorf("TLS is required for gRPC — set MUXCORE_GRPC_TLS_CERT and MUXCORE_GRPC_TLS_KEY to enable encryption")
 	}
 

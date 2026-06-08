@@ -1,0 +1,232 @@
+package grpcmesh
+
+import (
+	"context"
+	"fmt"
+	"io"
+
+	"github.com/Muxcore-Media/core/pkg/contracts"
+	storagev1 "github.com/Muxcore-Media/core/proto/gen/muxcore/storage/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// StorageServer implements the StorageService gRPC service, wrapping
+// core's StorageOrchestrator so sidecar modules can access storage
+// without in-process Fabric access.
+type StorageServer struct {
+	storagev1.UnimplementedStorageServiceServer
+	store contracts.StorageOrchestrator
+}
+
+// NewStorageServer creates a StorageServer backed by the given orchestrator.
+func NewStorageServer(store contracts.StorageOrchestrator) *StorageServer {
+	return &StorageServer{store: store}
+}
+
+// RegisterWithGRPC registers this server with a gRPC server.
+func (s *StorageServer) RegisterWithGRPC(srv *grpc.Server) {
+	storagev1.RegisterStorageServiceServer(srv, s)
+}
+
+// Put receives a client-streamed object and stores it.
+func (s *StorageServer) Put(stream storagev1.StorageService_PutServer) error {
+	var key string
+	var totalSize int64
+	var wrote int64
+	var pr *io.PipeReader
+	var pw *io.PipeWriter
+
+	pr, pw = io.Pipe()
+
+	// Read chunks in a goroutine, pipe them to the orchestrator.
+	go func() {
+		defer pw.Close()
+		for {
+			req, err := stream.Recv()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				pw.CloseWithError(err)
+				return
+			}
+			if key == "" {
+				key = req.Key
+				totalSize = req.TotalSize
+			}
+			chunk := req.Chunk
+			wrote += int64(len(chunk))
+			if _, err := pw.Write(chunk); err != nil {
+				pw.CloseWithError(err)
+				return
+			}
+		}
+	}()
+
+	// Store via orchestrator.
+	if key == "" {
+		return status.Error(codes.InvalidArgument, "key is required in first PutRequest")
+	}
+	err := s.store.Put(stream.Context(), key, pr, totalSize)
+	pr.Close()
+	if err != nil {
+		return status.Errorf(codes.Internal, "store put: %v", err)
+	}
+
+	return stream.SendAndClose(&storagev1.PutResponse{
+		Key:  key,
+		Size: wrote,
+	})
+}
+
+// Get streams an object from storage to the client.
+func (s *StorageServer) Get(req *storagev1.GetRequest, stream storagev1.StorageService_GetServer) error {
+	key := req.Key
+	if key == "" {
+		return status.Error(codes.InvalidArgument, "key is required")
+	}
+
+	var reader io.ReadCloser
+	var err error
+
+	if req.Offset > 0 || req.Length > 0 {
+		reader, err = s.store.Stream(stream.Context(), key, req.Offset, req.Length)
+	} else {
+		reader, err = s.store.Get(stream.Context(), key)
+	}
+
+	if err != nil {
+		return status.Errorf(codes.NotFound, "get %q: %v", key, err)
+	}
+	defer reader.Close()
+
+	// Stat to get total size for the first chunk.
+	info, statErr := s.store.Stat(stream.Context(), key)
+	totalSize := int64(0)
+	contentType := ""
+	if statErr == nil {
+		totalSize = info.Size
+		contentType = info.ContentType
+	}
+
+	buf := make([]byte, 64*1024) // 64KB chunks
+	first := true
+	for {
+		n, readErr := reader.Read(buf)
+		if n > 0 {
+			resp := &storagev1.GetResponse{
+				Chunk:       buf[:n],
+				ContentType: contentType,
+			}
+			if first {
+				resp.TotalSize = totalSize
+				first = false
+			}
+			if err := stream.Send(resp); err != nil {
+				return err
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				return nil
+			}
+			return status.Errorf(codes.Internal, "read %q: %v", key, readErr)
+		}
+	}
+}
+
+func (s *StorageServer) Delete(ctx context.Context, req *storagev1.DeleteRequest) (*storagev1.DeleteResponse, error) {
+	if req.Key == "" {
+		return nil, status.Error(codes.InvalidArgument, "key is required")
+	}
+	err := s.store.Delete(ctx, req.Key)
+	if err != nil {
+		return &storagev1.DeleteResponse{Deleted: false}, nil
+	}
+	return &storagev1.DeleteResponse{Deleted: true}, nil
+}
+
+func (s *StorageServer) Stat(ctx context.Context, req *storagev1.StatRequest) (*storagev1.StatResponse, error) {
+	if req.Key == "" {
+		return nil, status.Error(codes.InvalidArgument, "key is required")
+	}
+	exists, err := s.store.Exists(ctx, req.Key)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "exists %q: %v", req.Key, err)
+	}
+	if !exists {
+		return &storagev1.StatResponse{Found: false}, nil
+	}
+	info, err := s.store.Stat(ctx, req.Key)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "stat %q: %v", req.Key, err)
+	}
+	return &storagev1.StatResponse{
+		Found:        true,
+		Key:          info.Key,
+		Size:         info.Size,
+		ContentType:  info.ContentType,
+		LastModified: info.LastModified,
+	}, nil
+}
+
+func (s *StorageServer) List(ctx context.Context, req *storagev1.ListRequest) (*storagev1.ListResponse, error) {
+	objects, err := s.store.List(ctx, req.Prefix)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list: %v", err)
+	}
+	results := make([]*storagev1.StatResponse, 0, len(objects))
+	for _, obj := range objects {
+		results = append(results, &storagev1.StatResponse{
+			Found:        true,
+			Key:          obj.Key,
+			Size:         obj.Size,
+			ContentType:  obj.ContentType,
+			LastModified: obj.LastModified,
+		})
+	}
+	return &storagev1.ListResponse{Objects: results}, nil
+}
+
+func (s *StorageServer) Capabilities(ctx context.Context, req *storagev1.CapabilitiesRequest) (*storagev1.CapabilitiesResponse, error) {
+	// Check a well-known key to discover capabilities.
+	caps, err := s.store.CapabilityCheck(ctx, "")
+	if err != nil {
+		// If CapabilityCheck fails, return empty capabilities.
+		return &storagev1.CapabilitiesResponse{}, nil
+	}
+	if caps == nil {
+		caps = []string{}
+	}
+	
+	// Normalize capability names: "hardlinkable" from contracts matches
+	// the proto convention. The contracts use CamelCase interface names;
+	// we lower-case them for sidecar consumption.
+	normalized := make([]string, 0, len(caps))
+	for _, c := range caps {
+		normalized = append(normalized, toSnakeCase(c))
+	}
+	return &storagev1.CapabilitiesResponse{Capabilities: normalized}, nil
+}
+
+// toSnakeCase converts CamelCase to snake_case for proto compatibility.
+func toSnakeCase(s string) string {
+	var result []byte
+	for i, c := range s {
+		if c >= 'A' && c <= 'Z' {
+			if i > 0 {
+				result = append(result, '_')
+			}
+			result = append(result, byte(c+32))
+		} else {
+			result = append(result, byte(c))
+		}
+	}
+	return string(result)
+}
+
+// Ensure interface compliance.
+var _ storagev1.StorageServiceServer = (*StorageServer)(nil)
+var _ = fmt.Println

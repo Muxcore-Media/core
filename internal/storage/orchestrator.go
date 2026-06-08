@@ -9,8 +9,10 @@ import (
 	"strings"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
+	"github.com/google/uuid"
 )
 
 // MaxObjectSize is the maximum size of a single object that can be stored.
@@ -25,6 +27,7 @@ type Orchestrator struct {
 	providers map[string]contracts.StorageProvider
 	policies  []RoutingPolicy
 	cache     contracts.CacheLayer
+	audit     contracts.AuditLogger
 }
 
 // RoutingPolicy decides which provider handles a given key.
@@ -94,6 +97,13 @@ func (o *Orchestrator) AddPolicy(p RoutingPolicy) {
 func (o *Orchestrator) SetCache(c contracts.CacheLayer) {
 	o.mu.Lock()
 	o.cache = c
+	o.mu.Unlock()
+}
+
+// SetAuditLogger attaches an audit logger for recording storage operations.
+func (o *Orchestrator) SetAuditLogger(a contracts.AuditLogger) {
+	o.mu.Lock()
+	o.audit = a
 	o.mu.Unlock()
 }
 
@@ -172,6 +182,9 @@ func (o *Orchestrator) Put(ctx context.Context, key string, data io.Reader, size
 		return err
 	}
 
+	// Audit successful storage put.
+	o.auditStorage("storage.put", key, int64(len(buf)))
+
 	// Write-through: update cache after successful Put.
 	// Cache races with SetCache/DiscoverCache are acceptable — eventually consistent.
 	o.mu.RLock()
@@ -217,6 +230,9 @@ func (o *Orchestrator) Delete(ctx context.Context, key string) error {
 		return err
 	}
 
+	// Audit successful storage delete.
+	o.auditStorage("storage.delete", key, 0)
+
 	// Invalidate cache entry after successful Delete.
 	o.mu.RLock()
 	cache := o.cache
@@ -261,7 +277,12 @@ func (o *Orchestrator) Move(ctx context.Context, src, dst string) error {
 	if err != nil {
 		return err
 	}
-	return prov.Move(ctx, src, dst)
+	if err := prov.Move(ctx, src, dst); err != nil {
+		return err
+	}
+	// Audit successful storage move.
+	o.auditStorage("storage.move", dst, 0)
+	return nil
 }
 
 func (o *Orchestrator) List(ctx context.Context, prefix string) ([]contracts.ObjectInfo, error) {
@@ -307,6 +328,34 @@ func (o *Orchestrator) CapabilityCheck(ctx context.Context, key string) ([]strin
 	}
 	return caps, nil
 }
+// auditStorage records a storage operation via the audit logger.
+// It is a fire-and-forget operation; failures are silently dropped.
+func (o *Orchestrator) auditStorage(action, key string, size int64) {
+	o.mu.RLock()
+	auditLogger := o.audit
+	o.mu.RUnlock()
+	if auditLogger == nil {
+		return
+	}
+	details := map[string]string{
+		"key": key,
+	}
+	if size > 0 {
+		details["size_bytes"] = fmt.Sprintf("%d", size)
+	}
+	go func() {
+		entry := contracts.AuditEntry{
+			ID:        uuid.New().String(),
+			Timestamp: time.Now(),
+			Actor:     "system",
+			Action:    action,
+			Resource:  key,
+			Details:   details,
+		}
+		_ = auditLogger.Log(context.Background(), entry)
+	}()
+}
+
 // WatchModules subscribes to module.registered events and automatically
 // re-discovers storage providers and cache layers when new modules appear.
 // Call this after bootstrap to enable dynamic provider registration.

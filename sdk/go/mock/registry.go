@@ -90,6 +90,32 @@ func (r *Registry) SupportsCapability(moduleID, cap string) bool {
 	return false
 }
 
+// StartupOrder returns all registered module IDs in registration order.
+// The mock does not enforce DependsOn ordering — tests that require
+// dependency ordering should use the real registry implementation.
+func (r *Registry) StartupOrder() ([]string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ids := make([]string, 0, len(r.modules))
+	for id := range r.modules {
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// DependencyGraph returns an empty slice — the mock registry does not
+// track DependsOn relationships. Tests requiring dependency graph
+// queries should use the real registry implementation.
+func (r *Registry) DependencyGraph(id string) ([]string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.modules[id]; !ok {
+		return nil, fmt.Errorf(module %q not found, id)
+	}
+	return nil, nil
+}
+
+
 // Resolve returns a module entry by ID.
 func (r *Registry) Resolve(id string) (contracts.ModuleEntry, error) {
 	r.mu.RLock()

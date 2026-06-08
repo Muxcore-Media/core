@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+package muxcore.storage.v1;
+
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/storage/v1;storagev1";
+
+// StorageService provides sidecar modules with access to core's storage layer.
+// Modules call this to ingest completed downloads, retrieve files for seeding,
+// and query storage metadata — without needing in-process access to
+// StorageOrchestrator.
+service StorageService {
+  // Put stores an object in the storage backend. The first message in the
+  // stream carries the key and total size; subsequent messages carry chunks.
+  rpc Put(stream PutRequest) returns (PutResponse);
+
+  // Get retrieves an object from the storage backend as a stream of chunks.
+  // Supports optional byte range via offset/length in the request.
+  rpc Get(GetRequest) returns (stream GetResponse);
+
+  // Delete removes an object from storage.
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+  // Stat returns object metadata (size, type, modification time).
+  rpc Stat(StatRequest) returns (StatResponse);
+
+  // List returns objects matching a key prefix.
+  rpc List(ListRequest) returns (ListResponse);
+
+  // Capabilities returns which optional features the storage backend supports
+  // (hardlink, stream, atomic move, etc.). Modules use this to negotiate
+  // behaviour — e.g., the downloader checks "hardlinkable" before attempting
+  // a zero-copy seed-back.
+  rpc Capabilities(CapabilitiesRequest) returns (CapabilitiesResponse);
+}
+
+message PutRequest {
+  // Initial frame: key and total_size must be set on the first message.
+  string key = 1;
+  int64 total_size = 2;
+  // Subsequent frames: chunk carries a fragment of the object body.
+  bytes chunk = 3;
+}
+
+message PutResponse {
+  // key is the storage key the object was written to.
+  string key = 1;
+  // size is the total bytes written.
+  int64 size = 2;
+}
+
+message GetRequest {
+  // key identifies the object to retrieve.
+  string key = 1;
+  // offset is the byte offset to start reading from (0 = beginning).
+  int64 offset = 2;
+  // length is the maximum number of bytes to read (0 = until EOF).
+  int64 length = 3;
+}
+
+message GetResponse {
+  // chunk carries a fragment of the object body.
+  bytes chunk = 1;
+  // total_size is the full size of the object (set on the first chunk).
+  int64 total_size = 2;
+  // content_type is the MIME type, if known.
+  string content_type = 3;
+}
+
+message DeleteRequest {
+  string key = 1;
+}
+
+message DeleteResponse {
+  // deleted is true if the object existed and was removed.
+  bool deleted = 1;
+}
+
+message StatRequest {
+  string key = 1;
+}
+
+message StatResponse {
+  // found is false if the object does not exist.
+  bool found = 1;
+  // size is the object size in bytes.
+  int64 size = 2;
+  // content_type is the MIME type, if known.
+  string content_type = 3;
+  // last_modified is the Unix timestamp of last modification.
+  int64 last_modified = 4;
+  string key = 5;
+}
+
+message ListRequest {
+  // prefix filters objects whose key starts with this string.
+  string prefix = 1;
+}
+
+message ListResponse {
+  repeated StatResponse objects = 1;
+}
+
+message CapabilitiesRequest {}
+
+message CapabilitiesResponse {
+  // capabilities lists the optional interfaces the storage backend supports.
+  // Values: "streamable", "seekable", "watchable", "atomic_movable", "hardlinkable".
+  repeated string capabilities = 1;
+}

@@ -4,7 +4,8 @@ package muxcore.discovery.v1;
 
 option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1;discoveryv1";
 
-// DiscoveryService handles cluster membership and service discovery.
+// DiscoveryService handles cluster membership, service discovery, and
+// module registry queries for sidecar modules.
 service DiscoveryService {
   // Join requests membership in the cluster.
   rpc Join(JoinRequest) returns (JoinResponse);
@@ -16,11 +17,23 @@ service DiscoveryService {
   rpc Members(MembersRequest) returns (MembersResponse);
   // Watch streams cluster membership changes.
   rpc Watch(MembersRequest) returns (stream ClusterEvent);
+
+  // --- Registry queries (for sidecar module discovery) ---
+
+  // FindByCapability returns all registered modules that advertise the given
+  // capability string. Sidecar modules use this to discover services at runtime.
+  rpc FindByCapability(FindByCapabilityRequest) returns (FindByCapabilityResponse);
+
+  // FindByRole returns all registered modules with the given role string.
+  rpc FindByRole(FindByRoleRequest) returns (FindByRoleResponse);
+
+  // Resolve returns a single module entry by ID.
+  rpc Resolve(ResolveRequest) returns (ResolveResponse);
 }
 
 message NodeInfo {
   string id = 1;
-  string gprc_addr = 2;
+  string grpc_addr = 2;
   string http_addr = 3;
   // labels carry arbitrary node metadata for scheduling decisions.
   map<string, string> labels = 4;
@@ -51,6 +64,8 @@ message HeartbeatRequest {
   string node_id = 1;
   // load carries optional load metrics for scheduling (CPU, memory, etc.).
   map<string, double> load = 2;
+  // modules lists the module IDs currently running on this node.
+  repeated string modules = 3;
 }
 
 message HeartbeatResponse {
@@ -76,4 +91,43 @@ message ClusterEvent {
   Type type = 1;
   NodeInfo node = 2;
   string leader_id = 3;
+}
+
+// --- Registry query messages ---
+
+message ModuleInfoProto {
+  string id = 1;
+  string name = 2;
+  string version = 3;
+  repeated string roles = 4;
+  string description = 5;
+  string author = 6;
+  repeated string capabilities = 7;
+  repeated string depends_on = 8;
+}
+
+message FindByCapabilityRequest {
+  string capability = 1;
+}
+
+message FindByCapabilityResponse {
+  repeated ModuleInfoProto modules = 1;
+}
+
+message FindByRoleRequest {
+  string role = 1;
+}
+
+message FindByRoleResponse {
+  repeated ModuleInfoProto modules = 1;
+}
+
+message ResolveRequest {
+  string module_id = 1;
+}
+
+message ResolveResponse {
+  // found is false if no module with the given ID exists.
+  bool found = 1;
+  ModuleInfoProto module = 2;
 }

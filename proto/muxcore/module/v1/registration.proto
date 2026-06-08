@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package muxcore.module.v1;
+
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/module/v1;modulev1";
+
+// ModuleRegistration is the service that sidecar module binaries call
+// to register themselves with the core at startup and unregister at shutdown.
+service ModuleRegistration {
+  // Register is called by a sidecar module binary to register itself with core.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  // Unregister is called by a sidecar module binary at shutdown.
+  rpc Unregister(UnregisterRequest) returns (UnregisterResponse);
+}
+
+// RegisterRequest is sent by a sidecar module binary to register itself.
+message RegisterRequest {
+  // module_id uniquely identifies the module.
+  string module_id = 1;
+  // info_json is a JSON-serialized ModuleInfo describing the module.
+  bytes info_json = 2;
+  // mesh_addr is the module's own gRPC listen address for lifecycle calls.
+  string mesh_addr = 3;
+}
+
+// RegisterResponse is returned after a registration attempt.
+message RegisterResponse {
+  // accepted indicates whether the registration was accepted.
+  bool accepted = 1;
+  // error contains a human-readable error message if not accepted.
+  string error = 2;
+  // mesh_addr is the gRPC address where the sidecar can dial core's services
+  // (RegistryService, StorageService, EventService, ModuleMesh).
+  // The sidecar uses this to discover other modules and access storage.
+  string mesh_addr = 3;
+  // node_id is the core node's identifier.
+  string node_id = 4;
+}
+
+// UnregisterRequest is sent by a sidecar module binary at shutdown.
+message UnregisterRequest {
+  // module_id uniquely identifies the module to unregister.
+  string module_id = 1;
+}
+
+// UnregisterResponse confirms the unregistration.
+message UnregisterResponse {
+  // acknowledged indicates whether the unregistration was acknowledged.
+  bool acknowledged = 1;
+}

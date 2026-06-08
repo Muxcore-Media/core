@@ -5,19 +5,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 
 	"github.com/Muxcore-Media/core/internal/registry"
+	"github.com/google/uuid"
 )
 
 type Manager struct {
 	registry *registry.Registry
 	bus      contracts.EventBus
+	audit    contracts.AuditLogger
 }
 
 func NewManager(reg *registry.Registry, bus contracts.EventBus) *Manager {
 	return &Manager{registry: reg, bus: bus}
+}
+
+// SetAuditLogger attaches an audit logger for recording module lifecycle events.
+func (m *Manager) SetAuditLogger(a contracts.AuditLogger) {
+	m.audit = a
 }
 
 func (m *Manager) Register(mod contracts.Module, deps []string) error {
@@ -26,6 +34,7 @@ func (m *Manager) Register(mod contracts.Module, deps []string) error {
 		return err
 	}
 
+	m.auditLifecycle("module.register", info.ID, map[string]string{"version": info.Version})
 	m.publishModuleRegistered(info)
 	return nil
 }
@@ -40,6 +49,7 @@ func (m *Manager) Unregister(id string) error {
 		return err
 	}
 
+	m.auditLifecycle("module.unregister", id, nil)
 	m.publishModuleUnregistered(entry.Info)
 	return nil
 }
@@ -109,6 +119,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 			slog.Error("error stopping module", "id", entry.Info.ID, "error", err)
 		}
 		m.registry.SetState(entry.Info.ID, contracts.ModuleStateStopped)
+		m.auditLifecycle("module.stop", entry.Info.ID, nil)
 	}
 	return nil
 }
@@ -120,6 +131,7 @@ func (m *Manager) HealthCheck(ctx context.Context) map[string]error {
 		m.registry.SetHealth(entry.Info.ID, err)
 		results[entry.Info.ID] = err
 		if err != nil {
+			m.auditLifecycle("module.degraded", entry.Info.ID, map[string]string{"error": err.Error()})
 			m.publishModuleDegraded(entry.Info, err)
 		}
 	}
@@ -131,6 +143,7 @@ func (m *Manager) initOne(ctx context.Context, entry *registry.Entry) error {
 	if err := entry.Module.Init(ctx); err != nil {
 		return err
 	}
+	m.auditLifecycle("module.init", entry.Info.ID, map[string]string{"version": entry.Info.Version})
 	return nil
 }
 
@@ -143,6 +156,7 @@ func (m *Manager) startOne(ctx context.Context, entry *registry.Entry) error {
 		return err
 	}
 	m.registry.SetState(entry.Info.ID, contracts.ModuleStateRunning)
+	m.auditLifecycle("module.start", entry.Info.ID, nil)
 	return nil
 }
 
@@ -190,6 +204,29 @@ func (m *Manager) startupOrder(entries []*registry.Entry) ([]*registry.Entry, er
 	}
 
 	return order, nil
+}
+
+// auditLifecycle records a module lifecycle event via the audit logger.
+// It is a fire-and-forget operation; failures are silently dropped.
+func (m *Manager) auditLifecycle(action, moduleID string, details map[string]string) {
+	if m.audit == nil {
+		return
+	}
+	if details == nil {
+		details = make(map[string]string)
+	}
+	details["module_id"] = moduleID
+	go func() {
+		entry := contracts.AuditEntry{
+			ID:        uuid.New().String(),
+			Timestamp: time.Now(),
+			Actor:     "system",
+			Action:    action,
+			Resource:  moduleID,
+			Details:   details,
+		}
+		_ = m.audit.Log(context.Background(), entry)
+	}()
 }
 
 // publishModuleRegistered publishes a module.registered event on the event bus.

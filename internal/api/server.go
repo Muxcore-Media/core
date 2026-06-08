@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -21,10 +23,16 @@ type Server struct {
 	rateLimiter      contracts.RateLimiterProvider
 	authorizer       contracts.Authorizer
 	auditLogger      contracts.AuditLogger
+	nodeID           string
 	routePermissions map[string]RoutePermission
 	publicPaths      map[string]bool
 	certFile         string
 	keyFile          string
+	// cspHeader is the Content-Security-Policy header value set on all responses.
+	// Default is restrictive: "default-src 'none'; frame-ancestors 'none'".
+	// Modules serving HTML content (e.g. admin UI) must call SetCSP with
+	// appropriate directives for script-src, style-src, img-src, connect-src.
+	cspHeader string
 }
 
 func NewServer(addr, certFile, keyFile string) *Server {
@@ -32,16 +40,18 @@ func NewServer(addr, certFile, keyFile string) *Server {
 	s := &Server{
 		mux:              mux,
 		publicPaths:      map[string]bool{"/health": true},
+		cspHeader:        "default-src 'none'; frame-ancestors 'none'",
 		routePermissions: make(map[string]RoutePermission),
 	}
 
 	mux.HandleFunc("/health", s.handleHealth)
 
 	s.http = &http.Server{
-		Addr:         addr,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:           addr,
+		ReadTimeout:    15 * time.Second,
+		WriteTimeout:   15 * time.Second,
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 65536, // 64 KB
 	}
 	s.rebuildChain()
 	s.certFile = certFile
@@ -57,8 +67,11 @@ func (s *Server) Start() error {
 	if s.certFile != "" && s.keyFile != "" {
 		return s.http.ListenAndServeTLS(s.certFile, s.keyFile)
 	}
-	slog.Warn("API server starting without TLS")
-	return s.http.ListenAndServe()
+	if os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "true" || os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "1" {
+		slog.Warn("API server starting without TLS — insecure mode explicitly enabled")
+		return s.http.ListenAndServe()
+	}
+	return fmt.Errorf("TLS is required — set MUXCORE_SERVER_TLS_CERT and MUXCORE_SERVER_TLS_KEY, or MUXCORE_INSECURE_DISABLE_TLS=true for development")
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -87,6 +100,14 @@ func (s *Server) SetAuthFunc(fn func(r *http.Request) (*contracts.Session, error
 }
 
 // SetRateLimiter sets the rate limiter module for the middleware chain.
+// SetCSP configures the Content-Security-Policy header sent on all responses.
+// The default is restrictive: "default-src 'none'; frame-ancestors 'none'".
+// Modules that serve HTML content (e.g. admin UI) must call this to set
+// appropriate script-src, style-src, connect-src, and img-src directives.
+func (s *Server) SetCSP(header string) {
+	s.cspHeader = header
+}
+
 func (s *Server) SetRateLimiter(rl contracts.RateLimiterProvider) {
 	s.rateLimiter = rl
 	s.rebuildChain()
@@ -101,6 +122,11 @@ func (s *Server) SetAuthorizer(a contracts.Authorizer) {
 func (s *Server) SetAuditLogger(a contracts.AuditLogger) {
 	s.auditLogger = a
 	s.rebuildChain()
+}
+
+// SetNodeID sets the node identifier for audit entries.
+func (s *Server) SetNodeID(id string) {
+	s.nodeID = id
 }
 
 // RouteRequire registers a permission requirement for a specific route.
@@ -122,19 +148,19 @@ func (s *Server) AddPublicPath(path string) {
 // rebuildChain constructs the middleware chain.
 func (s *Server) rebuildChain() {
 	var h http.Handler = s.mux
-	h = securityHeadersMiddleware(h)
+	h = securityHeadersMiddleware(h, s.cspHeader)
 	h = recoveryMiddleware(h)
 	if s.rateLimiter != nil && s.rateLimiter.Enabled() {
 		h = rateLimitMiddleware(s.rateLimiter, s.publicPaths)(h)
 	}
 	if s.AuthFunc != nil {
-		h = authMiddleware(s.AuthFunc, s.publicPaths)(h)
+		h = authMiddleware(s.AuthFunc, s.auditLogger, s.publicPaths)(h)
 	}
 	if s.authorizer != nil {
-		h = authzMiddleware(s.authorizer, s.routePermissions)(h)
+		h = authzMiddleware(s.authorizer, s.auditLogger, s.routePermissions)(h)
 	}
 	if s.auditLogger != nil {
-		h = auditMiddleware(s.auditLogger, s.publicPaths)(h)
+		h = auditMiddleware(s.auditLogger, s.nodeID, s.publicPaths)(h)
 	}
 	h = withLogging(h)
 	h = trace.HTTPMiddleware(h)

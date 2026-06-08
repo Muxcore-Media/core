@@ -30,11 +30,11 @@ Acknowledgment within **72 hours**. Target patch: **7 days** critical, **30 days
 - **Event bus**: Per-handler timeouts (30s), structured logging, source node validation
 - **Config**: Environment variable overrides with validation, seed node address validation
 - **Docker**: Non-root user, credential file exclusion from builds, HEALTHCHECK; read-only root filesystem and capability dropping applied via docker-compose.yml
-- **CI/CD**: Read-only GITHUB_TOKEN, actions by version tag (not commit SHA), govulncheck (floating @latest), fuzz testing
+- **CI/CD**: Read-only GITHUB_TOKEN, actions pinned by commit SHA, verified binary downloads with SHA256 checksums, govulncheck at pinned version, fuzz testing
 
 ### In Progress
 
-- **RBAC enforcement**: Authorizer interface exists; enforcement at API level only (not gRPC or event bus)
+- **RBAC enforcement**: Authorizer interface is defined but enforcement is only wired at the HTTP API layer. gRPC endpoints and event bus dispatch do not perform authorization checks — any authenticated connection can invoke any gRPC method or publish any event.
 - **Cluster join authentication**: Token required; mTLS CA verification available; cross-node routing not yet implemented
 - **Auth failure rate limiting**: Per-IP brute-force protection with fixed 1-minute backoff after 5 failures
 

@@ -12,13 +12,17 @@ import (
 type EventBus struct {
 	mu        sync.RWMutex
 	Published []contracts.Event
-	Handlers  map[string][]contracts.EventHandler
+	Handlers   map[string][]contracts.EventHandler
+	moduleOwned map[string][]int // moduleID -> handler indices into a global ref list
+	handlerRefs []contracts.EventHandler
 }
 
 func NewEventBus() *EventBus {
 	return &EventBus{
 		Published: make([]contracts.Event, 0),
-		Handlers:  make(map[string][]contracts.EventHandler),
+		Handlers:    make(map[string][]contracts.EventHandler),
+		moduleOwned: make(map[string][]int),
+		handlerRefs: make([]contracts.EventHandler, 0),
 	}
 }
 
@@ -45,6 +49,47 @@ func (b *EventBus) Unsubscribe(ctx context.Context, eventType string, handler co
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.Handlers, eventType)
+	return nil
+}
+
+func (b *EventBus) SubscribeModule(ctx context.Context, moduleID, eventType string, handler contracts.EventHandler) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	idx := len(b.handlerRefs)
+	b.handlerRefs = append(b.handlerRefs, handler)
+	b.Handlers[eventType] = append(b.Handlers[eventType], handler)
+	b.moduleOwned[moduleID] = append(b.moduleOwned[moduleID], idx)
+	return nil
+}
+
+func (b *EventBus) UnsubscribeAll(ctx context.Context, moduleID string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if moduleID ==  {
+		return nil
+	}
+	indices := b.moduleOwned[moduleID]
+	if len(indices) == 0 {
+		return nil
+	}
+	// Collect handlers to remove
+	toRemove := make(map[contracts.EventHandler]bool)
+	for _, idx := range indices {
+		if idx < len(b.handlerRefs) {
+			toRemove[b.handlerRefs[idx]] = true
+		}
+	}
+	// Filter all handler maps
+	for eventType, handlers := range b.Handlers {
+		remaining := handlers[:0]
+		for _, h := range handlers {
+			if !toRemove[h] {
+				remaining = append(remaining, h)
+			}
+		}
+		b.Handlers[eventType] = remaining
+	}
+	delete(b.moduleOwned, moduleID)
 	return nil
 }
 
@@ -92,4 +137,6 @@ func (b *EventBus) Reset() {
 	defer b.mu.Unlock()
 	b.Published = nil
 	b.Handlers = make(map[string][]contracts.EventHandler)
+	b.moduleOwned = make(map[string][]int)
+	b.handlerRefs = nil
 }

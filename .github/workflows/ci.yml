@@ -13,8 +13,8 @@ jobs:
     name: Go Mod Verify
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e539eec361390f4ae # v5.3.0
         with:
           go-version: "1.26.3"
       - run: go mod verify
@@ -24,8 +24,8 @@ jobs:
     name: Lint & Static Analysis
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e539eec361390f4ae # v5.3.0
         with:
           go-version: "1.26.3"
       - run: go vet ./internal/... ./pkg/... ./cmd/...
@@ -33,7 +33,19 @@ jobs:
         run: go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
       - run: staticcheck ./internal/... ./pkg/... ./cmd/...
       - name: Install golangci-lint
-        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /usr/local/bin v2.12.2
+        run: |
+          GOLANGCI_LINT_VERSION="2.12.2"
+          GOLANGCI_LINT_SHA256="d235e555e90e7e94931e4fb28f64e981e0da9e5b11ccecd45c9a9e12421b4fa2"
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64) ARCH="amd64" ;;
+            aarch64) ARCH="arm64" ;;
+            *) echo "unsupported arch: $ARCH"; exit 1 ;;
+          esac
+          curl -sSfL "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/golangci-lint-${GOLANGCI_LINT_VERSION}-linux-${ARCH}.tar.gz" -o /tmp/golangci-lint.tar.gz
+          echo "${GOLANGCI_LINT_SHA256}  /tmp/golangci-lint.tar.gz" | sha256sum -c
+          tar -xzf /tmp/golangci-lint.tar.gz -C /usr/local/bin --strip-components=1 "golangci-lint-${GOLANGCI_LINT_VERSION}-linux-${ARCH}/golangci-lint"
+          rm /tmp/golangci-lint.tar.gz
       - run: golangci-lint run --timeout 120s ./internal/... ./pkg/... ./cmd/... || true
         continue-on-error: true
 
@@ -42,8 +54,8 @@ jobs:
     name: Test
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e539eec361390f4ae # v5.3.0
         with:
           go-version: "1.26.3"
       - run: go test -race -count=1 -timeout 120s ./internal/... ./pkg/...
@@ -53,13 +65,13 @@ jobs:
     name: Coverage
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e539eec361390f4ae # v5.3.0
         with:
           go-version: "1.26.3"
       - run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/... ./cmd/...
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: coverage
           path: coverage.out
@@ -68,8 +80,8 @@ jobs:
     name: Fuzz (Brief)
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e539eec361390f4ae # v5.3.0
         with:
           go-version: "1.26.3"
       - run: go test -fuzz=. -fuzztime=30s ./internal/... ./pkg/... || echo "fuzz found issues"
@@ -78,18 +90,95 @@ jobs:
     name: Build
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e539eec361390f4ae # v5.3.0
         with:
           go-version: "1.26.3"
       - run: go build -ldflags="-s -w" -o muxcored ./cmd/muxcored
       - run: go build -tags default -ldflags="-s -w" -o muxcored-default ./cmd/muxcored
 
+  provenance:
+    name: SLSA Provenance
+    runs-on: self-hosted
+    needs: build
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e539eec361390f4ae # v5.3.0
+        with:
+          go-version: "1.26.3"
+      - name: Build binary for provenance
+        run: |
+          go build -ldflags="-s -w" -o muxcored ./cmd/muxcored
+      - name: Generate SLSA provenance
+        run: |
+          # Generate in-toto SLSA provenance attestation
+          COMMIT_SHA=$(git rev-parse HEAD)
+          BUILDER_ID="https://github.com/Muxcore-Media/core/.github/workflows/ci.yml@refs/heads/master"
+          BINARY_SHA=$(sha256sum muxcored | cut -d' ' -f1)
+
+          cat > provenance.json << PROVEOF
+          {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [
+              {
+                "name": "muxcored",
+                "digest": {
+                  "sha256": "${BINARY_SHA}"
+                }
+              }
+            ],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+              "buildDefinition": {
+                "buildType": "https://github.com/Muxcore-Media/core/.github/workflows/ci.yml",
+                "externalParameters": {
+                  "source": {
+                    "uri": "https://github.com/Muxcore-Media/core",
+                    "digest": {
+                      "sha1": "${COMMIT_SHA}"
+                    }
+                  }
+                },
+                "internalParameters": {
+                  "builderImage": "go:1.26.3",
+                  "buildFlags": ["-ldflags=-s -w"]
+                },
+                "resolvedDependencies": []
+              },
+              "runDetails": {
+                "builder": {
+                  "id": "${BUILDER_ID}"
+                },
+                "metadata": {
+                  "invocationId": "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+                }
+              }
+            }
+          }
+          PROVEOF
+      - name: Sign provenance with cosign
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          echo "${COSIGN_PRIVATE_KEY}" > /tmp/cosign.key
+          cosign attest --key /tmp/cosign.key --predicate provenance.json --type slsaprovenance1 muxcored
+          rm -f /tmp/cosign.key
+      - name: Upload provenance
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: slsa-provenance
+          path: provenance.json
+
   docker:
     name: Docker Build Test
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build Docker image
         run: docker build -t muxcore:ci .
 
@@ -97,10 +186,9 @@ jobs:
     name: Vulnerability Scan
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e539eec361390f4ae # v5.3.0
         with:
           go-version: "1.26.3"
-      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
       - run: govulncheck -show verbose ./...
-

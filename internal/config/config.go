@@ -15,6 +15,7 @@ type Config struct {
 	Log      LogConfig      `json:"log"`
 	Database DatabaseConfig `json:"database"`
 	Cache    CacheConfig    `json:"cache"`
+	Audit    AuditConfig    `json:"audit"`
 	Modules  map[string]any `json:"modules"` // per-module arbitrary config
 }
 
@@ -54,6 +55,11 @@ type DatabaseConfig struct {
 type CacheConfig struct {
 	Driver string `json:"driver"`
 	URL    string `json:"url"`
+}
+
+// AuditConfig holds audit logging settings.
+type AuditConfig struct {
+	Path string `json:"path"` // file path for JSONL audit log; empty = disabled
 }
 
 // Default returns a Config populated with sensible defaults.
@@ -126,6 +132,9 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("MUXCORE_CACHE_URL"); v != "" {
 		cfg.Cache.URL = v
+	}
+	if v := os.Getenv("MUXCORE_AUDIT_PATH"); v != "" {
+		cfg.Audit.Path = v
 	}
 	if v := os.Getenv("MUXCORE_GRPC_TLS_CERT"); v != "" {
 		cfg.GRPC.CertFile = v

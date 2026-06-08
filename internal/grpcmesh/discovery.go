@@ -2,11 +2,15 @@ package grpcmesh
 
 import (
 	"context"
+	"log/slog"
 	"sync"
+	"github.com/Muxcore-Media/core/internal/registry"
 	"time"
 
 	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/codes"
 	"github.com/google/uuid"
@@ -16,6 +20,7 @@ import (
 type DiscoveryServer struct {
 	discoveryv1.UnimplementedDiscoveryServiceServer
 	mu       sync.RWMutex
+	joinMu   sync.Mutex
 	nodeID   string
 	grpcAddr string
 	httpAddr string
@@ -23,23 +28,38 @@ type DiscoveryServer struct {
 	clusterID string
 	members  map[string]*discoveryv1.NodeInfo
 	lastSeen         map[string]time.Time
+	joinAttempts     map[string]time.Time
+	joinAttemptCounts map[string]int
+	requireTLS       bool
 	evictionTimeout  time.Duration
 	watchers         map[chan *discoveryv1.ClusterEvent]struct{}
 	stopCh           chan struct{}
+	reg               *registry.Registry
 	joinToken        string
+	// moduleIDs returns the current list of module IDs running on this node.
+	// Called by LocalNode() and heartbeat sender to advertise live module state.
+	// Returns nil if no registry is wired in (standalone mode).
+	moduleIDs        func() []string
+	// dialOpts are gRPC dial options used by the heartbeat sender to connect
+	// to peer nodes. Set via StartHeartbeatLoop or left nil.
+	dialOpts         []grpc.DialOption
 }
 
-func NewDiscoveryServer(nodeID, grpcAddr, httpAddr, joinToken string) *DiscoveryServer {
+func NewDiscoveryServer(nodeID, grpcAddr, httpAddr, joinToken string, moduleIDs func() []string) *DiscoveryServer {
 	ds := &DiscoveryServer{
 		nodeID:          nodeID,
 		grpcAddr:        grpcAddr,
 		httpAddr:        httpAddr,
 		members:         make(map[string]*discoveryv1.NodeInfo),
 		lastSeen:        make(map[string]time.Time),
+		joinAttempts:     make(map[string]time.Time),
+		joinAttemptCounts: make(map[string]int),
+		requireTLS:       joinToken != "",
 		evictionTimeout: 30 * time.Second,
 		watchers:        make(map[chan *discoveryv1.ClusterEvent]struct{}),
 		stopCh:          make(chan struct{}),
 		joinToken:       joinToken,
+		moduleIDs:       moduleIDs,
 	}
 	go ds.evictLoop()
 	return ds
@@ -54,6 +74,35 @@ func (s *DiscoveryServer) Join(ctx context.Context, req *discoveryv1.JoinRequest
 	if node == nil || node.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "node ID is required")
 	}
+
+	// Rate-limit join attempts per source IP (max 3 in 20s window).
+	if p, ok := peer.FromContext(ctx); ok {
+		src := p.Addr.String()
+		s.joinMu.Lock()
+		now := time.Now()
+		last, exists := s.joinAttempts[src]
+		if exists && now.Sub(last) < 20*time.Second {
+			s.joinAttemptCounts[src]++
+			if s.joinAttemptCounts[src] > 3 {
+				s.joinMu.Unlock()
+				return nil, status.Error(codes.ResourceExhausted, "too many join attempts")
+			}
+		} else {
+			s.joinAttemptCounts[src] = 1
+		}
+		s.joinAttempts[src] = now
+		s.joinMu.Unlock()
+	}
+
+	// Reject token-based joins over non-TLS connections.
+	if s.joinToken != "" && s.requireTLS {
+		if p, ok := peer.FromContext(ctx); ok {
+			if _, isTLS := p.AuthInfo.(credentials.TLSInfo); !isTLS {
+				return nil, status.Error(codes.Unauthenticated, "join token authentication requires TLS")
+			}
+		}
+	}
+
 	if s.joinToken != "" {
 		md, ok := metadata.FromIncomingContext(ctx)
 		token := ""
@@ -140,7 +189,14 @@ func (s *DiscoveryServer) Heartbeat(ctx context.Context, req *discoveryv1.Heartb
 	s.mu.Lock()
 	s.lastSeen[nodeID] = time.Now()
 
+	if node, exists := s.members[nodeID]; exists && len(req.GetModules()) > 0 {
+		// Sync the module list from the heartbeat so this node's view
+		// of the remote node stays current as modules register/unregister.
+		node.Modules = req.GetModules()
+	}
+
 	if _, exists := s.members[nodeID]; !exists {
+		s.mu.Unlock()
 		return nil, status.Error(codes.NotFound, "unknown node ID — join the cluster before sending heartbeats")
 	}
 	leaderID := s.leaderID
@@ -192,10 +248,82 @@ func (s *DiscoveryServer) Watch(req *discoveryv1.MembersRequest, stream discover
 }
 
 func (s *DiscoveryServer) LocalNode() *discoveryv1.NodeInfo {
-	return &discoveryv1.NodeInfo{
+	node := &discoveryv1.NodeInfo{
 		Id:       s.nodeID,
-		GprcAddr: s.grpcAddr,
+		GrpcAddr: s.grpcAddr,
 		HttpAddr: s.httpAddr,
+	}
+	if s.moduleIDs != nil {
+		node.Modules = s.moduleIDs()
+	}
+	return node
+}
+
+// StartHeartbeatLoop begins sending periodic heartbeats to all known cluster
+// members. Heartbeats carry the current module list so peers learn about
+// module registrations and unregistrations on this node.
+//
+// dialOpts are the gRPC dial options for connecting to peers (TLS config, etc.).
+// The loop stops when ctx is cancelled.
+func (s *DiscoveryServer) StartHeartbeatLoop(ctx context.Context, dialOpts []grpc.DialOption) {
+	s.dialOpts = dialOpts
+	go s.heartbeatLoop(ctx)
+}
+
+func (s *DiscoveryServer) heartbeatLoop(ctx context.Context) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.stopCh:
+			return
+		case <-ticker.C:
+			s.sendHeartbeats(ctx)
+		}
+	}
+}
+
+func (s *DiscoveryServer) sendHeartbeats(ctx context.Context) {
+	s.mu.RLock()
+	// Snapshot members and module list under read lock.
+	type peer struct {
+		id   string
+		addr string
+	}
+	peers := make([]peer, 0, len(s.members))
+	for _, m := range s.members {
+		if m.GetId() == s.nodeID {
+			continue // don't heartbeat ourselves
+		}
+		peers = append(peers, peer{id: m.GetId(), addr: m.GetGprcAddr()})
+	}
+	var moduleIDs []string
+	if s.moduleIDs != nil {
+		moduleIDs = s.moduleIDs()
+	}
+	s.mu.RUnlock()
+
+	for _, p := range peers {
+		dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		conn, err := grpc.NewClient(p.addr, s.dialOpts...)
+		if err != nil {
+			slog.Warn("heartbeat: dial peer", "peer", p.id, "addr", p.addr, "error", err)
+			cancel()
+			continue
+		}
+		client := discoveryv1.NewDiscoveryServiceClient(conn)
+		_, err = client.Heartbeat(dialCtx, &discoveryv1.HeartbeatRequest{
+			NodeId:  s.nodeID,
+			Modules: moduleIDs,
+		})
+		if err != nil {
+			slog.Warn("heartbeat: rpc failed", "peer", p.id, "error", err)
+		}
+		conn.Close()
+		cancel()
 	}
 }
 
@@ -250,5 +378,3 @@ func (s *DiscoveryServer) evictDeadNodes() {
 func (s *DiscoveryServer) Close() {
 	close(s.stopCh)
 }
-
-

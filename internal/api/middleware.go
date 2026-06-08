@@ -58,21 +58,21 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 }
 
 // securityHeadersMiddleware sets standard security headers on all responses.
-func securityHeadersMiddleware(next http.Handler) http.Handler {
+func securityHeadersMiddleware(next http.Handler, cspHeader string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", cspHeader)
 		next.ServeHTTP(w, r)
 	})
 }
 
 // authMiddleware returns a middleware that validates sessions using the provided function.
 // Requests matching a path in publicPaths are always allowed through without authentication.
-func authMiddleware(authFn func(r *http.Request) (*contracts.Session, error), publicPaths map[string]bool) func(http.Handler) http.Handler {
+func authMiddleware(authFn func(r *http.Request) (*contracts.Session, error), auditLogger contracts.AuditLogger, publicPaths map[string]bool) func(http.Handler) http.Handler {
 	// Per-IP auth failure tracking for brute-force protection
 	authFailures := make(map[string]*authFailureRecord)
 	var authFailMu sync.Mutex
@@ -105,6 +105,26 @@ func authMiddleware(authFn func(r *http.Request) (*contracts.Session, error), pu
 			session, err := authFn(r)
 			if err != nil {
 				slog.Warn("auth failed", "error", err, "path", r.URL.Path, "remote_addr", r.RemoteAddr)
+				// Audit authentication failure.
+				if auditLogger != nil {
+					go func() {
+						entry := contracts.AuditEntry{
+							ID:        uuid.New().String(),
+							Timestamp: time.Now(),
+							Actor:     "anonymous",
+							Action:    "auth.failure",
+							Resource:  r.URL.Path,
+							Details: map[string]string{
+								"method": r.Method,
+								"ip":     extractClientIP(r),
+								"error":  err.Error(),
+							},
+							TraceID: trace.FromContext(r.Context()),
+						}
+						_ = auditLogger.Log(r.Context(), entry)
+					}()
+				}
+				// Track failures per IP
 				// Track failures per IP for brute-force protection
 				ip := extractClientIP(r)
 				authFailMu.Lock()
@@ -148,7 +168,7 @@ func authMiddleware(authFn func(r *http.Request) (*contracts.Session, error), pu
 // that have a required permission. The session must already be in the request
 // context (placed by authMiddleware). Routes without an entry in routePerms
 // are allowed through without authorization checks.
-func authzMiddleware(authz contracts.Authorizer, routePerms map[string]RoutePermission) func(http.Handler) http.Handler {
+func authzMiddleware(authz contracts.Authorizer, auditLogger contracts.AuditLogger, routePerms map[string]RoutePermission) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			req, ok := routePerms[r.URL.Path]
@@ -169,6 +189,31 @@ func authzMiddleware(authz contracts.Authorizer, routePerms map[string]RoutePerm
 
 			allowed, err := authz.Can(r.Context(), *session, req.Action, req.Resource)
 			if err != nil || !allowed {
+				// Audit authorization denial.
+				if auditLogger != nil {
+					go func() {
+						errStr := ""
+						if err != nil {
+							errStr = err.Error()
+						}
+						entry := contracts.AuditEntry{
+							ID:        uuid.New().String(),
+							Timestamp: time.Now(),
+							Actor:     session.UserID,
+							Action:    "authz.denied",
+							Resource:  req.Resource,
+							Details: map[string]string{
+								"action":   req.Action,
+								"username": session.Username,
+								"path":     r.URL.Path,
+								"method":   r.Method,
+								"error":    errStr,
+							},
+							TraceID: trace.FromContext(r.Context()),
+						}
+						_ = auditLogger.Log(r.Context(), entry)
+					}()
+				}
 				writeJSON(w, http.StatusForbidden, map[string]string{
 					"error":   "forbidden",
 					"message": "insufficient permissions",
@@ -195,7 +240,7 @@ func (sr *statusRecorder) WriteHeader(code int) {
 // auditMiddleware logs every authenticated request via the AuditLogger.
 // It is placed after auth/authz in the middleware chain so it has access to
 // the authenticated session. Public paths (e.g. /health) are skipped.
-func auditMiddleware(auditLogger contracts.AuditLogger, publicPaths map[string]bool) func(http.Handler) http.Handler {
+func auditMiddleware(auditLogger contracts.AuditLogger, nodeID string, publicPaths map[string]bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Skip public paths like /health.

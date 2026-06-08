@@ -2,30 +2,74 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/api"
+	"github.com/Muxcore-Media/core/internal/audit"
 	"github.com/Muxcore-Media/core/internal/config"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
 	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
-	"github.com/Muxcore-Media/core/internal/module"
-	_ "github.com/Muxcore-Media/core/internal/presets"
+	modulemgr "github.com/Muxcore-Media/core/internal/module/mgr"
+	modlifecycle "github.com/Muxcore-Media/core/internal/module"
 	"github.com/Muxcore-Media/core/internal/registry"
+	"github.com/Muxcore-Media/core/internal/spool"
 	"github.com/Muxcore-Media/core/internal/storage"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
+const securityDisclaimer = `╔══════════════════════════════════════════════════════════════╗
+║                    SECURITY WARNING                          ║
+║                                                              ║
+║  The official MuxCore spool is at:                           ║
+║  https://github.com/Muxcore-Media/spool                      ║
+║                                                              ║
+║  Using a third-party spool (--spool <url>) means you are     ║
+║  trusting an external source to define which modules run     ║
+║  on your system. Third-party spools can:                     ║
+║                                                              ║
+║  - List modules that contain malicious code                  ║
+║  - Point to forks with backdoors or data exfiltration        ║
+║  - Omit security-critical modules (e.g., auth, rate limit)   ║
+║  - Specify outdated versions with known vulnerabilities      ║
+║  - Change their module list at any time without notice       ║
+║                                                              ║
+║  MODULES RUN WITH THE SAME PRIVILEGES AS THE CORE PROCESS.   ║
+║  A malicious module can access your filesystem, network,     ║
+║  environment variables, and any data MuxCore manages.        ║
+║                                                              ║
+║  Before using a third-party spool:                           ║
+║  1. Audit the spool's module list and versions               ║
+║  2. Verify each module repo is what it claims to be          ║
+║  3. Check that security modules (auth, rate limiting)        ║
+║     are included and not replaced with stubs                 ║
+║  4. Pin to a specific commit/tag, not a floating branch      ║
+║  5. Run MuxCore in a sandboxed environment first             ║
+║                                                              ║
+║  The MuxCore project makes no guarantees about modules       ║
+║  sourced from third-party spools. Use at your own risk.      ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝`
+
 func main() {
+	tagName := flag.String("tag", "", "Module tag to load from the spool (e.g., 'default')")
+	spoolURL := flag.String("spool", spool.DefaultSpoolURL, "Spool URL to fetch tags from")
+	flag.Parse()
+
+	if *tagName != "" {
+		fmt.Fprintln(os.Stderr, securityDisclaimer)
+	}
+
 	configPath := os.Getenv("MUXCORE_CONFIG")
 	if configPath == "" {
 		configPath = "muxcore.json"
@@ -55,7 +99,6 @@ func main() {
 	meshSrv := grpcmesh.NewServer()
 	meshClient := grpcmesh.NewClient(meshSrv)
 
-	// Build gRPC server options with optional TLS credentials.
 	creds, err := grpcmesh.GRPCTransportCredentials(
 		cfg.GRPC.CertFile,
 		cfg.GRPC.KeyFile,
@@ -74,11 +117,19 @@ func main() {
 			"mtls", cfg.GRPC.MTLSEnabled,
 		)
 	} else {
-		slog.Warn("gRPC TLS is disabled — all inter-node communication is plaintext. Set MUXCORE_GRPC_TLS_CERT and MUXCORE_GRPC_TLS_KEY to enable encryption.")
+		slog.Warn("gRPC TLS is disabled — insecure mode")
 	}
+	// Add unary interceptor for gRPC authorization.
+	// Provides the interception point for future per-method authorization checks
+	// when an Authorizer and IdentityProvider are registered.
+	grpcOpts = append(grpcOpts, grpc.UnaryInterceptor(grpcmesh.AuthUnaryInterceptor()))
+
 	grpcSrv := grpc.NewServer(grpcOpts...)
 	meshSrv.RegisterWithGRPC(grpcSrv)
-
+	// Wire TLS transport credentials into mesh client for secure cross-node routing.
+	// When creds is nil (no TLS certs configured), cross-node routing is disabled
+	// and calls will only route to local modules.
+	meshClient.SetTransportCredentials(creds)
 
 	reg := registry.New()
 	healthGrpc := grpcmesh.NewHealthServer(reg)
@@ -87,14 +138,23 @@ func main() {
 	eventGrpc := grpcmesh.NewEventServer(bus)
 	eventGrpc.RegisterWithGRPC(grpcSrv)
 
+	nodeID := "muxcore-" + cfg.GRPC.Addr
 	discoveryGrpc := grpcmesh.NewDiscoveryServer(
-		"muxcore-"+cfg.GRPC.Addr,
+		nodeID,
 		cfg.GRPC.Addr,
 		cfg.Server.Addr,
 		cfg.GRPC.JoinToken,
+		func() []string {
+			entries := reg.ListAll()
+			ids := make([]string, len(entries))
+			for i, e := range entries {
+				ids[i] = e.Info.ID
+			}
+			return ids
+		},
 	)
 	discoveryGrpc.RegisterWithGRPC(grpcSrv)
-	mgr := module.NewManager(reg, bus)
+
 
 	srv := api.NewServer(cfg.Server.Addr, cfg.Server.CertFile, cfg.Server.KeyFile)
 
@@ -106,131 +166,93 @@ func main() {
 	slog.Info("storage orchestrator ready", "providers", store.ProviderCount())
 	watchCancel := store.WatchModules(bus)
 
+	// Set up default audit logger (no-op when cfg.Audit.Path is empty)
+	auditLogger, err := audit.NewFileLogger(cfg.Audit.Path)
+	if err != nil {
+		slog.Error("audit logger", "error", err)
+		os.Exit(1)
+	}
+	defer auditLogger.Close()
+	bus.SetAuditLogger(auditLogger)
+	store.SetAuditLogger(auditLogger)
+
+	// Storage gRPC service for sidecar module storage access
+	storageGrpc := grpcmesh.NewStorageServer(store)
+	storageGrpc.RegisterWithGRPC(grpcSrv)
+
+	// Attach registry for sidecar module discovery queries
+	discoveryGrpc.SetRegistry(reg)
+
+	// Set up runtime module manager
+	lifecycleMgr := modlifecycle.NewManager(reg, bus)
+	lifecycleMgr.SetAuditLogger(auditLogger)
+	modMgr := modulemgr.NewManager(cfg.GRPC.Addr, reg, lifecycleMgr)
+	modMgr.RegisterModuleService(grpcSrv)
+
+	// Fetch tag and spawn modules if --tag is specified
+	if *tagName != "" {
+		slog.Info("fetching tag from spool", "spool", *spoolURL, "tag", *tagName)
+		tag, err := spool.FetchTag(*spoolURL, *tagName)
+		if err != nil {
+			slog.Error("fetch tag", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("tag loaded", "name", tag.Name, "version", tag.Version, "modules", len(tag.Modules))
+
+		for _, tm := range tag.Modules {
+			bin, err := modMgr.Resolve(tm.Repo, tm.Version)
+			if err != nil {
+				if tm.Required {
+					slog.Error("resolve required module", "repo", tm.Repo, "error", err)
+					os.Exit(1)
+				}
+				slog.Warn("resolve optional module failed, skipping", "repo", tm.Repo, "error", err)
+				continue
+			}
+			if err := modMgr.Spawn(ctx, bin); err != nil {
+				if tm.Required {
+					slog.Error("spawn required module", "id", bin.ID, "error", err)
+					os.Exit(1)
+				}
+				slog.Warn("spawn optional module failed, skipping", "id", bin.ID, "error", err)
+				continue
+			}
+		}
+	}
+
+	// Build fabric (infrastructure services nil for sidecar mode)
 	deps := contracts.Fabric{
-		Registry: reg,
-		EventBus: bus,
-		Routes:   srv,
-		Cluster:  nil,
+		Registry:   reg,
+		EventBus:   bus,
+		Routes:     srv,
+		Cluster:    nil,
 		WorkerPool: nil,
 		Audit:      nil,
-		Storage:  store,
-		Mesh:     meshClient,
+		Storage:    store,
+		Mesh:       meshClient,
 	}
 
-	modules := contracts.LoadRegistered(deps)
-
-	// Discover infrastructure modules
-	var cl contracts.Cluster
-	var wp contracts.WorkerPool
-	var al contracts.AuditLogger
-	var rl contracts.RateLimiterProvider
-	var authz contracts.Authorizer
-	var cp contracts.CallPolicyProvider
-	var hm contracts.HealthMonitor
-	for _, mod := range modules {
-		if c, ok := mod.(contracts.Cluster); ok {
-			cl = c
-		}
-		if w, ok := mod.(contracts.WorkerPool); ok {
-			wp = w
-		}
-		if a, ok := mod.(contracts.AuditLogger); ok {
-			al = a
-		}
-		if r, ok := mod.(contracts.RateLimiterProvider); ok {
-			rl = r
-		}
-		if cpp, ok := mod.(contracts.CallPolicyProvider); ok {
-			cp = cpp
-		}
-		if az, ok := mod.(contracts.Authorizer); ok {
-			authz = az
-		}
-		if h, ok := mod.(contracts.HealthMonitor); ok {
-			hm = h
-		}
-	}
-	deps.Cluster = cl
-	deps.WorkerPool = wp
-	deps.Audit = al
-	meshClient.SetCluster(cl)
-	if cp != nil {
-		meshClient.SetCallPolicy(cp)
-		slog.Info("call policy enabled")
-	}
-
-	// Re-inject discovered infrastructure deps into modules that need them.
-	// Modules implementing InfrastructureAware receive the actual
-	// Cluster, WorkerPool, and AuditLogger after they have been discovered.
-	for _, mod := range modules {
-		if aware, ok := mod.(contracts.InfrastructureAware); ok {
-			aware.SetInfrastructure(deps.Cluster, deps.WorkerPool, deps.Audit)
-		}
-	}
-
-	// Wire rate limiter into API server
-	if rl != nil {
-		srv.SetRateLimiter(rl)
-		slog.Info("rate limiter enabled", "module", "ratelimit-tokenbucket")
-	}
-
-	// Wire audit logger into API server
-	if al != nil {
-		srv.SetAuditLogger(al)
-		slog.Info("audit logger enabled")
-	}
-
-	// Wire authorizer into API server
-	if authz != nil {
-		srv.SetAuthorizer(authz)
-		slog.Info("authorizer enabled")
-	}
-
-	for _, mod := range modules {
-		if err := mgr.Register(mod, nil); err != nil {
-			slog.Error("register module", "id", mod.Info().ID, "error", err)
-			cancel()
-			return
-		}
-	}
+	_ = deps // used when modules are loaded in-process
 
 	slog.Info("module registry ready", "count", reg.Count())
 
-	// Wire auth
-	authModules := reg.FindByRole("auth")
-	if len(authModules) > 0 {
-		if provider, ok := authModules[0].Module.(contracts.AuthProvider); ok {
-			srv.SetAuthFunc(func(r *http.Request) (*contracts.Session, error) {
-				token := r.Header.Get("Authorization")
-				if token == "" {
-					return nil, errMissingAuth
-				}
-				token = strings.TrimPrefix(token, "Bearer ")
-				session, err := provider.Validate(r.Context(), token)
-				if err != nil {
-					return nil, err
-				}
-				return &session, nil
-			})
-			slog.Info("auth middleware enabled", "provider", authModules[0].Info.ID)
-		}
-	}
-
 	srv.SetHealthChecker(func() map[string]error {
-		return mgr.HealthCheck(context.Background())
+		return nil // sidecar modules report health via mesh
 	})
+
+	fatalErr := make(chan error, 1)
 
 	go func() {
 		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
-			slog.Error("api server fatal", "error", err)
-			cancel()
+			slog.Error("api server", "error", err)
+			fatalErr <- err
 		}
 	}()
 
 	grpcLis, err := net.Listen("tcp", cfg.GRPC.Addr)
 	if err != nil {
 		slog.Error("grpc listen", "error", err)
-		cancel()
+		os.Exit(1)
 	}
 	go func() {
 		slog.Info("gRPC mesh listening", "addr", cfg.GRPC.Addr)
@@ -239,7 +261,7 @@ func main() {
 		}
 	}()
 
-	// Auto-join seed nodes if configured.
+	// Auto-join seed nodes
 	if len(cfg.GRPC.SeedNodes) > 0 {
 		slog.Info("auto-joining seed nodes", "seeds", cfg.GRPC.SeedNodes)
 		localNode := discoveryGrpc.LocalNode()
@@ -256,9 +278,7 @@ func main() {
 				}
 				defer conn.Close()
 				client := discoveryv1.NewDiscoveryServiceClient(conn)
-				md := metadata.New(map[string]string{"x-cluster-join-token": cfg.GRPC.JoinToken})
-				joinCtx := metadata.NewOutgoingContext(ctx, md)
-				resp, err := client.Join(joinCtx, &discoveryv1.JoinRequest{Node: localNode})
+				resp, err := client.Join(ctx, &discoveryv1.JoinRequest{Node: localNode})
 				if err != nil {
 					slog.Warn("auto-join: join request failed", "seed", seedAddr, "error", err)
 					return
@@ -273,64 +293,40 @@ func main() {
 		}
 	}
 
-	if cl != nil {
-		if err := cl.Start(ctx); err != nil {
-			slog.Error("cluster start", "error", err)
-			cancel()
-		}
-		slog.Info("cluster started", "node_id", cl.LocalNode().ID)
+	// Start heartbeat loop to advertise module list to cluster peers.
+	// Uses same TLS config as seed node connections.
+	var hbDialOpts []grpc.DialOption
+	if creds != nil {
+		hbDialOpts = append(hbDialOpts, grpc.WithTransportCredentials(creds))
+	} else {
+		hbDialOpts = append(hbDialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
+	discoveryGrpc.StartHeartbeatLoop(ctx, hbDialOpts)
 
-	if err := mgr.InitAll(ctx); err != nil {
-		slog.Error("init modules", "error", err)
+	slog.Info("MuxCore running", "addr", cfg.Server.Addr, "tag", *tagName)
+
+	select {
+	case <-ctx.Done():
+	case err := <-fatalErr:
+		slog.Error("fatal error, shutting down", "error", err)
 		cancel()
 	}
-	if err := mgr.StartAll(ctx); err != nil {
-		slog.Error("start modules", "error", err)
-		cancel()
-	}
-
-	// Start health monitor if available
-	if hm != nil {
-		if err := hm.StartMonitoring(ctx, reg, bus); err != nil {
-			slog.Error("health monitor start", "error", err)
-		} else {
-			slog.Info("health monitor started")
-		}
-	}
-
-	slog.Info("MuxCore running", "addr", cfg.Server.Addr)
-
-	<-ctx.Done()
-	watchCancel()
 	slog.Info("shutting down...")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
-	if hm != nil {
-		hm.Stop(shutdownCtx)
+	watchCancel()
+
+	if err := modMgr.StopAll(shutdownCtx); err != nil {
+		slog.Error("module stop", "error", err)
 	}
 	grpcSrv.GracefulStop()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("api shutdown", "error", err)
 	}
-	if err := mgr.StopAll(shutdownCtx); err != nil {
-		slog.Error("module shutdown", "error", err)
-	}
-	if cl != nil {
-		if err := cl.Stop(shutdownCtx); err != nil {
-			slog.Error("cluster shutdown", "error", err)
-		}
-	}
 	slog.Info("MuxCore stopped.")
 }
-
-var errMissingAuth = errStr("missing Authorization header")
-
-type errStr string
-
-func (e errStr) Error() string { return string(e) }
 
 func setupLogger(lc config.LogConfig) *slog.Logger {
 	level := slog.LevelInfo
