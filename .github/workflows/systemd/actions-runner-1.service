@@ -1,0 +1,15 @@
+[Unit]
+Description=GitHub Actions Runner (Claude-LXC-1)
+After=network.target
+
+[Service]
+Type=simple
+User=claude
+WorkingDirectory=/home/claude/actions-runner
+ExecStart=/home/claude/actions-runner/run.sh
+Restart=always
+RestartSec=10
+Environment="PATH=/usr/local/go/bin:/home/claude/go/bin:/usr/local/bin:/usr/bin:/bin"
+
+[Install]
+WantedBy=multi-user.target

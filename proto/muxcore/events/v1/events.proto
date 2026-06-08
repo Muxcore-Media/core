@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package muxcore.events.v1;
+
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1;eventsv1";
+
+// EventService provides distributed publish/subscribe over gRPC.
+// Nodes use this to relay events across the cluster when not using NATS.
+service EventService {
+  // Publish sends an event to all subscribers on the target node.
+  rpc Publish(PublishRequest) returns (PublishResponse);
+  // Subscribe streams events matching the given types from the remote node.
+  rpc Subscribe(SubscribeRequest) returns (stream Event);
+  // Request sends a request event and waits for a single reply.
+  rpc Request(RequestEvent) returns (Event);
+}
+
+message Event {
+  string id = 1;
+  string type = 2;
+  string source = 3;
+  string source_node = 4;
+  bytes payload = 5;
+  map<string, string> metadata = 6;
+  int64 timestamp = 7;
+}
+
+message PublishRequest {
+  Event event = 1;
+}
+
+message PublishResponse {}
+
+message SubscribeRequest {
+  // event_types to subscribe to. Use "*" for all events.
+  repeated string event_types = 1;
+}
+
+message RequestEvent {
+  Event event = 1;
+  // timeout_ms is the request timeout in milliseconds.
+  int32 timeout_ms = 2;
+}
