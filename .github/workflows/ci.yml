@@ -73,7 +73,7 @@ jobs:
           go-version: "1.26.3"
       - run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/... ./cmd/...
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4 # v7.0.1
+        uses: actions/upload-artifact@v7 # v7.0.1
         with:
           name: coverage
           path: coverage.out
@@ -170,7 +170,7 @@ jobs:
             echo "COSIGN_PRIVATE_KEY not set — skipping attestation"
           fi
       - name: Upload provenance
-        uses: actions/upload-artifact@v4 # v7.0.1
+        uses: actions/upload-artifact@v7 # v7.0.1
         with:
           name: slsa-provenance
           path: provenance.json
