@@ -5,8 +5,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"io"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"sync"
@@ -19,9 +19,9 @@ import (
 	meshv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/mesh/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -147,7 +147,7 @@ func (s *Server) StreamCall(stream meshv1.ModuleMesh_StreamCallServer) error {
 	for {
 		req, err := stream.Recv()
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			return err
@@ -222,8 +222,8 @@ func (s *Server) localCall(ctx context.Context, targetModule, method string, pay
 // Client implements contracts.ModuleMeshClient.
 // It routes calls: local modules get in-process dispatch; remote modules go over gRPC.
 type Client struct {
-	server  *Server
-	mu      sync.RWMutex
+	server     *Server
+	mu         sync.RWMutex
 	cluster    contracts.Cluster            // optional; when set, cross-node routing becomes available
 	callPolicy contracts.CallPolicyProvider // optional; when set, call access control is enforced
 	// transportCreds are the TLS credentials used for cross-node gRPC connections.
@@ -231,7 +231,7 @@ type Client struct {
 	// falling back to insecure plaintext.
 	transportCreds credentials.TransportCredentials
 	// audit is an optional audit logger for recording outbound mesh calls.
-	audit  contracts.AuditLogger
+	audit contracts.AuditLogger
 	// nodeID identifies this node in audit entries.
 	nodeID string
 }
@@ -324,10 +324,10 @@ func (c *Client) Call(ctx context.Context, targetModule, method string, payload 
 				if modID == targetModule {
 					// Build gRPC connection to the remote node
 					// Require TLS for cross-node routing. Never fall back to insecure plaintext.
-				if c.transportCreds == nil {
-					return nil, fmt.Errorf("%w: cross-node routing requires TLS — no transport credentials configured", ErrRemoteRoutingUnavailable)
-				}
-				conn, err := grpc.NewClient(member.GRPCAddr, grpc.WithTransportCredentials(c.transportCreds))
+					if c.transportCreds == nil {
+						return nil, fmt.Errorf("%w: cross-node routing requires TLS — no transport credentials configured", ErrRemoteRoutingUnavailable)
+					}
+					conn, err := grpc.NewClient(member.GRPCAddr, grpc.WithTransportCredentials(c.transportCreds))
 					if err != nil {
 						return nil, fmt.Errorf("%w: failed to dial remote node %q at %s: %w", ErrRemoteRoutingUnavailable, member.ID, member.GRPCAddr, err)
 					}
@@ -417,7 +417,7 @@ func GRPCTransportCredentials(certFile, keyFile, caCertFile string, mtlsEnabled 
 		if caCertFile == "" {
 			return nil, fmt.Errorf("mTLS is enabled but no CA certificate file was provided — set MUXCORE_GRPC_MTLS_CA")
 		}
-		caCert, err := os.ReadFile(caCertFile)
+		caCert, err := os.ReadFile(caCertFile) //nolint:gosec // path from operator mTLS configuration
 		if err != nil {
 			return nil, fmt.Errorf("read mTLS CA cert: %w", err)
 		}

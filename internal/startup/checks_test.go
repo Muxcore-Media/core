@@ -21,7 +21,8 @@ func TestRunAll_NoFatalOnDefaultConfig(t *testing.T) {
 }
 
 func TestHasFatal(t *testing.T) {
-	r1 := []Result{{Name: "a"}, {Name: "b", Warning: "warn"}}
+	r1 := make([]Result, 0, 2)
+	r1 = append(r1, Result{Name: "a"}, Result{Name: "b", Warning: "warn"})
 	if HasFatal(r1) {
 		t.Error("HasFatal should be false with no fatal results")
 	}
@@ -80,7 +81,7 @@ func TestCheckAuditLogDir_UnwritableDir(t *testing.T) {
 	}
 	tmp := t.TempDir()
 	unwritable := filepath.Join(tmp, "locked")
-	if err := os.Mkdir(unwritable, 0444); err != nil {
+	if err := os.Mkdir(unwritable, 0444); err != nil { //nolint:gosec // intentional: testing unwritable dir error path
 		t.Fatal(err)
 	}
 
@@ -115,7 +116,7 @@ func TestCheckCosignPub_FoundAndReadable(t *testing.T) {
 	os.Chdir(tmp)
 	defer os.Chdir(orig)
 
-	if err := os.WriteFile("cosign.pub", []byte("fake-key-data"), 0644); err != nil {
+	if err := os.WriteFile("cosign.pub", []byte("fake-key-data"), 0600); err != nil {
 		t.Fatal(err)
 	}
 

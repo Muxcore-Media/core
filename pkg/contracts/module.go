@@ -36,7 +36,7 @@ type ModuleInfo struct {
 	ID           string
 	Name         string
 	Version      string
-	Roles        []string              // module-defined role strings; core imposes no taxonomy
+	Roles        []string // module-defined role strings; core imposes no taxonomy
 	Description  string
 	Author       string
 	Capabilities []string              // granular capability strings for routing/discovery

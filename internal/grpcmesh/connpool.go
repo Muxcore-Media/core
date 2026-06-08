@@ -50,13 +50,12 @@ type ConnPool struct {
 // rather than waiting the full idle timeout.
 func NewConnPool(dialOpts ...grpc.DialOption) *ConnPool {
 	// Prepend keepalive params so callers can override if needed.
-	kpOpts := []grpc.DialOption{
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                20 * time.Second, // send pings every 20s when idle
-			Timeout:             10 * time.Second, // wait 10s for ping ack
-			PermitWithoutStream: true,             // ping even without active RPCs
-		}),
-	}
+	kpOpts := make([]grpc.DialOption, 0, 1+len(dialOpts))
+	kpOpts = append(kpOpts, grpc.WithKeepaliveParams(keepalive.ClientParameters{
+		Time:                20 * time.Second,
+		Timeout:             10 * time.Second,
+		PermitWithoutStream: true,
+	}))
 	p := &ConnPool{
 		connections: make(map[string]*pooledConn),
 		dialOpts:    append(kpOpts, dialOpts...),

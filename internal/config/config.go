@@ -79,9 +79,9 @@ type GRPCConfig struct {
 	CertFile    string   `json:"cert_file"`    // path to TLS certificate file
 	KeyFile     string   `json:"key_file"`     // path to TLS key file
 	MTLSEnabled bool     `json:"mtls_enabled"` // require mutual TLS
-	CACertFile  string   `json:"ca_cert_file"`  // path to CA cert for mTLS client verification
+	CACertFile  string   `json:"ca_cert_file"` // path to CA cert for mTLS client verification
 	SeedNodes   []string `json:"seed_nodes"`   // comma-separated host:port of existing cluster nodes to join
-	JoinToken   string   `json:"join_token"`    // pre-shared token required to join the cluster
+	JoinToken   string   `json:"join_token"`   // pre-shared token required to join the cluster
 	// MaxMessageSizeMB is the maximum gRPC message size in megabytes.
 	// Applies to both send and receive. Default 32MB. Increase for large storage objects.
 	MaxMessageSizeMB int `json:"max_message_size_mb"`
@@ -196,7 +196,7 @@ func Load(path string) (*Config, error) {
 	cfg := Default()
 
 	if path != "" {
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //nolint:gosec // path is user-provided config file
 		if err != nil {
 			if os.IsNotExist(err) {
 				return nil, err // let the caller decide how to handle

@@ -196,7 +196,7 @@ func (s *EventServer) Replay(req *eventsv1.ReplayRequest, stream eventsv1.EventS
 			"WAL replay not available: set MUXCORE_EVENT_JOURNAL_PATH on this node to enable it")
 	}
 
-	sinceSeq := uint64(req.GetSinceSeq())
+	sinceSeq := uint64(req.GetSinceSeq()) //nolint:gosec // safe: non-negative sequence numbers
 	typeFilter := req.GetEventType()
 
 	return s.walReplayer.ReplayFrom(stream.Context(), sinceSeq, func(event contracts.Event) error {
@@ -213,4 +213,3 @@ func (s *EventServer) Replay(req *eventsv1.ReplayRequest, stream eventsv1.EventS
 		})
 	})
 }
-

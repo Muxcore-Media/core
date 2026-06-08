@@ -19,11 +19,11 @@ type Probe func(ctx context.Context) error
 // CoreHealth aggregates health probes from core subsystems.
 // Thread-safe. Results are cached for a configurable TTL.
 type CoreHealth struct {
-	mu      sync.RWMutex
-	probes  map[string]Probe
-	cache   map[string]error
+	mu       sync.RWMutex
+	probes   map[string]Probe
+	cache    map[string]error
 	cachedAt time.Time
-	ttl     time.Duration
+	ttl      time.Duration
 }
 
 // New creates a CoreHealth with the default 5-second cache TTL.

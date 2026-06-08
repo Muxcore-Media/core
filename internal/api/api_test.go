@@ -30,7 +30,7 @@ func TestNewServer(t *testing.T) {
 func TestHealthEndpoint_Simple(t *testing.T) {
 	os.Setenv("MUXCORE_INSECURE_DISABLE_TLS", "true")
 	srv := NewServer(":0", "", "")
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -44,7 +44,7 @@ func TestHealthEndpoint_Simple(t *testing.T) {
 func TestHealthEndpoint_MethodNotAllowed(t *testing.T) {
 	os.Setenv("MUXCORE_INSECURE_DISABLE_TLS", "true")
 	srv := NewServer(":0", "", "")
-	req := httptest.NewRequest(http.MethodPost, "/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/health", nil)
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -58,7 +58,7 @@ func TestHealthEndpoint_WithHealthChecker(t *testing.T) {
 	srv.SetHealthChecker(func() map[string]error {
 		return map[string]error{"module-a": nil, "module-b": nil}
 	})
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -75,7 +75,7 @@ func TestHealthEndpoint_Degraded(t *testing.T) {
 	srv.SetHealthChecker(func() map[string]error {
 		return map[string]error{"module-a": nil, "module-b": fmt.Errorf("connection refused")}
 	})
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -86,7 +86,7 @@ func TestHealthEndpoint_Degraded(t *testing.T) {
 func TestHealthEndpoint_HXRequest(t *testing.T) {
 	os.Setenv("MUXCORE_INSECURE_DISABLE_TLS", "true")
 	srv := NewServer(":0", "", "")
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil)
 	req.Header.Set("HX-Request", "true")
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
@@ -101,7 +101,7 @@ func TestAuthMiddleware_AllowsHealth(t *testing.T) {
 	srv.SetAuthFunc(func(r *http.Request) (*contracts.Session, error) {
 		return nil, errors.New("should not be called")
 	})
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -118,7 +118,7 @@ func TestAuthMiddleware_BlocksUnauthenticated(t *testing.T) {
 	srv.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/test", nil)
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
@@ -141,7 +141,7 @@ func TestAuthMiddleware_AllowsAuthenticated(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/test", nil)
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -155,7 +155,7 @@ func TestAuthMiddleware_NoAuthFunc(t *testing.T) {
 	srv.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/test", nil)
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -170,7 +170,7 @@ func TestRateLimiter_AllowsUnderLimit(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	for i := 0; i < 5; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/test", nil)
 		rec := httptest.NewRecorder()
 		srv.http.Handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -188,7 +188,7 @@ func TestRateLimiter_Integration(t *testing.T) {
 	})
 
 	// With no rate limiter set, all requests should pass through.
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/test", nil)
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -205,7 +205,7 @@ func TestRecoveryMiddleware_CatchesPanic(t *testing.T) {
 	srv.HandleFunc("/panic", func(w http.ResponseWriter, r *http.Request) {
 		panic("test panic")
 	})
-	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/panic", nil)
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {
@@ -219,7 +219,7 @@ func TestHandle_RegistersRoute(t *testing.T) {
 	srv.Handle("/custom", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/custom", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/custom", nil)
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTeapot {
@@ -233,7 +233,7 @@ func TestHandleFunc_RegistersRoute(t *testing.T) {
 	srv.HandleFunc("/fn", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 	})
-	req := httptest.NewRequest(http.MethodGet, "/fn", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/fn", nil)
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
@@ -254,7 +254,7 @@ func TestServerStartShutdown(t *testing.T) {
 	}
 	select {
 	case err := <-errCh:
-		if err != nil && err != http.ErrServerClosed {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			t.Errorf("expected nil or ErrServerClosed, got %v", err)
 		}
 	case <-ctx.Done():
@@ -263,7 +263,7 @@ func TestServerStartShutdown(t *testing.T) {
 }
 
 func TestGetSession_Empty(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 	session, ok := GetSession(req)
 	if ok {
 		t.Error("expected ok=false for empty context")
@@ -285,7 +285,7 @@ func TestGetSession_AfterAuth(t *testing.T) {
 		capturedSession = s
 		w.WriteHeader(http.StatusOK)
 	})
-	req := httptest.NewRequest(http.MethodGet, "/api/whoami", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/whoami", nil)
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -306,7 +306,7 @@ func TestSecurityHeaders_AllPresent(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/check", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/check", nil)
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
 
@@ -329,7 +329,7 @@ func TestSecurityHeaders_HSTSAbsentWithoutTLS(t *testing.T) {
 	srv := NewServer(":0", "", "")
 	srv.HandleFunc("/h", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 
-	req := httptest.NewRequest(http.MethodGet, "/h", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/h", nil)
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
 
@@ -352,7 +352,7 @@ func TestMaxBodyMiddleware_RejectsOversizedBody(t *testing.T) {
 
 	// Build a body larger than 10MB.
 	bigBody := make([]byte, maxBodySize+1)
-	req := httptest.NewRequest(http.MethodPost, "/upload", bytes.NewReader(bigBody))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/upload", bytes.NewReader(bigBody))
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
 
@@ -373,7 +373,7 @@ func TestAuthMiddleware_BruteForceBackoff(t *testing.T) {
 
 	// 5 failures from the same IP should trigger the backoff on the 6th.
 	for i := 0; i < 5; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/api/secret", nil)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/secret", nil)
 		req.RemoteAddr = "9.9.9.9:1234"
 		rec := httptest.NewRecorder()
 		srv.http.Handler.ServeHTTP(rec, req)
@@ -383,7 +383,7 @@ func TestAuthMiddleware_BruteForceBackoff(t *testing.T) {
 	}
 
 	// 6th request from same IP — should be rate-limited (429).
-	req := httptest.NewRequest(http.MethodGet, "/api/secret", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/secret", nil)
 	req.RemoteAddr = "9.9.9.9:9999"
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
@@ -407,7 +407,7 @@ func TestAuthzMiddleware_ABACPath(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/admin/stuff", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/admin/stuff", nil)
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
 
@@ -437,7 +437,7 @@ func TestExtractClientIP(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 			for k, v := range tt.headers {
 				req.Header.Set(k, v)
 			}

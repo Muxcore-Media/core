@@ -71,7 +71,7 @@ type StepHandler struct {
 type TapestryStep struct {
 	Name         string
 	Handler      StepHandler
-	Retry        int           // max retry attempts (0 = no retry)
+	Retry        int // max retry attempts (0 = no retry)
 	Timeout      time.Duration
 	DependsOn    []string          // step names that must complete before this one
 	InputMapping map[string]string // maps step output keys to this step's input keys

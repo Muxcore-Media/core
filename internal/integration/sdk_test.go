@@ -10,6 +10,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -54,9 +55,9 @@ func TestSDKWire_StoragePutGetDelete(t *testing.T) {
 		t.Fatalf("Put stream: %v", err)
 	}
 	stream.Send(&storagev1.PutRequest{
-		Key:  "wire/file.txt",
-		Data: content,
-		Size: int64(len(content)),
+		Key:       "wire/file.txt",
+		Chunk:     content,
+		TotalSize: int64(len(content)),
 	})
 	if _, err := stream.CloseAndRecv(); err != nil {
 		t.Fatalf("Put CloseAndRecv: %v", err)
@@ -70,13 +71,13 @@ func TestSDKWire_StoragePutGetDelete(t *testing.T) {
 	var got []byte
 	for {
 		chunk, err := getStream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
 			t.Fatalf("Get Recv: %v", err)
 		}
-		got = append(got, chunk.GetData()...)
+		got = append(got, chunk.GetChunk()...)
 	}
 	if !bytes.Equal(got, content) {
 		t.Errorf("Get returned %q, want %q", got, content)

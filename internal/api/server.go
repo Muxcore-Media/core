@@ -39,8 +39,8 @@ type Server struct {
 	// authFailureCleanup stops the background auth failure map cleanup ticker.
 	authFailureCleanup chan struct{}
 	// authFailureMu guards the authFailures map for the cleanup loop.
-	authFailureMu   sync.Mutex
-	authFailures    map[string]*authFailureRecord
+	authFailureMu sync.Mutex
+	authFailures  map[string]*authFailureRecord
 	// trustedProxies is the list of CIDR ranges whose X-Forwarded-For we trust.
 	trustedProxies []net.IPNet
 }
@@ -211,6 +211,7 @@ func (s *Server) SetAuthorizer(a contracts.Authorizer) {
 	s.authorizer = a
 	s.rebuildChain()
 }
+
 // SetAuditLogger sets the audit logger for recording authenticated requests.
 func (s *Server) SetAuditLogger(a contracts.AuditLogger) {
 	s.auditLogger = a

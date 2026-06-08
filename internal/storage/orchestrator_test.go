@@ -88,14 +88,18 @@ func newMockRegistry() *mockRegistry {
 }
 
 func (r *mockRegistry) addProvider(prov contracts.StorageProvider, id string) {
+	module, ok := prov.(contracts.Module)
+	if !ok {
+		return
+	}
 	r.providers[id] = contracts.ModuleEntry{
 		Info:   contracts.ModuleInfo{ID: id, Roles: []string{"storage"}},
-		Module: prov.(contracts.Module),
+		Module: module,
 	}
 }
 
 func (r *mockRegistry) FindByRole(role string) []contracts.ModuleEntry {
-	var result []contracts.ModuleEntry
+	result := make([]contracts.ModuleEntry, 0, len(r.providers))
 	for _, e := range r.providers {
 		result = append(result, e)
 	}
@@ -111,7 +115,7 @@ func (r *mockRegistry) Resolve(id string) (contracts.ModuleEntry, error) {
 	return e, nil
 }
 func (r *mockRegistry) ListAll() []contracts.ModuleEntry {
-	var result []contracts.ModuleEntry
+	result := make([]contracts.ModuleEntry, 0, len(r.providers))
 	for _, e := range r.providers {
 		result = append(result, e)
 	}
@@ -128,16 +132,15 @@ func (r *mockRegistry) StartupOrder() ([]string, error) {
 
 func (r *mockRegistry) DependencyGraph(id string) ([]string, error) { return nil, nil }
 
-
 type mockModule struct {
 	contracts.StorageProvider
 	info contracts.ModuleInfo
 }
 
-func (m *mockModule) Info() contracts.ModuleInfo    { return m.info }
-func (m *mockModule) Init(ctx context.Context) error  { return nil }
-func (m *mockModule) Start(ctx context.Context) error { return nil }
-func (m *mockModule) Stop(ctx context.Context) error  { return nil }
+func (m *mockModule) Info() contracts.ModuleInfo       { return m.info }
+func (m *mockModule) Init(ctx context.Context) error   { return nil }
+func (m *mockModule) Start(ctx context.Context) error  { return nil }
+func (m *mockModule) Stop(ctx context.Context) error   { return nil }
 func (m *mockModule) Health(ctx context.Context) error { return nil }
 
 func TestOrchestrator_NoProvider(t *testing.T) {

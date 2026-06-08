@@ -104,7 +104,8 @@ func startStorageServer(t *testing.T, orch contracts.StorageOrchestrator, policy
 	srv := NewStorageServer(orch)
 	srv.SetCallPolicy(policy)
 
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	lis, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -197,7 +198,7 @@ func TestStorageServer_Get_Simple(t *testing.T) {
 	var data []byte
 	for {
 		chunk, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -361,7 +362,8 @@ func TestStorageServer_NoPolicy_Denied(t *testing.T) {
 	orch := newStubOrch()
 	srv := NewStorageServer(orch) // no policy set
 
-	lis, _ := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	lis, _ := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	grpcSrv := grpc.NewServer()
 	srv.RegisterWithGRPC(grpcSrv)
 	go grpcSrv.Serve(lis)

@@ -52,18 +52,18 @@ type DiscoveryServer struct {
 	term uint64
 	// votedFor records who this node last elected as leader in the current term.
 	// Used to prevent double-voting within a single term.
-	votedFor         string
-	clusterID        string
-	members          map[string]*discoveryv1.NodeInfo
-	lastSeen         map[string]time.Time
-	joinAttempts     map[string]time.Time
+	votedFor          string
+	clusterID         string
+	members           map[string]*discoveryv1.NodeInfo
+	lastSeen          map[string]time.Time
+	joinAttempts      map[string]time.Time
 	joinAttemptCounts map[string]int
-	requireTLS       bool
-	evictionTimeout  time.Duration
-	watchers         map[chan *discoveryv1.ClusterEvent]struct{}
-	stopCh           chan struct{}
-	reg              *registry.Registry
-	joinToken        string
+	requireTLS        bool
+	evictionTimeout   time.Duration
+	watchers          map[chan *discoveryv1.ClusterEvent]struct{}
+	stopCh            chan struct{}
+	reg               *registry.Registry
+	joinToken         string
 	// moduleIDs returns the current list of module IDs running on this node.
 	moduleIDs func() []string
 	// dialOpts are gRPC dial options used by the heartbeat sender to connect
@@ -751,4 +751,3 @@ func (s *DiscoveryServer) MembersSnapshot() []*discoveryv1.NodeInfo {
 func (s *DiscoveryServer) Close() {
 	close(s.stopCh)
 }
-

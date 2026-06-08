@@ -9,7 +9,7 @@ package contracts
 // SerializationProvider implementations unless explicit sandboxing is
 // applied and documented.
 const (
-	SafeContentTypeJSON    = "application/json"
+	SafeContentTypeJSON     = "application/json"
 	SafeContentTypeProtobuf = "application/x-protobuf"
 	SafeContentTypeMsgpack  = "application/msgpack"
 )

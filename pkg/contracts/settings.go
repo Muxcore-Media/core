@@ -13,11 +13,11 @@ const (
 
 // SettingDef describes one configuration setting that a module exposes.
 type SettingDef struct {
-	Key         string   // env var or config key, e.g. "MUXCORE_JACKETT_URL"
-	Label       string   // human-readable label, e.g. "Jackett Server URL"
+	Key         string // env var or config key, e.g. "MUXCORE_JACKETT_URL"
+	Label       string // human-readable label, e.g. "Jackett Server URL"
 	Type        SettingType
-	Default     string   // default value as a string
-	Description string   // help text
+	Default     string // default value as a string
+	Description string // help text
 	Required    bool
 	Options     []string // for SettingTypeSelect: allowed values
 	Group       string   // settings group, e.g. "Connection", "Downloads"

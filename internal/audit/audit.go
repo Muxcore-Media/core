@@ -64,7 +64,7 @@ func NewFileLogger(logPath string) (*FileLogger, error) {
 	if logPath == "" {
 		return fl, nil
 	}
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) //nolint:gosec // path comes from operator configuration
 	if err != nil {
 		return nil, fmt.Errorf("audit: open %s: %w", logPath, err)
 	}
@@ -98,33 +98,40 @@ func (fl *FileLogger) Log(ctx context.Context, entry contracts.AuditEntry) error
 		// Continue writing to the current file rather than losing entries.
 	}
 
-	// Link the hash chain: PrevEntryHash = SHA-256 of the previous entry's JSON.
+	// Link the hash chain: PrevEntryHash = hash of the previous entry.
 	entry.PrevEntryHash = fl.lastHash
 
-	data, err := json.Marshal(entry)
+	// Marshal the complete entry for storage.
+	diskData, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("audit: marshal entry: %w", err)
 	}
 
-	// Compute the hash of this entry for the next link in the chain.
-	h := sha256.Sum256(data)
+	// Compute the hash of this entry (without PrevEntryHash) for the chain.
+	entryCopy := entry
+	entryCopy.PrevEntryHash = ""
+	canonData, err := json.Marshal(entryCopy)
+	if err != nil {
+		return fmt.Errorf("audit: marshal canonical entry: %w", err)
+	}
+	h := sha256.Sum256(canonData)
 	fl.lastHash = hex.EncodeToString(h[:])
 
 	// Sign if a signing key is configured.
 	if fl.signingKey != nil {
 		mac := hmac.New(sha256.New, fl.signingKey)
-		mac.Write(data)
+		mac.Write(canonData)
 		entry.Signature = hex.EncodeToString(mac.Sum(nil))
 		// Re-marshal with the signature included for the on-disk record.
-		data, err = json.Marshal(entry)
+		diskData, err = json.Marshal(entry)
 		if err != nil {
 			return fmt.Errorf("audit: marshal signed entry: %w", err)
 		}
 	}
 
-	data = append(data, '\n')
+	diskData = append(diskData, '\n')
 
-	if _, err := fl.file.Write(data); err != nil {
+	if _, err := fl.file.Write(diskData); err != nil {
 		return fmt.Errorf("audit: write entry: %w", err)
 	}
 	if err := fl.file.Sync(); err != nil {
@@ -198,10 +205,10 @@ func (fl *FileLogger) Export(ctx context.Context, format string) (io.ReadCloser,
 		var sb strings.Builder
 		sb.WriteString("id,timestamp,actor,action,resource,resource_id,trace_id,node_id\n")
 		for _, e := range fl.entries {
-			sb.WriteString(fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s\n",
+			fmt.Fprintf(&sb, "%s,%s,%s,%s,%s,%s,%s,%s\n",
 				e.ID, e.Timestamp.Format("2006-01-02T15:04:05Z"),
 				e.Actor, e.Action, e.Resource, e.ResourceID,
-				e.TraceID, e.NodeID))
+				e.TraceID, e.NodeID)
 		}
 		return io.NopCloser(strings.NewReader(sb.String())), nil
 	default:

@@ -32,8 +32,8 @@ type WorkerTask struct {
 	StartedAt     time.Time
 	CompletedAt   time.Time
 	LastHeartbeat time.Time
-	Error          string
-	Meta           map[string]any
+	Error         string
+	Meta          map[string]any
 
 	// IdempotencyKey is an optional key that executors use with
 	// IdempotencyProvider to prevent duplicate execution. When a task

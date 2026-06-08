@@ -18,11 +18,11 @@ type testModule struct {
 	stopOK  bool
 }
 
-func (m *testModule) Info() contracts.ModuleInfo              { return m.info }
-func (m *testModule) Init(ctx context.Context) error           { m.initOK = true; return nil }
-func (m *testModule) Start(ctx context.Context) error          { m.startOK = true; return nil }
-func (m *testModule) Stop(ctx context.Context) error           { m.stopOK = true; return nil }
-func (m *testModule) Health(ctx context.Context) error         { return nil }
+func (m *testModule) Info() contracts.ModuleInfo       { return m.info }
+func (m *testModule) Init(ctx context.Context) error   { m.initOK = true; return nil }
+func (m *testModule) Start(ctx context.Context) error  { m.startOK = true; return nil }
+func (m *testModule) Stop(ctx context.Context) error   { m.stopOK = true; return nil }
+func (m *testModule) Health(ctx context.Context) error { return nil }
 
 func TestManagerLifecycle(t *testing.T) {
 	reg := registry.New()
