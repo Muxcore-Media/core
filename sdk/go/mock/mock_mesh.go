@@ -21,8 +21,8 @@ type Mesh struct {
 // MeshCall records a single Call invocation for test assertions.
 type MeshCall struct {
 	TargetModule string
-	Method        string
-	Payload       []byte
+	Method       string
+	Payload      []byte
 }
 
 // NewMesh creates an empty mesh mock.

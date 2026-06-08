@@ -170,7 +170,7 @@ func TestWALWriter_ScanLastSeq_CorruptedLine(t *testing.T) {
 	path := filepath.Join(dir, "test.wal")
 
 	// Write a valid line followed by a corrupt line.
-	os.WriteFile(path, []byte(`{"seq":1,"event":{}}`+"\n"+"NOT JSON\n"), 0644)
+	os.WriteFile(path, []byte(`{"seq":1,"event":{}}`+"\n"+"NOT JSON\n"), 0600)
 
 	w := &WALWriter{dir: dir}
 	lastSeq, err := w.scanLastSeq(path)
@@ -254,7 +254,7 @@ func TestWALWriter_NewWALWriter_DirNotWritable(t *testing.T) {
 	}
 	dir := t.TempDir()
 	walDir := filepath.Join(dir, "readonly")
-	if err := os.MkdirAll(walDir, 0555); err != nil {
+	if err := os.MkdirAll(walDir, 0555); err != nil { //nolint:gosec // intentional: testing read-only dir error path
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	// WAL needs to create a segment file inside the directory.

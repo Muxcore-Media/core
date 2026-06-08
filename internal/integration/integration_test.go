@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"errors"
 	"github.com/Muxcore-Media/core/internal/audit"
 	"github.com/Muxcore-Media/core/internal/config"
 	"github.com/Muxcore-Media/core/internal/events"
@@ -34,6 +35,18 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
+
+type allowAllPublishPolicy struct{}
+
+func (*allowAllPublishPolicy) CanPublish(ctx context.Context, callerID, eventType string) (bool, error) {
+	return true, nil
+}
+
+type allowAllCallPolicy struct{}
+
+func (*allowAllCallPolicy) AllowCall(ctx context.Context, callerModuleID, targetModuleID, method string) (bool, error) {
+	return true, nil
+}
 
 // harness wires up the core subsystems in-process for testing.
 // No external processes, no spool, no TLS.
@@ -68,24 +81,27 @@ func newHarness(t *testing.T) *harness {
 	auditLogger, _ := audit.NewFileLogger("")
 	bus.SetAuditLogger(auditLogger)
 
-	// Publish policy is nil — bus will deny all publishes (deny-by-default).
-	// Tests that need events must set a policy explicitly.
+	// Allow-all publish policy for tests.
+	bus.SetPublishPolicy(&allowAllPublishPolicy{})
 	modMgr := module.NewManager(reg, bus)
 
 	// gRPC server on a random port.
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	lis, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	grpcSrv := grpc.NewServer(grpc.WithTransportCredentials(insecure.NewCredentials()))
+	grpcSrv := grpc.NewServer(grpc.Creds(insecure.NewCredentials()))
 
 	meshSrv := grpcmesh.NewServer()
 	meshSrv.RegisterWithGRPC(grpcSrv)
 	meshClient := grpcmesh.NewClient(meshSrv)
-	// No call policy set — mesh calls and storage are denied by default.
-
+	// Allow-all call policy for tests.
 	storageGrpc := grpcmesh.NewStorageServer(store)
+	storageGrpc.SetCallPolicy(&allowAllCallPolicy{})
 	storageGrpc.RegisterWithGRPC(grpcSrv)
+	healthSrv := grpcmesh.NewHealthServer(reg)
+	healthSrv.RegisterWithGRPC(grpcSrv)
 
 	go grpcSrv.Serve(lis)
 
@@ -341,7 +357,7 @@ func TestIntegration_gRPC_StorageServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Put stream: %v", err)
 	}
-	stream.Send(&storagev1.PutRequest{Key: "grpc/test.txt", Data: []byte("grpc content"), Size: 12})
+	stream.Send(&storagev1.PutRequest{Key: "grpc/test.txt", Chunk: []byte("grpc content"), TotalSize: 12})
 	if _, err := stream.CloseAndRecv(); err != nil {
 		t.Fatalf("Put CloseAndRecv: %v", err)
 	}
@@ -354,13 +370,13 @@ func TestIntegration_gRPC_StorageServer(t *testing.T) {
 	var data []byte
 	for {
 		chunk, err := getStream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
 			t.Fatalf("Get Recv: %v", err)
 		}
-		data = append(data, chunk.GetData()...)
+		data = append(data, chunk.GetChunk()...)
 	}
 	if string(data) != "grpc content" {
 		t.Errorf("gRPC Get returned %q, want 'grpc content'", data)
@@ -436,9 +452,9 @@ func (m *stubModule) Info() contracts.ModuleInfo {
 		Capabilities: m.caps,
 	}
 }
-func (m *stubModule) Init(_ context.Context) error  { m.inited = true; return nil }
-func (m *stubModule) Start(_ context.Context) error { m.started = true; return nil }
-func (m *stubModule) Stop(_ context.Context) error  { m.stopped = true; return nil }
+func (m *stubModule) Init(_ context.Context) error   { m.inited = true; return nil }
+func (m *stubModule) Start(_ context.Context) error  { m.started = true; return nil }
+func (m *stubModule) Stop(_ context.Context) error   { m.stopped = true; return nil }
 func (m *stubModule) Health(_ context.Context) error { return nil }
 
 // memStorage is a thread-safe in-memory StorageProvider for integration tests.
@@ -519,9 +535,9 @@ func (m *storageModule) Info() contracts.ModuleInfo {
 		Capabilities: []string{"storage.local"},
 	}
 }
-func (m *storageModule) Init(_ context.Context) error  { return nil }
-func (m *storageModule) Start(_ context.Context) error { return nil }
-func (m *storageModule) Stop(_ context.Context) error  { return nil }
+func (m *storageModule) Init(_ context.Context) error   { return nil }
+func (m *storageModule) Start(_ context.Context) error  { return nil }
+func (m *storageModule) Stop(_ context.Context) error   { return nil }
 func (m *storageModule) Health(_ context.Context) error { return nil }
 
 // storageModule must also implement contracts.StorageProvider to be picked up by DiscoverStorage.

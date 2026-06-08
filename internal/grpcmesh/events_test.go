@@ -2,6 +2,7 @@ package grpcmesh
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -19,7 +20,9 @@ import (
 // allowAllPublishPolicy permits all event publication for testing.
 type allowAllPublishPolicy struct{}
 
-func (allowAllPublishPolicy) CanPublish(_ context.Context, _, _ string) (bool, error) { return true, nil }
+func (allowAllPublishPolicy) CanPublish(_ context.Context, _, _ string) (bool, error) {
+	return true, nil
+}
 
 func startEventServer(t *testing.T) (eventsv1.EventServiceClient, *events.MemoryBus) {
 	t.Helper()
@@ -36,7 +39,8 @@ func startEventServerWithReplayer(t *testing.T, replayer WALReplayer) (eventsv1.
 	if replayer != nil {
 		srv.SetWALReplayer(replayer)
 	}
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	lis, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -142,7 +146,7 @@ func TestEventServer_Subscribe_MultipleTypes(t *testing.T) {
 	types := map[string]bool{}
 	for i := 0; i < 2; i++ {
 		ev, err := stream.Recv()
-		if err != nil && err != io.EOF {
+		if err != nil && !errors.Is(err, io.EOF) {
 			t.Fatalf("Recv %d: %v", i, err)
 		}
 		types[ev.GetType()] = true
@@ -273,7 +277,7 @@ func TestEventServer_Replay_WithWAL_StreamsEvents(t *testing.T) {
 	var received []*eventsv1.Event
 	for {
 		ev, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -314,7 +318,7 @@ func TestEventServer_Replay_WithWAL_TypeFilter(t *testing.T) {
 	var received []*eventsv1.Event
 	for {
 		ev, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -357,7 +361,8 @@ func TestEventServer_Replay_RealWAL(t *testing.T) {
 
 	srv := NewEventServer(bus)
 	srv.SetWALReplayer(bus)
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	lis, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -386,7 +391,7 @@ func TestEventServer_Replay_RealWAL(t *testing.T) {
 	var count int
 	for {
 		_, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

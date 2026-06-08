@@ -10,13 +10,13 @@ import (
 // ChangedFields describes which config fields changed during a reload.
 // The caller can use this to apply only the changed subset to subsystems.
 type ChangedFields struct {
-	LogLevel     bool
-	LogFormat    bool
-	AuditPath    bool
-	StrictCall   bool
+	LogLevel      bool
+	LogFormat     bool
+	AuditPath     bool
+	StrictCall    bool
 	StrictPublish bool
-	SeedNodes    bool
-	JoinToken    bool
+	SeedNodes     bool
+	JoinToken     bool
 	// Unsafe indicates changes that require a restart (addresses, certs, etc.).
 	Unsafe       bool
 	UnsafeFields []string

@@ -38,7 +38,11 @@ func TestBareLoomBoot(t *testing.T) {
 	go func() { errCh <- srv.Start() }()
 	time.Sleep(500 * time.Millisecond)
 
-	resp, err := http.Get(testURL + "/health")
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testURL+"/health", nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET /health: %v", err)
 	}

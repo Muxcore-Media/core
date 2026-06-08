@@ -22,9 +22,6 @@ const (
 	// walSegmentSize is the maximum size of a WAL segment file before rotation.
 	walSegmentSize = 32 * 1024 * 1024 // 32 MB
 
-	// walDefaultReplay is whether to replay WAL on startup by default.
-	walDefaultReplay = true
-
 	// walDiskFreeMinBytes is the minimum free disk space before WAL writes are
 	// suspended. When available space drops below this threshold, writes are
 	// dropped and an error-level log is emitted.
@@ -33,11 +30,11 @@ const (
 
 // WALSegment is a single WAL journal file on disk.
 type WALSegment struct {
-	Path       string
-	FirstSeq   uint64
-	LastSeq    uint64
-	Size       int64
-	CreatedAt  time.Time
+	Path      string
+	FirstSeq  uint64
+	LastSeq   uint64
+	Size      int64
+	CreatedAt time.Time
 }
 
 // WALWriter provides a write-ahead log for the event bus.
@@ -46,13 +43,13 @@ type WALSegment struct {
 // Old segments are pruned when all active subscribers have passed their
 // sequence numbers.
 type WALWriter struct {
-	mu        sync.Mutex
-	dir       string
-	file      *os.File
-	writer    *bufio.Writer
+	mu          sync.Mutex
+	dir         string
+	file        *os.File
+	writer      *bufio.Writer
 	currentSize int64
-	seq       uint64
-	segments  []WALSegment
+	seq         uint64
+	segments    []WALSegment
 	// minSubscriberSeq is the lowest sequence number among all subscribers
 	// that use catch-up (SubscribeFrom). Segments wholly below this can
 	// be pruned.
@@ -61,9 +58,9 @@ type WALWriter struct {
 
 // walEntry is the on-disk format for a WAL event.
 type walEntry struct {
-	Seq       uint64             `json:"seq"`
-	Timestamp time.Time          `json:"timestamp"`
-	Event     contracts.Event    `json:"event"`
+	Seq       uint64          `json:"seq"`
+	Timestamp time.Time       `json:"timestamp"`
+	Event     contracts.Event `json:"event"`
 }
 
 // NewWALWriter opens or creates a WAL in the given directory.
@@ -284,7 +281,7 @@ func (w *WALWriter) discoverSegments() error {
 }
 
 func (w *WALWriter) scanLastSeq(path string) (uint64, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // path is constructed internally from WAL dir
 	if err != nil {
 		return 0, err
 	}
@@ -319,7 +316,7 @@ func (w *WALWriter) diskFree() (uint64, error) {
 	if err := syscall.Statfs(w.dir, &stat); err != nil {
 		return 0, err
 	}
-	return stat.Bavail * uint64(stat.Bsize), nil //nolint:unconvert
+	return stat.Bavail * uint64(stat.Bsize), nil //nolint:unconvert,gosec
 }
 
 func (w *WALWriter) openCurrentSegment() error {
@@ -331,7 +328,7 @@ func (w *WALWriter) openCurrentSegment() error {
 	}
 
 	// Create a new segment. 0600: owner-only, matches WAL directory permissions.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600) //nolint:gosec // path is internally constructed from WAL dir
 	if err != nil {
 		return fmt.Errorf("create segment %s: %w", path, err)
 	}
@@ -350,7 +347,7 @@ func (w *WALWriter) openCurrentSegment() error {
 }
 
 func (w *WALWriter) openSegment(path string) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600) //nolint:gosec // path is internally constructed from WAL dir
 	if err != nil {
 		return err
 	}
@@ -385,7 +382,7 @@ func (w *WALWriter) rotateLocked() error {
 }
 
 func (w *WALWriter) replaySegment(ctx context.Context, path string, sinceSeq uint64, fn func(contracts.Event) error) error {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // path is internally constructed from WAL dir
 	if err != nil {
 		return err
 	}

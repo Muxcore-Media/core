@@ -115,7 +115,6 @@ func (r *Registry) DependencyGraph(id string) ([]string, error) {
 	return nil, ErrNotImplemented
 }
 
-
 // Resolve returns a module entry by ID.
 func (r *Registry) Resolve(id string) (contracts.ModuleEntry, error) {
 	r.mu.RLock()

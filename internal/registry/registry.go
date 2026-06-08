@@ -319,7 +319,6 @@ func (r *Registry) DependencyGraph(id string) ([]string, error) {
 	return dependents, nil
 }
 
-
 func (r *Registry) Count() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

@@ -423,9 +423,9 @@ func (f *fakeWatchStream) Send(e *discoveryv1.ClusterEvent) error {
 	f.mu.Unlock()
 	return nil
 }
-func (f *fakeWatchStream) Context() context.Context       { return f.ctx }
-func (f *fakeWatchStream) SetHeader(metadata.MD) error    { return nil }
-func (f *fakeWatchStream) SendHeader(metadata.MD) error   { return nil }
-func (f *fakeWatchStream) SetTrailer(metadata.MD)         {}
-func (f *fakeWatchStream) SendMsg(any) error              { return nil }
-func (f *fakeWatchStream) RecvMsg(any) error              { return nil }
+func (f *fakeWatchStream) Context() context.Context     { return f.ctx }
+func (f *fakeWatchStream) SetHeader(metadata.MD) error  { return nil }
+func (f *fakeWatchStream) SendHeader(metadata.MD) error { return nil }
+func (f *fakeWatchStream) SetTrailer(metadata.MD)       {}
+func (f *fakeWatchStream) SendMsg(any) error            { return nil }
+func (f *fakeWatchStream) RecvMsg(any) error            { return nil }

@@ -95,7 +95,7 @@ func checkModuleCache(_ *config.Config) Result {
 	}
 	cacheDir := filepath.Join(home, ".muxcore", "modules")
 
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+	if err := os.MkdirAll(cacheDir, 0700); err != nil {
 		r.Fatal = fmt.Errorf("module cache directory %q is not writable: %w", cacheDir, err)
 		return r
 	}
@@ -121,7 +121,7 @@ func checkAuditLogDir(cfg *config.Config) Result {
 
 	dir := filepath.Dir(cfg.Audit.Path)
 
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		r.Fatal = fmt.Errorf("audit log directory %q is not writable: %w", dir, err)
 		return r
 	}
@@ -145,7 +145,7 @@ func checkCosignPub(_ *config.Config) Result {
 
 	for _, loc := range locations {
 		if _, err := os.Stat(loc); err == nil {
-			data, err := os.ReadFile(loc)
+			data, err := os.ReadFile(loc) //nolint:gosec // loc is from a hardcoded allow-list
 			if err != nil {
 				r.Fatal = fmt.Errorf("cosign.pub found at %q but not readable: %w", loc, err)
 				return r
