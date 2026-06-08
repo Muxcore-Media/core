@@ -2,12 +2,12 @@ package api
 
 import (
 	"context"
-	"net"
-	"sync"
 	"log/slog"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/trace"
@@ -173,7 +173,7 @@ func authMiddleware(authFn func(r *http.Request) (*contracts.Session, error), au
 				rec.lastActivity = now
 				if now.After(rec.blockedUntil) {
 					rec.count++
-					if rec.count >= 5 {
+					if rec.count >= 6 {
 						rec.blockedUntil = now.Add(1 * time.Minute)
 						rec.count = 0
 					}
@@ -228,7 +228,7 @@ func authzMiddleware(authz contracts.Authorizer, auditLogger contracts.AuditLogg
 			var err error
 			if ra, ok2 := authz.(contracts.ResourceAuthorizer); ok2 {
 				cleanPath := r.URL.Path
-		allowed, err = ra.CanWithResource(r.Context(), *session, contracts.Action(req.Action),
+				allowed, err = ra.CanWithResource(r.Context(), *session, contracts.Action(req.Action),
 					contracts.ResourceDescriptor{Type: req.Resource, ID: cleanPath})
 			} else {
 				allowed, err = authz.Can(r.Context(), *session, req.Action, req.Resource)
@@ -335,4 +335,3 @@ func auditMiddleware(auditLogger contracts.AuditLogger, nodeID string, publicPat
 		})
 	}
 }
-

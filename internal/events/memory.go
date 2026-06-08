@@ -211,7 +211,7 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 					"subscriber_count": fmt.Sprintf("%d", len(subs)),
 				},
 				TraceID: event.TraceID,
-				NodeID:   nodeID,
+				NodeID:  nodeID,
 			}
 			if err := auditLogger.Log(ctx, entry); err != nil {
 				slog.Error("audit log write failed", "event_type", event.Type, "error", err)
@@ -284,7 +284,7 @@ func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType str
 	// Audit the subscription if configured.
 	auditLogger := b.audit
 	if auditLogger != nil {
-		go func() {
+		go func() { //nolint:gosec // fire-and-forget audit; no request context in goroutine
 			entry := contracts.AuditEntry{
 				ID:        uuid.New().String(),
 				Timestamp: time.Now(),
@@ -296,7 +296,7 @@ func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType str
 				},
 				NodeID: b.nodeID,
 			}
-			if err := auditLogger.Log(context.Background(), entry); err != nil {
+			if err := auditLogger.Log(context.Background(), entry); err != nil { //nolint:gosec // fire-and-forget audit; no request context in goroutine
 				slog.Error("audit log write failed", "event_type", eventType, "error", err)
 			}
 		}()
@@ -380,7 +380,6 @@ func (b *MemoryBus) subscriberWorker(s *sub, timeout time.Duration) {
 	}
 }
 
-
 // UnsubscribeAll removes all subscriptions tagged with the given module ID.
 func (b *MemoryBus) UnsubscribeAll(ctx context.Context, moduleID string) error {
 	b.mu.Lock()
@@ -441,11 +440,11 @@ func (b *MemoryBus) SubscriptionStats() []SubscriptionStat {
 
 // SubscriberStat provides per-subscriber backpressure and latency metrics.
 type SubscriberStat struct {
-	EventType     string `json:"event_type"`
-	ModuleID      string `json:"module_id,omitempty"`
-	Processed     int64  `json:"processed"`
-	Dropped       int64  `json:"dropped"`
-	AvgLatencyUs  int64  `json:"avg_latency_us"`
+	EventType    string `json:"event_type"`
+	ModuleID     string `json:"module_id,omitempty"`
+	Processed    int64  `json:"processed"`
+	Dropped      int64  `json:"dropped"`
+	AvgLatencyUs int64  `json:"avg_latency_us"`
 }
 
 // SubscriberStats returns per-subscriber metrics for monitoring.

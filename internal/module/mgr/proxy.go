@@ -18,9 +18,9 @@ import (
 // TrackProcess attaches the exec.Cmd so Health() can report the actual
 // process state (running, exited, or crashed).
 type SidecarProxy struct {
-	info     contracts.ModuleInfo
-	exitErr  error       // set when the process exits (nil = running)
-	exitMu   sync.RWMutex
+	info    contracts.ModuleInfo
+	exitErr error // set when the process exits (nil = running)
+	exitMu  sync.RWMutex
 }
 
 // NewSidecarProxy creates a registry-compatible proxy for a sidecar module.
@@ -40,9 +40,9 @@ func (p *SidecarProxy) TrackProcess(cmd *exec.Cmd) {
 }
 
 func (p *SidecarProxy) Info() contracts.ModuleInfo    { return p.info }
-func (p *SidecarProxy) Init(_ context.Context) error   { return nil }
-func (p *SidecarProxy) Start(_ context.Context) error  { return nil }
-func (p *SidecarProxy) Stop(_ context.Context) error   { return nil }
+func (p *SidecarProxy) Init(_ context.Context) error  { return nil }
+func (p *SidecarProxy) Start(_ context.Context) error { return nil }
+func (p *SidecarProxy) Stop(_ context.Context) error  { return nil }
 
 // Health returns nil when the sidecar process is running, or an error
 // describing the exit status (crashed, exited with non-zero code, etc.).

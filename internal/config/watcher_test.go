@@ -33,7 +33,7 @@ func TestReload_SafeChanges(t *testing.T) {
 		"audit":  map[string]any{"path": "/tmp/audit.jsonl"},
 	}
 	data, _ := json.Marshal(newCfg)
-	os.WriteFile(path, data, 0644)
+	os.WriteFile(path, data, 0600)
 
 	prev := Default()
 	result, err := Reload(prev, path)
@@ -69,7 +69,7 @@ func TestReload_UnsafeChanges(t *testing.T) {
 		"log":  map[string]any{"level": "info", "format": "text"},
 	}
 	data, _ := json.Marshal(newCfg)
-	os.WriteFile(path, data, 0644)
+	os.WriteFile(path, data, 0600)
 
 	prev := Default()
 	result, err := Reload(prev, path)

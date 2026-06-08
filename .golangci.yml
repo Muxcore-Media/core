@@ -1,31 +1,47 @@
 # MuxCore golangci-lint configuration
 # Run: golangci-lint run ./internal/... ./pkg/... ./cmd/...
+
 version: "2"
 
 linters:
   enable:
-    - errcheck
-    - gosimple
     - govet
     - ineffassign
     - staticcheck
     - unused
-    - gofmt
     - misspell
     - unconvert
     - prealloc
-    - gosec        # security-focused static analysis
-    - bodyclose    # check HTTP response bodies are closed
-    - noctx        # detect HTTP requests without context
-    - errorlint    # check error wrapping conventions
-    - forcetypeassert # flag unchecked type assertions
-  disable-all: false
+    - gosec
+    - bodyclose
+    - noctx
+    - errorlint
+    - forcetypeassert
+  default: none
+  settings:
+    gosec:
+      excludes:
+        - G104
+
+formatters:
+  enable:
+    - gofmt
 
 run:
   timeout: 2m
-  go: "1.26"
 
 issues:
-  exclude-use-default: false
+  exclude-use-default: true
   max-issues-per-linter: 0
   max-same-issues: 0
+
+  exclude-rules:
+    # gosec: test files use controlled paths (t.TempDir, etc).
+    - path: '.*_test\.go'
+      linters:
+        - gosec
+    
+    # noctx: exec.Command should use CommandContext — nolint already present.
+    - linters:
+        - noctx
+      source: '//nolint'

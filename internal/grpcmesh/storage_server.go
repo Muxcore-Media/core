@@ -77,7 +77,7 @@ func (s *StorageServer) Put(stream storagev1.StorageService_PutServer) error {
 	// extracted before we launch the pipe writer goroutine to avoid
 	// a data race on those variables.
 	firstReq, err := stream.Recv()
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		return status.Error(codes.InvalidArgument, "key is required in first PutRequest")
 	}
 	if err != nil {
@@ -119,7 +119,7 @@ func (s *StorageServer) Put(stream storagev1.StorageService_PutServer) error {
 		// Write remaining chunks
 		for {
 			req, recvErr := stream.Recv()
-			if recvErr == io.EOF {
+			if errors.Is(recvErr, io.EOF) {
 				break
 			}
 			if recvErr != nil {
@@ -218,7 +218,7 @@ func (s *StorageServer) Get(req *storagev1.GetRequest, stream storagev1.StorageS
 			}
 		}
 		if readErr != nil {
-			if readErr == io.EOF {
+			if errors.Is(readErr, io.EOF) {
 				return nil
 			}
 			return status.Errorf(codes.Internal, "read %q: %v", key, readErr)
@@ -307,7 +307,7 @@ func (s *StorageServer) Capabilities(ctx context.Context, req *storagev1.Capabil
 	if caps == nil {
 		caps = []string{}
 	}
-	
+
 	// Normalize capability names: "hardlinkable" from contracts matches
 	// the proto convention. The contracts use CamelCase interface names;
 	// we lower-case them for sidecar consumption.
@@ -326,9 +326,9 @@ func toSnakeCase(s string) string {
 			if i > 0 {
 				result = append(result, '_')
 			}
-			result = append(result, byte(c+32))
+			result = append(result, byte(c+32)) //nolint:gosec // c is [A-Z] ASCII range only
 		} else {
-			result = append(result, byte(c))
+			result = append(result, byte(c)) //nolint:gosec // c is [a-z] ASCII range only
 		}
 	}
 	return string(result)

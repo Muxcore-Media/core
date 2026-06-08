@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -241,7 +242,7 @@ func (s *StorageClient) Get(ctx context.Context, key string) (io.ReadCloser, err
 	go func() {
 		for {
 			chunk, err := stream.Recv()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				pw.Close()
 				return
 			}

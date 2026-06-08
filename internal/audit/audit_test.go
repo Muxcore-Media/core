@@ -61,7 +61,7 @@ func TestFileLogger_WritesJSONL(t *testing.T) {
 	fl.Log(ctx, entry("e1", "user1", "read", "/api/foo"))
 	fl.Log(ctx, entry("e2", "user2", "write", "/api/bar"))
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // test file with controlled path
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestFileLogger_HMACSigning(t *testing.T) {
 	fl.Log(ctx, entry("e1", "user", "action", "resource"))
 
 	// Read back the written line and verify it has a Signature field.
-	f, _ := os.Open(filepath.Join(dir, "audit.jsonl"))
+	f, _ := os.Open(filepath.Join(dir, "audit.jsonl")) //nolint:gosec // test file with controlled path
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
@@ -185,7 +185,7 @@ func TestFileLogger_NoSignatureWithoutKey(t *testing.T) {
 	ctx := context.Background()
 	fl.Log(ctx, entry("e1", "user", "action", "resource"))
 
-	f, _ := os.Open(filepath.Join(dir, "audit.jsonl"))
+	f, _ := os.Open(filepath.Join(dir, "audit.jsonl")) //nolint:gosec // test file with controlled path
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
