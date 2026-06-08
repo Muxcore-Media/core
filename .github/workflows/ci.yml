@@ -15,8 +15,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf /tmp/* $GITHUB_WORKSPACE/.build-*
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-go@f111f3307d8850f501ac008e539eec361390f4ae # v5.3.0
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.26.3"
       - run: go mod verify
@@ -28,8 +28,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf /tmp/* $GITHUB_WORKSPACE/.build-*
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-go@f111f3307d8850f501ac008e539eec361390f4ae # v5.3.0
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.26.3"
       - run: go vet ./internal/... ./pkg/... ./cmd/... ./sdk/...
@@ -59,8 +59,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf /tmp/* $GITHUB_WORKSPACE/.build-*
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-go@f111f3307d8850f501ac008e539eec361390f4ae # v5.3.0
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.26.3"
       - run: go test -race -count=1 -timeout 120s ./internal/... ./pkg/...
@@ -78,13 +78,13 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf /tmp/* $GITHUB_WORKSPACE/.build-*
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-go@f111f3307d8850f501ac008e539eec361390f4ae # v5.3.0
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.26.3"
       - run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/... ./cmd/...
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v4 # v7.0.1
         with:
           name: coverage
           path: coverage.out
@@ -95,8 +95,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf /tmp/* $GITHUB_WORKSPACE/.build-*
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-go@f111f3307d8850f501ac008e539eec361390f4ae # v5.3.0
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.26.3"
       - run: go build -ldflags="-s -w -X github.com/Muxcore-Media/core/internal/version.Version=$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)" -o muxcored ./cmd/muxcored
@@ -116,8 +116,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf /tmp/* $GITHUB_WORKSPACE/.build-*
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-go@f111f3307d8850f501ac008e539eec361390f4ae # v5.3.0
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.26.3"
       - name: Build binary for provenance
@@ -177,7 +177,7 @@ jobs:
         run: |
           cosign attest --key env://COSIGN_PRIVATE_KEY --predicate provenance.json --type slsaprovenance1 muxcored
       - name: Upload provenance
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v4 # v7.0.1
         with:
           name: slsa-provenance
           path: provenance.json
@@ -188,7 +188,7 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf /tmp/* $GITHUB_WORKSPACE/.build-*
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@v4
       - name: Build Docker image
         run: docker build -t muxcore:ci .
 
@@ -198,8 +198,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf /tmp/* $GITHUB_WORKSPACE/.build-*
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-go@f111f3307d8850f501ac008e539eec361390f4ae # v5.3.0
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.26.3"
       - run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
