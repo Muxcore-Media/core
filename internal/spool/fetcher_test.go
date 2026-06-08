@@ -26,6 +26,11 @@ func TestFetchTag_HTTPS(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	// Use a client that trusts the test server's self-signed cert.
+	saved := client
+	t.Cleanup(func() { client = saved })
+	client = srv.Client()
+
 	got, err := FetchTag(srv.URL, "default")
 	if err != nil {
 		t.Fatalf("FetchTag failed: %v", err)

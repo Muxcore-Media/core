@@ -18,11 +18,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Muxcore-Media/contracts-reconciler/reconciler"
 	modulemgr "github.com/Muxcore-Media/core/internal/module"
-	modulev1 "github.com/Muxcore-Media/core/proto/gen/muxcore/module/v1"
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/pkg/contracts"
-	"github.com/Muxcore-Media/contracts-reconciler/reconciler"
+	modulev1 "github.com/Muxcore-Media/core/proto/gen/muxcore/module/v1"
 	"google.golang.org/grpc"
 )
 
@@ -99,7 +99,7 @@ func (m *Manager) Resolve(repoURL, version string) (*ModuleBinary, error) {
 		return nil, fmt.Errorf("clean build dir: %w", err)
 	}
 
-	cloneCmd := exec.Command("git", "clone", "--depth", "1", "--branch", version, repoURL, buildDir)
+	cloneCmd := exec.Command("git", "clone", "--depth", "1", "--branch", version, repoURL, buildDir) //nolint:gosec,noctx // repoURL/version from config; intended to build arbitrary modules
 	if out, err := cloneCmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("clone %s@%s: %w\n%s", repoURL, version, err, out)
 	}
@@ -127,20 +127,20 @@ func (m *Manager) Resolve(repoURL, version string) (*ModuleBinary, error) {
 	}
 
 	binPath := filepath.Join(buildDir, "muxcore-module")
-	buildCmd := exec.Command("go", "build", "-o", binPath, "./cmd/module/")
+	buildCmd := exec.Command("go", "build", "-o", binPath, "./cmd/module/") //nolint:gosec,noctx // binPath is internally constructed
 	buildCmd.Dir = buildDir
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("build %s: %w\n%s", moduleID, err, out)
 	}
 
 	cacheBinDir := filepath.Join(m.cacheDir, moduleID, version)
-	if err := os.MkdirAll(cacheBinDir, 0755); err != nil {
+	if err := os.MkdirAll(cacheBinDir, 0700); err != nil {
 		return nil, fmt.Errorf("create cache dir: %w", err)
 	}
 	cacheBinPath := filepath.Join(cacheBinDir, "muxcore-module")
 	if err := os.Rename(binPath, cacheBinPath); err != nil {
-		data, _ := os.ReadFile(binPath)
-		if err := os.WriteFile(cacheBinPath, data, 0755); err != nil {
+		data, _ := os.ReadFile(binPath)                                //nolint:gosec // binPath is internally constructed
+		if err := os.WriteFile(cacheBinPath, data, 0600); err != nil { //nolint:gosec // cacheBinPath is internally constructed
 			slog.Warn("failed to cache module binary", "id", moduleID, "error", err)
 		}
 	}
@@ -158,7 +158,7 @@ func (m *Manager) Spawn(ctx context.Context, bin *ModuleBinary) error {
 		return fmt.Errorf("module %s already running", bin.ID)
 	}
 
-	cmd := exec.CommandContext(ctx, bin.Path,
+	cmd := exec.CommandContext(ctx, bin.Path, //nolint:gosec // bin.Path is internally built from cache
 		"--muxcore-mesh-addr", m.meshAddr,
 		"--muxcore-module-id", bin.ID,
 	)
@@ -239,7 +239,7 @@ func (m *Manager) watchProcess(ctx context.Context, cmd *exec.Cmd, bin *ModuleBi
 		}
 
 		// Spawn a new process for the same binary.
-		newCmd := exec.CommandContext(ctx, bin.Path,
+		newCmd := exec.CommandContext(ctx, bin.Path, //nolint:gosec // bin.Path is internally built from cache
 			"--muxcore-mesh-addr", m.meshAddr,
 			"--muxcore-module-id", bin.ID,
 		)
@@ -523,13 +523,12 @@ func moduleIDFromRepo(repoURL string) string {
 	return filepath.Base(u.Path)
 }
 
-
 // reconcileContracts checks the module's muxcore.json for non-canonical contract
 // declarations and runs structural reconciliation against the canonical registry.
 // If interfaces match, applies go.mod replace directives to normalize imports.
 func (m *Manager) reconcileContracts(buildDir string) error {
 	muxcorePath := filepath.Join(buildDir, "muxcore.json")
-	data, err := os.ReadFile(muxcorePath)
+	data, err := os.ReadFile(muxcorePath) //nolint:gosec // path is internally constructed from buildDir
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil // no muxcore.json — nothing to reconcile

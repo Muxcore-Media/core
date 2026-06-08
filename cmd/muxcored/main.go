@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -24,15 +25,15 @@ import (
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
 	corehealth "github.com/Muxcore-Media/core/internal/health"
-	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
-	modulemgr "github.com/Muxcore-Media/core/internal/module/mgr"
 	modlifecycle "github.com/Muxcore-Media/core/internal/module"
+	modulemgr "github.com/Muxcore-Media/core/internal/module/mgr"
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/spool"
 	"github.com/Muxcore-Media/core/internal/startup"
 	"github.com/Muxcore-Media/core/internal/storage"
 	"github.com/Muxcore-Media/core/internal/version"
 	"github.com/Muxcore-Media/core/pkg/contracts"
+	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -263,7 +264,6 @@ func main() {
 	connPool := grpcmesh.NewConnPool()
 	discoveryGrpc.SetConnPool(connPool)
 
-
 	store := storage.NewOrchestrator(reg)
 	// Zero means "use default" — SetTimeouts ignores zero values.
 	store.SetTimeouts(storage.StorageTimeouts{
@@ -283,12 +283,12 @@ func main() {
 	// Optional Prometheus-compatible /metrics endpoint.
 	if os.Getenv("MUXCORE_METRICS_ENABLE") == "true" || os.Getenv("MUXCORE_METRICS_ENABLE") == "1" {
 		metricsHandler := api.MetricsHandler(&api.MetricsProvider{
-			DroppedEvents:       bus.DroppedEvents,
-			ActiveSubscribers:   bus.SubscriberCount,
-			ConnPoolSize:        connPool.Size,
-			RegistryModuleCount: reg.Count,
-			LeaderTerm:          discoveryGrpc.Term,
-			IsLeader:            discoveryGrpc.IsLeader,
+			DroppedEvents:        bus.DroppedEvents,
+			ActiveSubscribers:    bus.SubscriberCount,
+			ConnPoolSize:         connPool.Size,
+			RegistryModuleCount:  reg.Count,
+			LeaderTerm:           discoveryGrpc.Term,
+			IsLeader:             discoveryGrpc.IsLeader,
 			StorageProviderCount: store.ProviderCount,
 			ModuleDegradedCount: func() int {
 				var n int
@@ -426,7 +426,6 @@ func main() {
 		}
 	}
 
-
 	slog.Info("module registry ready", "count", reg.Count())
 
 	// Core self-health probes. These must not publish events or write to the
@@ -468,7 +467,7 @@ func main() {
 				return fmt.Errorf("audit log directory not writable: %w", err)
 			}
 			f.Close()
-			os.Remove(f.Name())
+			os.Remove(f.Name()) //nolint:gosec // path is from os.CreateTemp, internally controlled
 		}
 		return nil
 	})
@@ -491,13 +490,14 @@ func main() {
 	fatalErr := make(chan error, 1)
 
 	go func() {
-		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("api server", "error", err)
 			fatalErr <- err
 		}
 	}()
 
-	grpcLis, err := net.Listen("tcp", cfg.GRPC.Addr)
+	var lc net.ListenConfig
+	grpcLis, err := lc.Listen(context.Background(), "tcp", cfg.GRPC.Addr)
 	if err != nil {
 		slog.Error("grpc listen", "error", err)
 		os.Exit(1)

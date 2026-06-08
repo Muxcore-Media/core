@@ -46,4 +46,3 @@ func (n *NoopRouteRegistrar) RegisteredRoutes() []string {
 	copy(out, n.routes)
 	return out
 }
-

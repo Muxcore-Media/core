@@ -47,7 +47,7 @@ func TestLoad_ValidFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	content := `{"server":{"addr":":9090","read_timeout":30,"write_timeout":30},"log":{"level":"debug","format":"json"}}`
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
 	clearEnv(t)
@@ -73,7 +73,7 @@ func TestLoad_ValidFile(t *testing.T) {
 func TestLoad_MalformedJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.json")
-	os.WriteFile(path, []byte("{bad json"), 0644)
+	os.WriteFile(path, []byte("{bad json"), 0600)
 
 	_, err := Load(path)
 	if err == nil {
@@ -125,8 +125,8 @@ func TestValidate_EmptyAddr_File(t *testing.T) {
 	clearEnv(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty_addr.json")
-	os.WriteFile(path, []byte(`{"server":{"addr":""}}`), 0644)
-	
+	os.WriteFile(path, []byte(`{"server":{"addr":""}}`), 0600)
+
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected validation error for empty addr")
@@ -136,7 +136,7 @@ func TestValidate_EmptyAddr_File(t *testing.T) {
 func TestValidate_ZeroReadTimeout(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	os.WriteFile(path, []byte(`{"server":{"read_timeout":0}}`), 0644)
+	os.WriteFile(path, []byte(`{"server":{"read_timeout":0}}`), 0600)
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected validation error for zero read timeout")
@@ -146,7 +146,7 @@ func TestValidate_ZeroReadTimeout(t *testing.T) {
 func TestValidate_ZeroWriteTimeout(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	os.WriteFile(path, []byte(`{"server":{"write_timeout":0}}`), 0644)
+	os.WriteFile(path, []byte(`{"server":{"write_timeout":0}}`), 0600)
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected validation error for zero write timeout")
@@ -193,7 +193,7 @@ func TestLoad_EnvOverridesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	content := `{"server":{"addr":":9090"},"log":{"level":"debug"}}`
-	os.WriteFile(path, []byte(content), 0644)
+	os.WriteFile(path, []byte(content), 0600)
 
 	os.Setenv("MUXCORE_ADDR", ":3000")
 	os.Setenv("MUXCORE_LOG_LEVEL", "error")
@@ -214,7 +214,7 @@ func TestLoad_EmptyFile_UsesDefaults(t *testing.T) {
 	clearEnv(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.json")
-	os.WriteFile(path, []byte{}, 0644)
+	os.WriteFile(path, []byte{}, 0600)
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -229,7 +229,7 @@ func TestLoad_PartialFile_MergesDefaults(t *testing.T) {
 	clearEnv(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "partial.json")
-	os.WriteFile(path, []byte(`{"server":{"addr":":7070"}}`), 0644)
+	os.WriteFile(path, []byte(`{"server":{"addr":":7070"}}`), 0600)
 
 	cfg, err := Load(path)
 	if err != nil {

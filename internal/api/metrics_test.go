@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,7 +10,7 @@ import (
 
 func TestMetricsHandler_AllNilProviders(t *testing.T) {
 	h := MetricsHandler(&MetricsProvider{})
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
 
@@ -26,7 +27,7 @@ func TestMetricsHandler_DroppedEvents(t *testing.T) {
 	h := MetricsHandler(&MetricsProvider{
 		DroppedEvents: func() int64 { return 42 },
 	})
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
 
@@ -43,7 +44,7 @@ func TestMetricsHandler_ActiveSubscribers(t *testing.T) {
 	h := MetricsHandler(&MetricsProvider{
 		ActiveSubscribers: func() int { return 7 },
 	})
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
 
@@ -60,7 +61,7 @@ func TestMetricsHandler_ConnPoolSize(t *testing.T) {
 	h := MetricsHandler(&MetricsProvider{
 		ConnPoolSize: func() int { return 3 },
 	})
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
 
@@ -75,7 +76,7 @@ func TestMetricsHandler_RegistryModuleCount(t *testing.T) {
 		RegistryModuleCount: func() int { return 5 },
 	})
 	rec := httptest.NewRecorder()
-	h(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	h(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil))
 
 	if !strings.Contains(rec.Body.String(), "muxcore_registry_module_count") {
 		t.Error("expected registry module count metric")
@@ -87,7 +88,7 @@ func TestMetricsHandler_LeaderTerm(t *testing.T) {
 		LeaderTerm: func() uint64 { return 9 },
 	})
 	rec := httptest.NewRecorder()
-	h(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	h(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil))
 
 	body := rec.Body.String()
 	if !strings.Contains(body, "muxcore_cluster_leader_term") {
@@ -103,7 +104,7 @@ func TestMetricsHandler_IsLeader_True(t *testing.T) {
 		IsLeader: func() bool { return true },
 	})
 	rec := httptest.NewRecorder()
-	h(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	h(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil))
 
 	body := rec.Body.String()
 	if !strings.Contains(body, "muxcore_cluster_is_leader") {
@@ -119,7 +120,7 @@ func TestMetricsHandler_IsLeader_False(t *testing.T) {
 		IsLeader: func() bool { return false },
 	})
 	rec := httptest.NewRecorder()
-	h(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	h(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil))
 
 	body := rec.Body.String()
 	if !strings.Contains(body, " 0\n") {
@@ -132,7 +133,7 @@ func TestMetricsHandler_ContentType(t *testing.T) {
 		DroppedEvents: func() int64 { return 0 },
 	})
 	rec := httptest.NewRecorder()
-	h(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	h(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil))
 
 	ct := rec.Header().Get("Content-Type")
 	if !strings.HasPrefix(ct, "text/plain") {
@@ -145,7 +146,7 @@ func TestMetricsHandler_PrometheusFormat(t *testing.T) {
 		DroppedEvents: func() int64 { return 1 },
 	})
 	rec := httptest.NewRecorder()
-	h(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	h(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil))
 
 	body := rec.Body.String()
 	// Prometheus format requires # HELP and # TYPE lines.
@@ -167,7 +168,7 @@ func TestMetricsHandler_AllMetrics(t *testing.T) {
 		IsLeader:            func() bool { return true },
 	})
 	rec := httptest.NewRecorder()
-	h(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	h(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil))
 
 	expectedMetrics := []string{
 		"muxcore_event_bus_dropped_events_total",

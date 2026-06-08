@@ -1,6 +1,7 @@
 package spool
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,7 +39,11 @@ func FetchTag(spoolURL, tagName string) (*contracts.TagDefinition, error) {
 		return nil, fmt.Errorf("spool: only HTTPS URLs are allowed, got %q", u.Scheme)
 	}
 
-	resp, err := client.Get(fetchURL)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, fetchURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("spool: create request: %w", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("spool: fetch %s: %w", fetchURL, err)
 	}
@@ -60,4 +65,3 @@ func FetchTag(spoolURL, tagName string) (*contracts.TagDefinition, error) {
 
 	return &tag, nil
 }
-

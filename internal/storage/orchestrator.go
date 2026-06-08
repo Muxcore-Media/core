@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -477,6 +477,7 @@ func (o *Orchestrator) CapabilityCheck(ctx context.Context, key string) ([]strin
 	}
 	return caps, nil
 }
+
 // auditStorage records a storage operation via the audit logger.
 // It uses the caller's context for cancellation and limits concurrent audit
 // goroutines to 100 to prevent unbounded goroutine bursts.

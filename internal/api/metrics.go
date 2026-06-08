@@ -49,7 +49,7 @@ func MetricsHandler(p *MetricsProvider) http.HandlerFunc {
 				sb.WriteByte('}')
 			}
 			sb.WriteByte(' ')
-			sb.WriteString(fmt.Sprintf("%g", value))
+			fmt.Fprintf(&sb, "%g", value)
 			sb.WriteByte('\n')
 		}
 
@@ -70,7 +70,7 @@ func MetricsHandler(p *MetricsProvider) http.HandlerFunc {
 				sb.WriteByte('}')
 			}
 			sb.WriteByte(' ')
-			sb.WriteString(fmt.Sprintf("%g", value))
+			fmt.Fprintf(&sb, "%g", value)
 			sb.WriteByte('\n')
 		}
 

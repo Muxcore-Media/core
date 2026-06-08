@@ -76,7 +76,7 @@ func TestScanModuleSource_Clean(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte(`package main
 func main() {}
-`), 0644)
+`), 0600)
 
 	found, err := scanModuleSource(dir)
 	if err != nil {
@@ -92,7 +92,7 @@ func TestScanModuleSource_DetectsUnsafe(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "bad.go"), []byte(`package main
 import "unsafe"
 var _ = unsafe.Pointer(nil)
-`), 0644)
+`), 0600)
 
 	_, err := scanModuleSource(dir)
 	if err == nil {
@@ -105,7 +105,7 @@ func TestScanModuleSource_DetectsCgo(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "cgo.go"), []byte(`package main
 // #include <stdio.h>
 import "C"
-`), 0644)
+`), 0600)
 
 	_, err := scanModuleSource(dir)
 	if err == nil {
@@ -117,7 +117,7 @@ func TestScanModuleSource_DetectsGoGenerate(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "gen.go"), []byte(`package main
 //go:generate go run tool.go
-`), 0644)
+`), 0600)
 
 	found, err := scanModuleSource(dir)
 	if err != nil {
@@ -133,7 +133,7 @@ func TestScanModuleSource_DetectsGoGenerate(t *testing.T) {
 
 func TestScanModuleSource_SkipsNonGoFiles(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "readme.txt"), []byte(`import "C" unsafe`), 0644)
+	os.WriteFile(filepath.Join(dir, "readme.txt"), []byte(`import "C" unsafe`), 0600)
 
 	found, err := scanModuleSource(dir)
 	if err != nil {
@@ -165,7 +165,7 @@ func TestScanModuleSource_UnsafeInCommentAllowed(t *testing.T) {
 const note = "avoiding unsafe pointer arithmetic"
 
 func main() {}
-`), 0644)
+`), 0600)
 
 	found, err := scanModuleSource(dir)
 	if err != nil {
@@ -181,7 +181,7 @@ func TestScanModuleSource_BlankUnsafeImportRejected(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "blank.go"), []byte(`package main
 
 import _ "unsafe"
-`), 0644)
+`), 0600)
 
 	_, err := scanModuleSource(dir)
 	if err == nil {

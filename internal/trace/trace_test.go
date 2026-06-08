@@ -65,7 +65,7 @@ func TestHTTPMiddleware_GeneratesWhenMissing(t *testing.T) {
 	})
 
 	mw := HTTPMiddleware(handler)
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", nil)
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, req)
 
@@ -87,7 +87,7 @@ func TestHTTPMiddleware_PreservesProvided(t *testing.T) {
 	})
 
 	mw := HTTPMiddleware(handler)
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", nil)
 	req.Header.Set("X-Trace-Id", providedID)
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, req)

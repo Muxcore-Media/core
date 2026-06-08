@@ -56,7 +56,7 @@ func isValidTraceID(s string) bool {
 	}
 	// Also accept hex strings (common in distributed tracing)
 	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || c == '-') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') && c != '-' {
 			return false
 		}
 	}
