@@ -110,9 +110,9 @@ func (r *Registry) DependencyGraph(id string) ([]string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if _, ok := r.modules[id]; !ok {
-		return nil, fmt.Errorf(module %q not found, id)
+		return nil, fmt.Errorf("module %q not found", id)
 	}
-	return nil, nil
+	return nil, ErrNotImplemented
 }
 
 
@@ -139,3 +139,8 @@ func (r *Registry) ListAll() []contracts.ModuleEntry {
 	}
 	return result
 }
+
+// ErrNotImplemented is returned by mock methods that intentionally
+// do not implement the full contract. Callers should either test against
+// the real implementation or provide their own mock.
+var ErrNotImplemented = fmt.Errorf("not implemented in mock registry")

@@ -146,9 +146,17 @@ func (s *Server) AddPublicPath(path string) {
 }
 
 // rebuildChain constructs the middleware chain.
+// Order: MaxBytesReader (outermost) → security headers → recovery → rate limit → auth → authz → audit → logging → trace.
 func (s *Server) rebuildChain() {
+	tlsActive := (s.certFile != "" && s.keyFile != "") ||
+		(os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") != "true" && os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") != "1")
+
 	var h http.Handler = s.mux
-	h = securityHeadersMiddleware(h, s.cspHeader)
+	// Enforce request body size limit via MaxBytesReader to prevent
+	// memory exhaustion (CWE-770). Applied outermost so oversized
+	// bodies are rejected before any handler logic runs.
+	h = maxBodyMiddleware(h)
+	h = securityHeadersMiddleware(h, s.cspHeader, tlsActive)
 	h = recoveryMiddleware(h)
 	if s.rateLimiter != nil && s.rateLimiter.Enabled() {
 		h = rateLimitMiddleware(s.rateLimiter, s.publicPaths)(h)
@@ -226,7 +234,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Error("writeJSON: encode failed", "error", err)
+	}
 }
 
 func withLogging(next http.Handler) http.Handler {
@@ -280,6 +290,20 @@ func extractClientIP(r *http.Request) string {
 
 // parseRightmostXFF extracts and validates the rightmost IP from an
 // X-Forwarded-For header value. Returns the IP string, or "" if invalid.
+// maxBodySize is the maximum HTTP request body size (10 MB), enforced via
+// http.MaxBytesReader to prevent memory exhaustion attacks (CWE-770).
+const maxBodySize = 10 << 20
+
+// maxBodyMiddleware wraps the handler with http.MaxBytesReader to enforce
+// a maximum request body size. Requests exceeding the limit receive a
+// 413 Payload Too Large response.
+func maxBodyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+		next.ServeHTTP(w, r)
+	})
+}
+
 func parseRightmostXFF(xff string) string {
 	// Split on commas; the rightmost entry is the immediate upstream proxy.
 	parts := strings.Split(xff, ",")

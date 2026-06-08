@@ -1,11 +1,14 @@
 package contracts
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // BackupInfo describes a completed backup.
 type BackupInfo struct {
 	ID        string
-	Timestamp int64
+	Timestamp time.Time
 	Size      int64
 	Modules   []string // module IDs included in the backup
 }

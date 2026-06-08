@@ -1,9 +1,11 @@
 package config
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -46,15 +48,56 @@ type LogConfig struct {
 }
 
 // DatabaseConfig holds database connection settings (driver provided by database module).
+// The URL field may contain credentials (e.g., postgres://user:pass@host/db).
+// LogValue redacts the URL when logged via slog to prevent credential exposure.
 type DatabaseConfig struct {
 	Driver string `json:"driver"`
 	URL    string `json:"url"`
 }
 
+// LogValue implements slog.LogValuer to redact credentials from the URL
+// when this config is logged. Returns the URL with the userinfo portion
+// replaced with "***".
+func (d DatabaseConfig) LogValue() slog.Value {
+	redacted := DatabaseConfig{Driver: d.Driver, URL: redactURL(d.URL)}
+	return slog.GroupValue(
+		slog.String("driver", redacted.Driver),
+		slog.String("url", redacted.URL),
+	)
+}
+
 // CacheConfig holds cache connection settings (driver provided by cache module).
+// The URL field may contain credentials (e.g., redis://user:pass@host:6379).
+// LogValue redacts the URL when logged via slog to prevent credential exposure.
 type CacheConfig struct {
 	Driver string `json:"driver"`
 	URL    string `json:"url"`
+}
+
+// LogValue implements slog.LogValuer to redact credentials from the URL
+// when this config is logged.
+func (c CacheConfig) LogValue() slog.Value {
+	redacted := CacheConfig{Driver: c.Driver, URL: redactURL(c.URL)}
+	return slog.GroupValue(
+		slog.String("driver", redacted.Driver),
+		slog.String("url", redacted.URL),
+	)
+}
+
+// redactURL returns the URL with the userinfo portion replaced with "***".
+// If the URL cannot be parsed, returns "<redacted>" to avoid leaking raw credentials.
+func redactURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<redacted>"
+	}
+	if u.User != nil {
+		u.User = url.User("***")
+	}
+	return u.String()
 }
 
 // AuditConfig holds audit logging settings.
@@ -192,14 +235,22 @@ func (c *Config) validate() error {
 		errs = append(errs, "server.write_timeout must be positive")
 	}
 
+	// Validate already-normalized values (case normalization done in Load()).
 	validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
-	if !validLevels[strings.ToLower(c.Log.Level)] {
+	if !validLevels[c.Log.Level] {
 		errs = append(errs, fmt.Sprintf("log.level must be one of: debug, info, warn, error (got %q)", c.Log.Level))
 	}
 
 	validFormats := map[string]bool{"text": true, "json": true}
-	if !validFormats[strings.ToLower(c.Log.Format)] {
+	if !validFormats[c.Log.Format] {
 		errs = append(errs, fmt.Sprintf("log.format must be one of: text, json (got %q)", c.Log.Format))
+	}
+
+	// Validate TLS certificate files can be loaded at startup (fail-fast on misconfiguration).
+	if c.Server.CertFile != "" || c.Server.KeyFile != "" {
+		if _, err := tls.LoadX509KeyPair(c.Server.CertFile, c.Server.KeyFile); err != nil {
+			errs = append(errs, fmt.Sprintf("server TLS cert/key invalid: %v", err))
+		}
 	}
 
 	if len(errs) > 0 {

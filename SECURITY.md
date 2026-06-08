@@ -23,28 +23,39 @@ Acknowledgment within **72 hours**. Target patch: **7 days** critical, **30 days
 
 ### Implemented
 
-- **HTTP API**: Pluggable auth middleware (bearer token), rate limiting, audit logging, security headers (X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy)
-- **gRPC mesh**: TLS encryption (required in production), mTLS with CA verification (when configured)
-- **Cluster discovery**: Join token authentication via gRPC metadata
-- **Storage**: Key sanitization (path traversal prevention), max object size enforcement (100MB)
-- **Event bus**: Per-handler timeouts (30s), structured logging, source node validation
-- **Config**: Environment variable overrides with validation, seed node address validation
+- **HTTP API**: Pluggable auth middleware (bearer token), rate limiting, audit logging, security headers (X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy, CSP, HSTS when TLS active)
+- **gRPC mesh**: TLS encryption (required in production), mTLS with CA verification (when configured), keepalive enforcement
+- **Cluster discovery**: Join token authentication via gRPC metadata (constant-time comparison)
+- **Storage**: Key sanitization (path traversal prevention), max object size enforcement (100MB), capability-based access control via CallPolicyProvider
+- **Event bus**: Per-handler timeouts (30s), structured logging, source node validation, deny-by-default publish policy with capability enforcement via PublishPolicyProvider
+- **Module capability enforcement**: Built-in call policy (mesh routing + storage access) and publish policy (event dispatch), both backed by the module registry. Capabilities are soft-enforced by default; set `MUXCORE_STRICT_CALL_POLICY=true` for hard denial.
+- **Config**: Environment variable overrides with validation, seed node address validation, TLS cert validation at boot
 - **Docker**: Non-root user, credential file exclusion from builds, HEALTHCHECK; read-only root filesystem and capability dropping applied via docker-compose.yml
 - **CI/CD**: Read-only GITHUB_TOKEN, actions pinned by commit SHA, verified binary downloads with SHA256 checksums, govulncheck at pinned version, fuzz testing
 
 ### In Progress
 
-- **RBAC enforcement**: Authorizer interface is defined but enforcement is only wired at the HTTP API layer. gRPC endpoints and event bus dispatch do not perform authorization checks — any authenticated connection can invoke any gRPC method or publish any event.
-- **Cluster join authentication**: Token required; mTLS CA verification available; cross-node routing not yet implemented
+- **RBAC enforcement**: Authorizer interface is defined and enforced at the HTTP API layer. gRPC interceptor supports configurable Authorizer+IdentityProvider enforcement via `AuthInterceptor.SetAuthorizer()`/`SetIdentityProvider()` — enforcement activates when an auth module registers both providers.
 - **Auth failure rate limiting**: Per-IP brute-force protection with fixed 1-minute backoff after 5 failures
 
-### Planned (Not Yet Implemented)
+### Completed Since Last Audit
 
-- **Module capability enforcement**: Capabilities are declared but not runtime-enforced. Capability checks in event dispatch, mesh routing, and storage access are planned.
-- **Module sandboxing** (gVisor): Not implemented — modules run in-process with no isolation.
-- **OIDC / SSO**: No implementation exists yet.
-- **Event authorization**: No per-event-type access control.
-- **gRPC interceptors**: Auth, rate limiting, and logging not yet wired as gRPC interceptors.
+- **Cross-node routing**: PRs #54 and #55 resolved cross-node routing gaps. Mesh routing now functional across cluster nodes.
+- **Cluster join authentication**: Token required; mTLS CA verification available; cross-node routing implemented
+- **May 2026 audit fixes (PR #58, #59, #60)**:
+  - Credential URL redaction in structured logs (slog.LogValuer on DatabaseConfig/CacheConfig)
+  - Request body size enforcement via MaxBytesReader middleware (10MB limit)
+  - CI lint failures now fail the build (removed `|| true` / `continue-on-error`)
+  - Stream fallback read capped at MaxObjectSize (CWE-770)
+  - JSON encode errors logged instead of silently dropped
+  - Insecure heartbeat transport requires explicit env opt-in
+  - Wiki call policy docs corrected to deny-by-default
+  - Spool checksum verification support (TagModule.Checksum field)
+  - gRPC auth interceptor supports configurable Authorizer+IdentityProvider enforcement
+  - SidecarProxy.Health reports actual process exit status
+  - Docker HEALTHCHECK works with both HTTP and HTTPS
+  - Seed node auto-join TLS guard, gRPC keepalive, CRLF trace blocker, TLS boot validation
+- **Module capability enforcement (PR #62)**: Built-in call policy and publish policy wired at bootstrap. Storage gRPC server enforces "storage" capability on all operations. Event bus deny-by-default with PublishPolicyProvider enforcement.
 
 ## Security Model
 
@@ -54,9 +65,11 @@ run with the capabilities it declared. A module that declares only
 `downloader.torrent` should not be able to read the filesystem or call the
 notification system.
 
-**Current state (2026-05-26)**: Module capabilities are self-declared and not
-enforced at runtime. The boundaries described above are the design target, not
-the current reality. Capability enforcement is planned for a future release.
+**Current state (2026-05-27)**: Module capabilities are enforced at runtime via
+call policy (mesh routing + storage access) and publish policy (event dispatch).
+Modules run as sidecar processes — they connect to core via gRPC and execute
+with the same OS-level privileges as the core process. Sandboxing is a
+deployment concern (Docker, K8s, gVisor), not a core concern.
 
 When reporting vulnerabilities, frame issues against both the intended and
 actual boundaries. A bug in a module's business logic that stays within its

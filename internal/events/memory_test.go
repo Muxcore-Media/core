@@ -10,12 +10,18 @@ import (
 	"github.com/Muxcore-Media/core/pkg/contracts"
 )
 
+// permissivePolicy allows all event publication for testing.
+type permissivePolicy struct{}
+
+func (permissivePolicy) CanPublish(_ context.Context, _, _ string) (bool, error) { return true, nil }
+
 // ---------------------------------------------------------------------------
 // Subscribe / Publish
 // ---------------------------------------------------------------------------
 
 func TestPublishSubscribe(t *testing.T) {
 	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
 
 	received := make(chan contracts.Event, 1)
 	if err := bus.Subscribe(context.Background(), "test.event",
@@ -43,6 +49,7 @@ func TestPublishSubscribe(t *testing.T) {
 
 func TestPublishSubscribeMultipleEvents(t *testing.T) {
 	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
 
 	received := make(chan struct{}, 3)
 	if err := bus.Subscribe(context.Background(), "test.event",
@@ -75,6 +82,7 @@ func TestPublishSubscribeMultipleEvents(t *testing.T) {
 
 func TestWildcardSubscribe(t *testing.T) {
 	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
 
 	received := make(chan contracts.Event, 2)
 	if err := bus.Subscribe(context.Background(), "*",
@@ -107,6 +115,7 @@ func TestWildcardSubscribe(t *testing.T) {
 
 func TestWildcardAndSpecificSubscribe(t *testing.T) {
 	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
 
 	var mu sync.Mutex
 	var muWild, muSpecific []string
@@ -166,6 +175,7 @@ func TestWildcardAndSpecificSubscribe(t *testing.T) {
 
 func TestUnsubscribe(t *testing.T) {
 	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
 
 	called := false
 	handler := func(_ context.Context, e contracts.Event) error {
@@ -194,6 +204,7 @@ func TestUnsubscribe(t *testing.T) {
 
 func TestUnsubscribeNoopForWrongType(t *testing.T) {
 	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
 
 	received := make(chan contracts.Event, 1)
 	handler := func(_ context.Context, e contracts.Event) error {
@@ -217,6 +228,7 @@ func TestUnsubscribeNoopForWrongType(t *testing.T) {
 
 func TestUnsubscribeNoopForDifferentHandler(t *testing.T) {
 	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
 
 	received := make(chan contracts.Event, 1)
 	handler := func(_ context.Context, e contracts.Event) error {
@@ -247,6 +259,7 @@ func TestUnsubscribeNoopForDifferentHandler(t *testing.T) {
 
 func TestRequestReply(t *testing.T) {
 	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
 
 	// Handler that responds to "test.req" with a reply event.
 	if err := bus.Subscribe(context.Background(), "test.req",
@@ -284,6 +297,7 @@ func TestRequestReply(t *testing.T) {
 
 func TestRequestTimeout(t *testing.T) {
 	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
 	// No handler subscribed, so no reply will come.
 	_, err := bus.Request(context.Background(), contracts.Event{Type: "test.req"}, time.Millisecond)
 	if err == nil {
@@ -297,6 +311,7 @@ func TestRequestTimeout(t *testing.T) {
 
 func TestRequestContextCancel(t *testing.T) {
 	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
@@ -312,6 +327,7 @@ func TestRequestContextCancel(t *testing.T) {
 
 func TestMultipleSubscribers(t *testing.T) {
 	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
 
 	const numHandlers = 5
 	received := make(chan int, numHandlers)
@@ -353,6 +369,7 @@ func TestMultipleSubscribers(t *testing.T) {
 
 func TestAutoIDTimestamp(t *testing.T) {
 	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
 
 	received := make(chan contracts.Event, 1)
 	bus.Subscribe(context.Background(), "test",
@@ -379,6 +396,7 @@ func TestAutoIDTimestamp(t *testing.T) {
 
 func TestPreservesProvidedIDTimestamp(t *testing.T) {
 	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
 
 	received := make(chan contracts.Event, 1)
 	bus.Subscribe(context.Background(), "test",

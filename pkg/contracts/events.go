@@ -22,12 +22,36 @@ type Event struct {
 
 // PublishPolicyProvider determines whether a caller is authorized to publish
 // events of a given type. Implemented by modules that define event-level
-// access control. The event bus consults this before dispatching; if no
-// provider is registered, all events are published (open mode).
+// access control. The event bus consults this before dispatching.
+//
+// SECURITY: When no PublishPolicyProvider is registered, the event bus MUST
+// deny all event publication. This is a change from the previous behavior
+// where the default was open mode. Deployments that want open mode must
+// register an explicit permissive policy provider.
+//
+// For resource-level event authorization, implement the optional
+// ResourcePublishPolicyProvider interface. The event bus will type-assert
+// and use the richer interface when available.
 type PublishPolicyProvider interface {
 	// CanPublish returns (true, nil) if the caller is permitted to publish
 	// events of the given type. Returns (false, nil) if publishing is denied.
 	CanPublish(ctx context.Context, callerID, eventType string) (bool, error)
+}
+
+// ResourcePublishPolicyProvider is an optional extension that enables
+// resource-level event authorization with access to the full event payload.
+// Implement this alongside PublishPolicyProvider to enable checks like
+// "can this caller publish media.updated events for media item X?".
+//
+// When a provider implements this interface, the event bus calls
+// CanPublishEvent before CanPublish, giving the provider full event context.
+type ResourcePublishPolicyProvider interface {
+	PublishPolicyProvider
+
+	// CanPublishEvent performs event-level authorization with access to
+	// the full event payload. This enables resource-level checks beyond
+	// the type-level check in CanPublish.
+	CanPublishEvent(ctx context.Context, callerID string, event Event) (bool, error)
 }
 
 // EventHandler is a callback invoked when a matching event is published.

@@ -3,6 +3,7 @@ package contracts
 import (
 	"context"
 	"io"
+	"time"
 )
 
 type ObjectInfo struct {
@@ -10,7 +11,7 @@ type ObjectInfo struct {
 	Size         int64
 	ContentType  string
 	ETag         string
-	LastModified int64
+	LastModified time.Time
 	Metadata     map[string]string
 }
 
@@ -80,6 +81,12 @@ type StorageEvent struct {
 	Type StorageEventType
 	Key  string
 }
+
+// --- Storage tiering (RESERVED — planned for pre-1.0) ---
+// These types are defined ahead of a tiered storage module. No implementation
+// exists yet. The TieredProvider interface and related types are not consumed
+// by any code outside this file. They will be activated when a tiered storage
+// module ships.
 
 // EventStorageTierTransition is emitted when an object moves between tiers.
 const EventStorageTierTransition = "storage.tier.transition"

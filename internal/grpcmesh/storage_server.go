@@ -2,8 +2,8 @@ package grpcmesh
 
 import (
 	"context"
-	"fmt"
 	"io"
+	"log/slog"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	storagev1 "github.com/Muxcore-Media/core/proto/gen/muxcore/storage/v1"
@@ -15,9 +15,14 @@ import (
 // StorageServer implements the StorageService gRPC service, wrapping
 // core's StorageOrchestrator so sidecar modules can access storage
 // without in-process Fabric access.
+//
+// When a CallPolicyProvider is configured via SetCallPolicy(), every
+// storage operation checks whether the caller module has the \"storage\"
+// capability. Without a policy, all access is denied (deny-by-default).
 type StorageServer struct {
 	storagev1.UnimplementedStorageServiceServer
-	store contracts.StorageOrchestrator
+	store      contracts.StorageOrchestrator
+	callPolicy contracts.CallPolicyProvider
 }
 
 // NewStorageServer creates a StorageServer backed by the given orchestrator.
@@ -25,54 +30,106 @@ func NewStorageServer(store contracts.StorageOrchestrator) *StorageServer {
 	return &StorageServer{store: store}
 }
 
+// SetCallPolicy attaches a call policy provider for capability enforcement.
+// When set, every storage operation checks the caller's capabilities before
+// accessing data. Pass nil to disable (dev/testing only).
+func (s *StorageServer) SetCallPolicy(cp contracts.CallPolicyProvider) {
+	s.callPolicy = cp
+}
+
 // RegisterWithGRPC registers this server with a gRPC server.
 func (s *StorageServer) RegisterWithGRPC(srv *grpc.Server) {
 	storagev1.RegisterStorageServiceServer(srv, s)
 }
 
+// checkStorageAccess verifies that the caller is authorized to perform
+// storage operations. Returns nil if access is granted.
+func (s *StorageServer) checkStorageAccess(ctx context.Context, method string) error {
+	if s.callPolicy == nil {
+		return status.Error(codes.PermissionDenied, "storage access denied: no call policy configured")
+	}
+	callerID := contracts.CallerIDFromContext(ctx)
+	allowed, err := s.callPolicy.AllowCall(ctx, callerID, "storage", method)
+	if err != nil {
+		return status.Errorf(codes.Internal, "storage policy error: %v", err)
+	}
+	if !allowed {
+		return status.Errorf(codes.PermissionDenied, "storage access denied: caller %q lacks storage capability", callerID)
+	}
+	return nil
+}
+
 // Put receives a client-streamed object and stores it.
 func (s *StorageServer) Put(stream storagev1.StorageService_PutServer) error {
+	if err := s.checkStorageAccess(stream.Context(), "write"); err != nil {
+		return err
+	}
+
 	var key string
 	var totalSize int64
 	var wrote int64
-	var pr *io.PipeReader
-	var pw *io.PipeWriter
 
-	pr, pw = io.Pipe()
-
-	// Read chunks in a goroutine, pipe them to the orchestrator.
-	go func() {
-		defer pw.Close()
-		for {
-			req, err := stream.Recv()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				pw.CloseWithError(err)
-				return
-			}
-			if key == "" {
-				key = req.Key
-				totalSize = req.TotalSize
-			}
-			chunk := req.Chunk
-			wrote += int64(len(chunk))
-			if _, err := pw.Write(chunk); err != nil {
-				pw.CloseWithError(err)
-				return
-			}
-		}
-	}()
-
-	// Store via orchestrator.
+	// Read first chunk synchronously — key and totalSize must be
+	// extracted before we launch the pipe writer goroutine to avoid
+	// a data race on those variables.
+	firstReq, err := stream.Recv()
+	if err == io.EOF {
+		return status.Error(codes.InvalidArgument, "key is required in first PutRequest")
+	}
+	if err != nil {
+		return status.Errorf(codes.Internal, "receive first chunk: %v", err)
+	}
+	key = firstReq.Key
 	if key == "" {
 		return status.Error(codes.InvalidArgument, "key is required in first PutRequest")
 	}
-	err := s.store.Put(stream.Context(), key, pr, totalSize)
+	totalSize = firstReq.TotalSize
+
+	pr, pw := io.Pipe()
+
+	// Write first chunk and remaining chunks asynchronously.
+	errCh := make(chan error, 1)
+	go func() {
+		defer pw.Close()
+		// Write first chunk
+		chunk := firstReq.Chunk
+		wrote += int64(len(chunk))
+		if _, werr := pw.Write(chunk); werr != nil {
+			pw.CloseWithError(werr)
+			errCh <- werr
+			return
+		}
+		// Write remaining chunks
+		for {
+			req, recvErr := stream.Recv()
+			if recvErr == io.EOF {
+				break
+			}
+			if recvErr != nil {
+				pw.CloseWithError(recvErr)
+				errCh <- recvErr
+				return
+			}
+			wrote += int64(len(req.Chunk))
+			if _, werr := pw.Write(req.Chunk); werr != nil {
+				pw.CloseWithError(werr)
+				errCh <- werr
+				return
+			}
+		}
+		errCh <- nil
+	}()
+
+	// Store via orchestrator.
+	storeErr := s.store.Put(stream.Context(), key, pr, totalSize)
 	pr.Close()
-	if err != nil {
-		return status.Errorf(codes.Internal, "store put: %v", err)
+	if storeErr != nil {
+		return status.Errorf(codes.Internal, "store put: %v", storeErr)
+	}
+
+	// Wait for writer goroutine to finish to ensure `wrote` is accurate.
+	if werr := <-errCh; werr != nil {
+		slog.Warn("storage put: writer error", "key", key, "error", werr)
 	}
 
 	return stream.SendAndClose(&storagev1.PutResponse{
@@ -83,6 +140,10 @@ func (s *StorageServer) Put(stream storagev1.StorageService_PutServer) error {
 
 // Get streams an object from storage to the client.
 func (s *StorageServer) Get(req *storagev1.GetRequest, stream storagev1.StorageService_GetServer) error {
+	if err := s.checkStorageAccess(stream.Context(), "read"); err != nil {
+		return err
+	}
+
 	key := req.Key
 	if key == "" {
 		return status.Error(codes.InvalidArgument, "key is required")
@@ -138,6 +199,9 @@ func (s *StorageServer) Get(req *storagev1.GetRequest, stream storagev1.StorageS
 }
 
 func (s *StorageServer) Delete(ctx context.Context, req *storagev1.DeleteRequest) (*storagev1.DeleteResponse, error) {
+	if err := s.checkStorageAccess(ctx, "write"); err != nil {
+		return nil, err
+	}
 	if req.Key == "" {
 		return nil, status.Error(codes.InvalidArgument, "key is required")
 	}
@@ -149,6 +213,9 @@ func (s *StorageServer) Delete(ctx context.Context, req *storagev1.DeleteRequest
 }
 
 func (s *StorageServer) Stat(ctx context.Context, req *storagev1.StatRequest) (*storagev1.StatResponse, error) {
+	if err := s.checkStorageAccess(ctx, "read"); err != nil {
+		return nil, err
+	}
 	if req.Key == "" {
 		return nil, status.Error(codes.InvalidArgument, "key is required")
 	}
@@ -168,11 +235,14 @@ func (s *StorageServer) Stat(ctx context.Context, req *storagev1.StatRequest) (*
 		Key:          info.Key,
 		Size:         info.Size,
 		ContentType:  info.ContentType,
-		LastModified: info.LastModified,
+		LastModified: info.LastModified.Unix(),
 	}, nil
 }
 
 func (s *StorageServer) List(ctx context.Context, req *storagev1.ListRequest) (*storagev1.ListResponse, error) {
+	if err := s.checkStorageAccess(ctx, "read"); err != nil {
+		return nil, err
+	}
 	objects, err := s.store.List(ctx, req.Prefix)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list: %v", err)
@@ -184,7 +254,7 @@ func (s *StorageServer) List(ctx context.Context, req *storagev1.ListRequest) (*
 			Key:          obj.Key,
 			Size:         obj.Size,
 			ContentType:  obj.ContentType,
-			LastModified: obj.LastModified,
+			LastModified: obj.LastModified.Unix(),
 		})
 	}
 	return &storagev1.ListResponse{Objects: results}, nil
@@ -229,4 +299,3 @@ func toSnakeCase(s string) string {
 
 // Ensure interface compliance.
 var _ storagev1.StorageServiceServer = (*StorageServer)(nil)
-var _ = fmt.Println

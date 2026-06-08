@@ -22,4 +22,6 @@ type ModuleDegradedPayload struct {
 }
 
 // EventSchemaVersion is the current schema version for all event payloads.
+// RESERVED: defined for future typed-payload support. Currently the event bus
+// uses raw []byte Payload and this constant is not consumed at runtime.
 const EventSchemaVersion = "v1"

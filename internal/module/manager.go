@@ -3,6 +3,7 @@ package module
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -112,16 +113,18 @@ func (m *Manager) StopAll(ctx context.Context) error {
 		order[i], order[j] = order[j], order[i]
 	}
 
+	var errs []error
 	for _, entry := range order {
 		slog.Info("stopping module", "id", entry.Info.ID)
 		m.registry.SetState(entry.Info.ID, contracts.ModuleStateStopping)
 		if err := entry.Module.Stop(ctx); err != nil {
 			slog.Error("error stopping module", "id", entry.Info.ID, "error", err)
+			errs = append(errs, fmt.Errorf("stop %q: %w", entry.Info.ID, err))
 		}
 		m.registry.SetState(entry.Info.ID, contracts.ModuleStateStopped)
 		m.auditLifecycle("module.stop", entry.Info.ID, nil)
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (m *Manager) HealthCheck(ctx context.Context) map[string]error {
@@ -225,7 +228,9 @@ func (m *Manager) auditLifecycle(action, moduleID string, details map[string]str
 			Resource:  moduleID,
 			Details:   details,
 		}
-		_ = m.audit.Log(context.Background(), entry)
+		if err := m.audit.Log(context.Background(), entry); err != nil {
+			slog.Error("audit log write failed", "action", action, "error", err)
+		}
 	}()
 }
 
@@ -235,10 +240,14 @@ func (m *Manager) publishModuleRegistered(info contracts.ModuleInfo) {
 	if m.bus == nil {
 		return
 	}
-	payload, _ := json.Marshal(contracts.ModuleRegisteredPayload{
+	payload, err := json.Marshal(contracts.ModuleRegisteredPayload{
 		ModuleID: info.ID,
 		Version:  info.Version,
 	})
+	if err != nil {
+		slog.Error("failed to marshal module.registered event", "module", info.ID, "error", err)
+		return
+	}
 	_ = m.bus.Publish(context.Background(), contracts.Event{
 		Type:    contracts.EventModuleRegistered,
 		Source:  info.ID,
@@ -251,9 +260,13 @@ func (m *Manager) publishModuleUnregistered(info contracts.ModuleInfo) {
 	if m.bus == nil {
 		return
 	}
-	payload, _ := json.Marshal(contracts.ModuleUnregisteredPayload{
+	payload, err := json.Marshal(contracts.ModuleUnregisteredPayload{
 		ModuleID: info.ID,
 	})
+	if err != nil {
+		slog.Error("failed to marshal module.unregistered event", "module", info.ID, "error", err)
+		return
+	}
 	_ = m.bus.Publish(context.Background(), contracts.Event{
 		Type:    contracts.EventModuleUnregistered,
 		Source:  info.ID,
@@ -266,10 +279,14 @@ func (m *Manager) publishModuleDegraded(info contracts.ModuleInfo, err error) {
 	if m.bus == nil {
 		return
 	}
-	payload, _ := json.Marshal(contracts.ModuleDegradedPayload{
+	payload, marshalErr := json.Marshal(contracts.ModuleDegradedPayload{
 		ModuleID: info.ID,
 		Error:    err.Error(),
 	})
+	if marshalErr != nil {
+		slog.Error("failed to marshal module.degraded event", "module", info.ID, "error", marshalErr)
+		return
+	}
 	_ = m.bus.Publish(context.Background(), contracts.Event{
 		Type:    contracts.EventModuleDegraded,
 		Source:  info.ID,

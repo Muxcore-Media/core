@@ -4,7 +4,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -tags default -ldflags="-s -w" -o /muxcored ./cmd/muxcored
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /muxcored ./cmd/muxcored
 
 FROM alpine@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
 
@@ -12,12 +12,14 @@ RUN apk add --no-cache curl ca-certificates
 
 RUN adduser -D -h /app muxcore
 WORKDIR /app
+# Create writable directories for read-only root filesystem compatibility.
+RUN mkdir -p /app/data /app/tmp && chown muxcore /app/data /app/tmp
 COPY --from=build /muxcored .
 
 USER muxcore
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["curl", "-sf", "http://127.0.0.1:8080/health"]
+    CMD ["sh", "-c", "curl -sf https://127.0.0.1:8080/health || curl -sf http://127.0.0.1:8080/health"]
 
 ENTRYPOINT ["./muxcored"]

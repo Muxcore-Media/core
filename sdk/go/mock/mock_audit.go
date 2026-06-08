@@ -2,12 +2,14 @@ package mock
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 )
@@ -85,6 +87,55 @@ func (a *Audit) Export(ctx context.Context, format string) (io.ReadCloser, error
 	default:
 		return nil, fmt.Errorf("audit mock: unsupported export format: %q", format)
 	}
+}
+
+// VerifyChainIntegrity checks the hash chain of entries within the given time range.
+// Returns a valid result if all entries form an unbroken chain, or lists broken links.
+func (a *Audit) VerifyChainIntegrity(ctx context.Context, from, to time.Time) (contracts.ChainVerificationResult, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	result := contracts.ChainVerificationResult{Valid: true}
+
+	// Filter entries in the time range and sort by timestamp.
+	var inRange []contracts.AuditEntry
+	for _, e := range a.Entries {
+		if !from.IsZero() && e.Timestamp.Before(from) {
+			continue
+		}
+		if !to.IsZero() && e.Timestamp.After(to) {
+			continue
+		}
+		inRange = append(inRange, e)
+	}
+
+	result.TotalEntries = len(inRange)
+	if len(inRange) < 2 {
+		return result, nil
+	}
+
+	// Check PrevEntryHash chain: each entry's PrevEntryHash must match
+	// the SHA-256 of the previous entry's canonical fields.
+	h := sha256.New()
+	for i := 1; i < len(inRange); i++ {
+		prev := inRange[i-1]
+		curr := inRange[i]
+
+		h.Reset()
+		fmt.Fprintf(h, "%s|%s|%s|%s|%s",
+			prev.ID, prev.Actor, prev.Action, prev.Resource, prev.Timestamp.Format(time.RFC3339Nano))
+		expected := fmt.Sprintf("%x", h.Sum(nil))
+
+		if curr.PrevEntryHash != "" && curr.PrevEntryHash != expected {
+			result.Valid = false
+			result.BrokenLinks = append(result.BrokenLinks, curr.ID)
+			if result.FirstBrokenAt.IsZero() {
+				result.FirstBrokenAt = curr.Timestamp
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // Count returns the number of recorded entries (test helper).

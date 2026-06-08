@@ -1,9 +1,12 @@
 package mgr
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -31,6 +34,7 @@ type ModuleBinary struct {
 type Manager struct {
 	mu        sync.Mutex
 	processes map[string]*exec.Cmd
+	proxies   map[string]*SidecarProxy // module ID → proxy for health tracking
 	meshAddr  string
 	cacheDir  string
 	reg       *registry.Registry
@@ -48,6 +52,7 @@ func NewManager(meshAddr string, reg *registry.Registry, modMgr *modulemgr.Manag
 	}
 	return &Manager{
 		processes: make(map[string]*exec.Cmd),
+		proxies:   make(map[string]*SidecarProxy),
 		meshAddr:  meshAddr,
 		cacheDir:  filepath.Join(home, ".muxcore", "modules"),
 		reg:       reg,
@@ -84,6 +89,20 @@ func (m *Manager) Resolve(repoURL, version string) (*ModuleBinary, error) {
 	// directives to normalize imports. No-op for modules using canonical contracts.
 	if err := m.reconcileContracts(buildDir); err != nil {
 		return nil, fmt.Errorf("contract reconciliation for %s: %w", moduleID, err)
+	}
+
+	// Pre-build source scan: detect dangerous patterns before compilation.
+	// The go build step can execute go:generate directives, init() functions,
+	// and cgo code. We scan for these patterns first so operators can audit
+	// modules that use them. Modules with unsafe or cgo are rejected outright.
+	scanResults, err := scanModuleSource(buildDir)
+	if err != nil {
+		return nil, fmt.Errorf("source scan for %s: %w", moduleID, err)
+	}
+	if len(scanResults) > 0 {
+		slog.Warn("module source scan found patterns requiring audit",
+			"module", moduleID, "patterns", scanResults,
+		)
 	}
 
 	binPath := filepath.Join(buildDir, "muxcore-module")
@@ -132,6 +151,11 @@ func (m *Manager) Spawn(ctx context.Context, bin *ModuleBinary) error {
 	m.processes[bin.ID] = cmd
 	slog.Info("module spawned", "id", bin.ID, "pid", cmd.Process.Pid)
 
+	// Attach process to proxy for health tracking.
+	if proxy, ok := m.proxies[bin.ID]; ok {
+		proxy.TrackProcess(cmd)
+	}
+
 	go func() {
 		err := cmd.Wait()
 		m.mu.Lock()
@@ -142,6 +166,34 @@ func (m *Manager) Spawn(ctx context.Context, bin *ModuleBinary) error {
 		}
 	}()
 
+	return nil
+}
+
+// TrackProxy registers a SidecarProxy for health tracking.
+// Called during gRPC registration so Spawn can attach the process.
+func (m *Manager) TrackProxy(moduleID string, proxy *SidecarProxy) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.proxies[moduleID] = proxy
+}
+
+// VerifyChecksum reads the binary at bin.Path, computes its SHA256 digest,
+// and compares it against the expected hex string. Returns nil if they match
+// or if expected is empty (backward compatible). Returns an error on mismatch
+// or if the file cannot be read.
+func (m *Manager) VerifyChecksum(bin *ModuleBinary, expected string) error {
+	if expected == "" {
+		return nil // backward compatible: no checksum declared
+	}
+	data, err := os.ReadFile(bin.Path)
+	if err != nil {
+		return fmt.Errorf("verify checksum: read binary %s: %w", bin.Path, err)
+	}
+	actual := fmt.Sprintf("%x", sha256.Sum256(data))
+	if !strings.EqualFold(actual, expected) {
+		return fmt.Errorf("checksum mismatch for %s: expected %s, got %s", bin.ID, expected, actual)
+	}
+	slog.Info("module checksum verified", "id", bin.ID, "checksum", expected[:16]+"...")
 	return nil
 }
 
@@ -212,6 +264,7 @@ func (s *registrationServer) Register(ctx context.Context, req *modulev1.Registe
 
 	// Create a proxy that satisfies contracts.Module for registry registration.
 	proxy := NewSidecarProxy(info)
+	s.mgr.TrackProxy(info.ID, proxy)
 
 	// Register with the module lifecycle manager (adds to registry, publishes events).
 	deps := info.DependsOn
@@ -238,6 +291,64 @@ func (s *registrationServer) Unregister(ctx context.Context, req *modulev1.Unreg
 	}
 	slog.Info("module unregistered", "id", req.ModuleId)
 	return &modulev1.UnregisterResponse{Acknowledged: true}, nil
+}
+
+// scanModuleSource scans a cloned module directory for patterns that can
+// execute arbitrary code during the build step. Returns a list of found
+// pattern names. Modules using "unsafe" or "cgo" are rejected with an error.
+//
+// Detected patterns (warning):
+//   - go:generate — directives execute arbitrary commands during go build
+//
+// Rejected patterns (error):
+//   - "unsafe" — pointer arithmetic, type punning, memory safety violations
+//   - import "C" — cgo enables arbitrary C code execution at build time
+func scanModuleSource(buildDir string) ([]string, error) {
+	var found []string
+
+	walkErr := filepath.WalkDir(buildDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable files
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+
+		// Reject: unsafe package
+		if bytes.Contains(data, []byte("unsafe")) {
+			return fmt.Errorf("module contains unsafe package import: %s", filepath.Base(path))
+		}
+
+		// Reject: cgo
+		if bytes.Contains(data, []byte("import \"C\"")) {
+			return fmt.Errorf("module contains cgo import: %s", filepath.Base(path))
+		}
+
+		// Detect (warn): go:generate directives
+		if bytes.Contains(data, []byte("//go:generate")) {
+			if !slicesContains(found, "go:generate") {
+				found = append(found, "go:generate")
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	return found, nil
+}
+
+func slicesContains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
 
 func moduleIDFromRepo(repoURL string) string {

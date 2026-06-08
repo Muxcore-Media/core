@@ -78,11 +78,26 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 	}
 
 	// Check publish policy before dispatching.
+	// Deny-by-default: when no policy is registered, all non-core event
+	// publication is rejected. Core (bootstrap) publishes events with an
+	// empty caller ID — the built-in policy allows these through.
 	b.mu.RLock()
 	publishPolicy := b.publishPolicy
 	b.mu.RUnlock()
-	if publishPolicy != nil {
-		callerID := contracts.CallerIDFromContext(ctx)
+	if publishPolicy == nil {
+		return fmt.Errorf("publish denied: no publish policy configured — event %q cannot be dispatched", event.Type)
+	}
+	callerID := contracts.CallerIDFromContext(ctx)
+	// Opt into resource-level check if the provider supports it.
+	if rpp, ok := publishPolicy.(contracts.ResourcePublishPolicyProvider); ok {
+		allowed, err := rpp.CanPublishEvent(ctx, callerID, event)
+		if err != nil {
+			return fmt.Errorf("publish policy error for event %q: %w", event.Type, err)
+		}
+		if !allowed {
+			return fmt.Errorf("publish denied: caller %q not authorized to emit %q events", callerID, event.Type)
+		}
+	} else {
 		allowed, err := publishPolicy.CanPublish(ctx, callerID, event.Type)
 		if err != nil {
 			return fmt.Errorf("publish policy error for event %q: %w", event.Type, err)
@@ -115,7 +130,9 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 				TraceID: event.TraceID,
 				NodeID:   nodeID,
 			}
-			_ = auditLogger.Log(ctx, entry)
+			if err := auditLogger.Log(ctx, entry); err != nil {
+				slog.Error("audit log write failed", "event_type", event.Type, "error", err)
+			}
 		}()
 	}
 
@@ -159,7 +176,9 @@ func (b *MemoryBus) Subscribe(ctx context.Context, eventType string, handler con
 				},
 				NodeID: b.nodeID,
 			}
-			_ = auditLogger.Log(ctx, entry)
+			if err := auditLogger.Log(ctx, entry); err != nil {
+				slog.Error("audit log write failed", "event_type", eventType, "error", err)
+			}
 		}()
 	}
 
@@ -190,7 +209,9 @@ func (b *MemoryBus) Unsubscribe(ctx context.Context, eventType string, handler c
 				},
 				NodeID: b.nodeID,
 			}
-			_ = auditLogger.Log(ctx, entry)
+			if err := auditLogger.Log(ctx, entry); err != nil {
+				slog.Error("audit log write failed", "event_type", eventType, "error", err)
+			}
 		}()
 	}
 

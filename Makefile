@@ -8,7 +8,7 @@ MODULE_DIR ?= ../modules
 CORE_PKGS ?= ./internal/... ./pkg/... ./cmd/...
 
 build:
-	$(GO) build -tags default -ldflags="-s -w" -o muxcored ./cmd/muxcored
+	$(GO) build -ldflags="-s -w" -o muxcored ./cmd/muxcored
 
 build-modules:
 	@for d in $(MODULE_DIR)/*/; do \
@@ -61,12 +61,14 @@ coverage:
 proto:
 	PATH="$$HOME/go/bin:$$PATH" $(PROTOC) \
 		--proto_path=proto \
-		--go_out=proto/gen --go_opt=paths=source_relative \
-		--go-grpc_out=proto/gen --go-grpc_opt=paths=source_relative \
+		--go_out=proto/gen --go_opt=module=github.com/Muxcore-Media/core \
+		--go-grpc_out=proto/gen --go-grpc_opt=module=github.com/Muxcore-Media/core \
 		proto/muxcore/mesh/v1/*.proto \
 		proto/muxcore/health/v1/*.proto \
 		proto/muxcore/events/v1/*.proto \
-		proto/muxcore/discovery/v1/*.proto
+		proto/muxcore/discovery/v1/*.proto \
+		proto/muxcore/storage/v1/*.proto \
+		proto/muxcore/module/v1/*.proto
 
 ci: lint-all test-all build build-modules
 
@@ -75,4 +77,3 @@ run: build
 
 clean:
 	rm -f muxcored coverage.out coverage.html
-	rm -rf proto/gen

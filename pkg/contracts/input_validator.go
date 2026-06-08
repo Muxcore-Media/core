@@ -32,6 +32,15 @@ type ValidationResult struct {
 //	"regex:<pattern>"      — Regex-based validation (e.g., "regex:^[a-z]+$")
 //	"sql:<param-count>"    — SQL injection-safe parameter binding (e.g., "sql:3")
 //
+// SECURITY: The schema parameter is caller-controlled. Implementations MUST:
+//   - Validate the schema string format before interpretation.
+//   - Reject schemas with path-traversal characters (../, /, etc.) to prevent
+//     access to unintended schema files or namespaces.
+//   - Apply a limit on schema name length to prevent resource exhaustion.
+//   - Never treat the schema string as a file path without sanitization.
+//
+// Schema names should match the pattern: ^[a-z][a-z0-9_.:-]{0,127}$
+//
 // Modules discover registered validators via the registry and call SupportedSchemas()
 // to check which schemas are available before calling Validate. If no InputValidator
 // is registered, modules handle validation themselves (degrade gracefully).
@@ -47,6 +56,8 @@ type InputValidator interface {
 	// not recognised, implementations should return a ValidationResult with
 	// Valid=false and an error entry explaining the unknown schema, rather
 	// than returning an error — this allows callers to fall back gracefully.
+	//
+	// SECURITY: The schema string MUST be validated before use (see type docs).
 	Validate(ctx context.Context, data []byte, schema string) (ValidationResult, error)
 
 	// SupportedSchemas returns the list of schema identifiers this validator

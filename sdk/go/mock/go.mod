@@ -4,3 +4,4 @@ go 1.26.3
 
 require github.com/Muxcore-Media/core v0.1.0
 
+replace github.com/Muxcore-Media/core => ../../..

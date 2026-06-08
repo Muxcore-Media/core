@@ -29,12 +29,12 @@ func (s *HealthServer) RegisterWithGRPC(srv *grpc.Server) {
 // Check returns health status for a node or specific module.
 func (s *HealthServer) Check(ctx context.Context, req *healthv1.HealthCheckRequest) (*healthv1.HealthCheckResponse, error) {
 	if req.GetModuleId() != "" {
-		return s.checkModule(req.GetModuleId()), nil
+		return s.checkModule(ctx, req.GetModuleId()), nil
 	}
-	return s.checkNode(), nil
+	return s.checkNode(ctx), nil
 }
 
-func (s *HealthServer) checkModule(moduleID string) *healthv1.HealthCheckResponse {
+func (s *HealthServer) checkModule(ctx context.Context, moduleID string) *healthv1.HealthCheckResponse {
 	entry, err := s.reg.Resolve(moduleID)
 	if err != nil {
 		return &healthv1.HealthCheckResponse{
@@ -44,7 +44,7 @@ func (s *HealthServer) checkModule(moduleID string) *healthv1.HealthCheckRespons
 		}
 	}
 
-	if err := entry.Module.Health(context.Background()); err != nil {
+	if err := entry.Module.Health(ctx); err != nil {
 		return &healthv1.HealthCheckResponse{
 			ModuleId: moduleID,
 			Status:   healthv1.HealthCheckResponse_STATUS_DEGRADED,
@@ -58,11 +58,11 @@ func (s *HealthServer) checkModule(moduleID string) *healthv1.HealthCheckRespons
 	}
 }
 
-func (s *HealthServer) checkNode() *healthv1.HealthCheckResponse {
+func (s *HealthServer) checkNode(ctx context.Context) *healthv1.HealthCheckResponse {
 	entries := s.reg.ListAll()
 	healthy := true
 	for _, entry := range entries {
-		if err := entry.Module.Health(context.Background()); err != nil {
+		if err := entry.Module.Health(ctx); err != nil {
 			healthy = false
 			break
 		}
@@ -93,13 +93,13 @@ func (s *HealthServer) Watch(req *healthv1.HealthWatchRequest, stream healthv1.H
 		}
 
 		for _, moduleID := range req.GetModuleIds() {
-			resp := s.checkModule(moduleID)
+			resp := s.checkModule(stream.Context(), moduleID)
 			if err := stream.Send(resp); err != nil {
 				return err
 			}
 		}
 		// Also send node-level health
-		if err := stream.Send(s.checkNode()); err != nil {
+		if err := stream.Send(s.checkNode(stream.Context())); err != nil {
 			return err
 		}
 	}

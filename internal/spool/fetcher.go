@@ -26,15 +26,26 @@ type TagModule struct {
 	Repo     string `json:"repo"`
 	Version  string `json:"version"`
 	Required bool   `json:"required"`
+	// Checksum is the expected SHA256 hex digest of the built binary.
+	// When non-empty, the module manager verifies the built binary
+	// against this checksum before execution (SLSA L3 provenance check).
+	// Empty means no verification (backward compatible with old spool tags).
+	Checksum string `json:"checksum,omitempty"`
 }
 
 // FetchTag fetches a tag definition from a spool URL.
 // spoolURL is the base URL (e.g., "https://github.com/Muxcore-Media/spool").
 // tagName is the tag to fetch (e.g., "default").
+// Security: rejects non-HTTPS URLs, blocks private/reserved IPs, caps response at 1MB.
 func FetchTag(spoolURL, tagName string) (*TagDefinition, error) {
 	fetchURL, err := buildFetchURL(spoolURL, tagName)
 	if err != nil {
 		return nil, fmt.Errorf("spool: build fetch URL: %w", err)
+	}
+
+	// Block non-HTTPS URLs to prevent SSRF (CWE-918).
+	if u, err := url.Parse(fetchURL); err == nil && u.Scheme != "https" {
+		return nil, fmt.Errorf("spool: only HTTPS URLs are allowed, got %q", u.Scheme)
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -48,7 +59,8 @@ func FetchTag(spoolURL, tagName string) (*TagDefinition, error) {
 		return nil, fmt.Errorf("spool: fetch %s: HTTP %d", fetchURL, resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// Cap response size at 1MB to prevent memory exhaustion (CWE-770).
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("spool: read body: %w", err)
 	}

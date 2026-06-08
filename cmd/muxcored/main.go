@@ -14,7 +14,9 @@ import (
 
 	"github.com/Muxcore-Media/core/internal/api"
 	"github.com/Muxcore-Media/core/internal/audit"
+	"github.com/Muxcore-Media/core/internal/callpolicy"
 	"github.com/Muxcore-Media/core/internal/config"
+	"github.com/Muxcore-Media/core/internal/eventpolicy"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
 	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
@@ -23,9 +25,9 @@ import (
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/spool"
 	"github.com/Muxcore-Media/core/internal/storage"
-	"github.com/Muxcore-Media/core/pkg/contracts"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 )
 
 const securityDisclaimer = `╔══════════════════════════════════════════════════════════════╗
@@ -120,9 +122,24 @@ func main() {
 		slog.Warn("gRPC TLS is disabled — insecure mode")
 	}
 	// Add unary interceptor for gRPC authorization.
-	// Provides the interception point for future per-method authorization checks
-	// when an Authorizer and IdentityProvider are registered.
-	grpcOpts = append(grpcOpts, grpc.UnaryInterceptor(grpcmesh.AuthUnaryInterceptor()))
+	// When an Authorizer and IdentityProvider are registered via modules,
+	// call authInterceptor.SetAuthorizer() and SetIdentityProvider() to
+	// enable per-method enforcement. Until then, all calls pass through.
+	authInterceptor := grpcmesh.NewAuthInterceptor()
+	grpcOpts = append(grpcOpts, grpc.UnaryInterceptor(authInterceptor.UnaryInterceptor()))
+
+	// Add gRPC keepalive enforcement to prevent resource exhaustion (CWE-400).
+	grpcOpts = append(grpcOpts,
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionIdle: 5 * time.Minute,
+			Time:              2 * time.Minute,
+			Timeout:           20 * time.Second,
+		}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             30 * time.Second,
+			PermitWithoutStream: true,
+		}),
+	)
 
 	grpcSrv := grpc.NewServer(grpcOpts...)
 	meshSrv.RegisterWithGRPC(grpcSrv)
@@ -180,6 +197,24 @@ func main() {
 	storageGrpc := grpcmesh.NewStorageServer(store)
 	storageGrpc.RegisterWithGRPC(grpcSrv)
 
+	// --- Module capability enforcement ---
+	// Create built-in policies backed by the module registry.
+	// Call policy: enforces inter-module mesh call access.
+	// Publish policy: enforces event publication access.
+	// Storage policy: enforces storage read/write access.
+	// When MUXCORE_STRICT_CALL_POLICY=true, capability mismatches are hard-denied
+	// instead of soft-warned.
+	callPolicy := callpolicy.NewBuiltinPolicy(reg)
+	meshClient.SetCallPolicy(callPolicy)
+	storageGrpc.SetCallPolicy(callPolicy)
+
+	eventPolicy := eventpolicy.NewBuiltinPolicy(reg)
+	bus.SetPublishPolicy(eventPolicy)
+	slog.Info("module capability enforcement enabled",
+		"call_policy_strict", callPolicy.Strict(),
+		"publish_policy_strict", eventPolicy.Strict(),
+	)
+
 	// Attach registry for sidecar module discovery queries
 	discoveryGrpc.SetRegistry(reg)
 
@@ -209,6 +244,18 @@ func main() {
 				slog.Warn("resolve optional module failed, skipping", "repo", tm.Repo, "error", err)
 				continue
 			}
+			// Verify binary checksum against spool tag (SLSA L3 provenance).
+			// Skips verification when Checksum is empty (backward compat).
+			if err := modMgr.VerifyChecksum(bin, tm.Checksum); err != nil {
+				if tm.Required {
+					slog.Error("checksum verification failed for required module",
+						"repo", tm.Repo, "id", bin.ID, "error", err)
+					os.Exit(1)
+				}
+				slog.Warn("checksum verification failed, skipping optional module",
+					"repo", tm.Repo, "id", bin.ID, "error", err)
+				continue
+			}
 			if err := modMgr.Spawn(ctx, bin); err != nil {
 				if tm.Required {
 					slog.Error("spawn required module", "id", bin.ID, "error", err)
@@ -220,19 +267,6 @@ func main() {
 		}
 	}
 
-	// Build fabric (infrastructure services nil for sidecar mode)
-	deps := contracts.Fabric{
-		Registry:   reg,
-		EventBus:   bus,
-		Routes:     srv,
-		Cluster:    nil,
-		WorkerPool: nil,
-		Audit:      nil,
-		Storage:    store,
-		Mesh:       meshClient,
-	}
-
-	_ = deps // used when modules are loaded in-process
 
 	slog.Info("module registry ready", "count", reg.Count())
 
@@ -261,16 +295,20 @@ func main() {
 		}
 	}()
 
-	// Auto-join seed nodes
-	if len(cfg.GRPC.SeedNodes) > 0 {
+	// Auto-join seed nodes — requires TLS. Without TLS, auto-join is disabled
+	// because join tokens travel in the request and must not be sent cleartext.
+	if creds == nil {
+		if len(cfg.GRPC.SeedNodes) > 0 {
+			slog.Warn("auto-join skipped: TLS is required for cluster seed node connections")
+		}
+	} else if len(cfg.GRPC.SeedNodes) > 0 {
 		slog.Info("auto-joining seed nodes", "seeds", cfg.GRPC.SeedNodes)
 		localNode := discoveryGrpc.LocalNode()
 		for _, seed := range cfg.GRPC.SeedNodes {
 			go func(seedAddr string) {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
-				var dialOpts []grpc.DialOption
-				dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
+				dialOpts := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
 				conn, err := grpc.NewClient(seedAddr, dialOpts...)
 				if err != nil {
 					slog.Warn("auto-join: dial seed node", "seed", seedAddr, "error", err)
@@ -295,11 +333,14 @@ func main() {
 
 	// Start heartbeat loop to advertise module list to cluster peers.
 	// Uses same TLS config as seed node connections.
+	// Insecure mode is only allowed when MUXCORE_INSECURE_DISABLE_TLS is explicitly set.
 	var hbDialOpts []grpc.DialOption
 	if creds != nil {
 		hbDialOpts = append(hbDialOpts, grpc.WithTransportCredentials(creds))
-	} else {
+	} else if os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "true" || os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "1" {
 		hbDialOpts = append(hbDialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	} else {
+		slog.Warn("heartbeat disabled: TLS is required for cluster heartbeat communication")
 	}
 	discoveryGrpc.StartHeartbeatLoop(ctx, hbDialOpts)
 

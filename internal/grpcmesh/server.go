@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -118,7 +119,9 @@ func (s *Server) Call(ctx context.Context, req *meshv1.CallRequest) (*meshv1.Cal
 			},
 			NodeID: nodeID,
 		}
-		_ = auditLogger.Log(ctx, entry)
+		if err := auditLogger.Log(ctx, entry); err != nil {
+			slog.Error("audit log write failed", "method", method, "error", err)
+		}
 	}
 
 	result, err := handler.HandleCall(ctx, method, req.GetPayload())
@@ -175,7 +178,9 @@ func (s *Server) StreamCall(stream meshv1.ModuleMesh_StreamCallServer) error {
 				},
 				NodeID: nodeID,
 			}
-			_ = auditLogger.Log(stream.Context(), entry)
+			if err := auditLogger.Log(stream.Context(), entry); err != nil {
+				slog.Error("audit log write failed", "error", err)
+			}
 		}
 
 		result, err := handler.HandleCall(stream.Context(), method, req.GetPayload())
@@ -381,6 +386,15 @@ func GRPCTransportCredentials(certFile, keyFile, caCertFile string, mtlsEnabled 
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS12,
+		// Restrict cipher suites to strong AEAD ciphers (no CBC, no RC4, no 3DES).
+		// Go's TLS 1.3 cipher suites are always safe (only AEAD), so this list
+		// applies to TLS 1.2 handshakes only.
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+		},
 	}
 
 	if mtlsEnabled {

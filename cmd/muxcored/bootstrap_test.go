@@ -10,7 +10,6 @@ import (
 
 	"github.com/Muxcore-Media/core/internal/api"
 	"github.com/Muxcore-Media/core/internal/config"
-	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/storage"
 )
@@ -24,7 +23,6 @@ func TestBareLoomBoot(t *testing.T) {
 	cfg := config.Default()
 	cfg.Server.Addr = testAddr
 
-	_ = events.NewMemoryBus()
 	reg := registry.New()
 	srv := api.NewServer(cfg.Server.Addr, "", "")
 

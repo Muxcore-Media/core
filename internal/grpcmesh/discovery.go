@@ -2,6 +2,7 @@ package grpcmesh
 
 import (
 	"context"
+	"crypto/subtle"
 	"log/slog"
 	"sync"
 	"github.com/Muxcore-Media/core/internal/registry"
@@ -112,7 +113,8 @@ func (s *DiscoveryServer) Join(ctx context.Context, req *discoveryv1.JoinRequest
 				token = vals[0]
 			}
 		}
-		if token != s.joinToken {
+		// Constant-time comparison prevents timing side-channel attacks (CWE-208).
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.joinToken)) != 1 {
 			return nil, status.Error(codes.PermissionDenied, "invalid join token")
 		}
 	}
@@ -298,7 +300,7 @@ func (s *DiscoveryServer) sendHeartbeats(ctx context.Context) {
 		if m.GetId() == s.nodeID {
 			continue // don't heartbeat ourselves
 		}
-		peers = append(peers, peer{id: m.GetId(), addr: m.GetGprcAddr()})
+		peers = append(peers, peer{id: m.GetId(), addr: m.GetGrpcAddr()})
 	}
 	var moduleIDs []string
 	if s.moduleIDs != nil {

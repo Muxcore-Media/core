@@ -104,17 +104,27 @@ type Fabric struct {
 	Mesh       ModuleMeshClient
 }
 
-// -- Auto-registration --
+// -- Auto-registration (DEPRECATED) --
+//
+// Register and LoadRegistered are legacy compile-time module registration
+// functions. The architecture moved to sidecar-only gRPC registration.
+// These remain exported for compatibility with existing tests and legacy
+// in-process module loading. New code should use the sidecar model instead.
+//
+// Deprecated: Use the gRPC sidecar registration model. These will be removed
+// in a future release once all modules have been migrated to sidecars.
 
 var registeredFactories []ModuleFactory
 var registeredFactoriesMu sync.Mutex
 
+// Deprecated: Use gRPC sidecar registration instead.
 func Register(factory ModuleFactory) {
 	registeredFactoriesMu.Lock()
 	registeredFactories = append(registeredFactories, factory)
 	registeredFactoriesMu.Unlock()
 }
 
+// Deprecated: Use gRPC sidecar registration instead.
 func LoadRegistered(deps Fabric) []Module {
 	registeredFactoriesMu.Lock()
 	factories := make([]ModuleFactory, len(registeredFactories))

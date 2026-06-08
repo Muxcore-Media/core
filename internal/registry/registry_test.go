@@ -20,7 +20,6 @@ func (m *mockModule) Stop(_ context.Context) error   { return nil }
 func (m *mockModule) Health(_ context.Context) error { return nil }
 
 //nolint:unused // used via interface type assertions in test tables
-//nolint:unused // used via interface type assertions in test tables
 // ---------- Register tests ----------
 
 func TestRegister(t *testing.T) {

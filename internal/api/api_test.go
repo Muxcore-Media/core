@@ -177,16 +177,23 @@ func TestRateLimiter_AllowsUnderLimit(t *testing.T) {
 	}
 }
 
-func TestRateLimiter_BlocksAfterExhaustion(t *testing.T) {
-	t.Skip("Rate limiter is now provided by ratelimit-tokenbucket module; integration tested via module integration tests")
-}
+func TestRateLimiter_Integration(t *testing.T) {
+	os.Setenv("MUXCORE_INSECURE_DISABLE_TLS", "true")
+	srv := NewServer(":0", "", "")
+	srv.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 
-func TestRateLimiter_AllowsHealthBypass(t *testing.T) {
-	t.Skip("Rate limiter is now provided by ratelimit-tokenbucket module; integration tested via module integration tests")
-}
+	// With no rate limiter set, all requests should pass through.
+	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 without rate limiter, got %d", rec.Code)
+	}
 
-func TestRateLimiter_Disabled(t *testing.T) {
-	t.Skip("Rate limiter is now provided by ratelimit-tokenbucket module; integration tested via module integration tests")
+	// Rate limiter integration is tested via module integration tests
+	// when a RateLimiterProvider module is registered.
 }
 
 func TestRecoveryMiddleware_CatchesPanic(t *testing.T) {

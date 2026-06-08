@@ -27,10 +27,10 @@ type Cluster interface {
 	Health(ctx context.Context) error
 
 	// FindNodesByLabel returns all nodes with the given label value.
-	FindNodesByLabel(label, value string) []NodeInfo
+	FindNodesByLabel(ctx context.Context, label, value string) []NodeInfo
 
 	// FindNodesByModule returns all nodes running the given module.
-	FindNodesByModule(moduleID string) []NodeInfo
+	FindNodesByModule(ctx context.Context, moduleID string) []NodeInfo
 }
 
 // NodeInfo describes a node in the cluster.

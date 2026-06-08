@@ -3,6 +3,7 @@ package trace
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -43,7 +44,12 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 
 // isValidTraceID checks if the string looks like a valid trace identifier.
 // Accepts UUIDs and hex strings up to 64 characters.
+// Rejects strings containing CR/LF to prevent HTTP header injection (CWE-93).
 func isValidTraceID(s string) bool {
+	// Block CRLF injection vectors.
+	if strings.ContainsAny(s, "\r\n") {
+		return false
+	}
 	// Try parsing as UUID first
 	if _, err := uuid.Parse(s); err == nil {
 		return true

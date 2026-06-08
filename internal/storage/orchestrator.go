@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"log/slog"
+
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/google/uuid"
 )
@@ -352,7 +354,9 @@ func (o *Orchestrator) auditStorage(action, key string, size int64) {
 			Resource:  key,
 			Details:   details,
 		}
-		_ = auditLogger.Log(context.Background(), entry)
+		if err := auditLogger.Log(context.Background(), entry); err != nil {
+			slog.Error("audit log write failed", "action", action, "error", err)
+		}
 	}()
 }
 
@@ -362,6 +366,7 @@ func (o *Orchestrator) auditStorage(action, key string, size int64) {
 // The returned cancel function stops watching.
 func (o *Orchestrator) WatchModules(bus contracts.EventBus) (cancel func()) {
 	if bus == nil {
+		slog.Warn("WatchModules called with nil EventBus - module discovery watching disabled")
 		return func() {}
 	}
 

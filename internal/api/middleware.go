@@ -58,13 +58,19 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 }
 
 // securityHeadersMiddleware sets standard security headers on all responses.
-func securityHeadersMiddleware(next http.Handler, cspHeader string) http.Handler {
+// When tlsActive is false, HSTS is omitted — emitting HSTS without TLS causes
+// browsers to refuse plaintext connections for 2 years (CWE-523).
+func securityHeadersMiddleware(next http.Handler, cspHeader string, tlsActive bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-Permitted-Cross-Domain-Policies", "none")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+		w.Header().Set("Cache-Control", "no-store, max-age=0")
+		if tlsActive {
+			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+		}
 		w.Header().Set("Content-Security-Policy", cspHeader)
 		next.ServeHTTP(w, r)
 	})
@@ -121,10 +127,11 @@ func authMiddleware(authFn func(r *http.Request) (*contracts.Session, error), au
 							},
 							TraceID: trace.FromContext(r.Context()),
 						}
-						_ = auditLogger.Log(r.Context(), entry)
+						if err := auditLogger.Log(r.Context(), entry); err != nil {
+							slog.Error("audit log write failed", "path", r.URL.Path, "error", err)
+						}
 					}()
 				}
-				// Track failures per IP
 				// Track failures per IP for brute-force protection
 				ip := extractClientIP(r)
 				authFailMu.Lock()
@@ -187,11 +194,20 @@ func authzMiddleware(authz contracts.Authorizer, auditLogger contracts.AuditLogg
 				return
 			}
 
-			allowed, err := authz.Can(r.Context(), *session, req.Action, req.Resource)
+			// Try ResourceAuthorizer for ABAC support; fall back to flat Can.
+			var allowed bool
+			var err error
+			if ra, ok2 := authz.(contracts.ResourceAuthorizer); ok2 {
+				allowed, err = ra.CanWithResource(r.Context(), *session, contracts.Action(req.Action),
+					contracts.ResourceDescriptor{Type: req.Resource, ID: r.URL.Path})
+			} else {
+				allowed, err = authz.Can(r.Context(), *session, req.Action, req.Resource)
+			}
 			if err != nil || !allowed {
-				// Audit authorization denial.
+				// Audit authorization denial using Safe() session (no token).
 				if auditLogger != nil {
 					go func() {
+						safeSession := session.Safe()
 						errStr := ""
 						if err != nil {
 							errStr = err.Error()
@@ -199,19 +215,21 @@ func authzMiddleware(authz contracts.Authorizer, auditLogger contracts.AuditLogg
 						entry := contracts.AuditEntry{
 							ID:        uuid.New().String(),
 							Timestamp: time.Now(),
-							Actor:     session.UserID,
+							Actor:     safeSession.UserID,
 							Action:    "authz.denied",
 							Resource:  req.Resource,
 							Details: map[string]string{
 								"action":   req.Action,
-								"username": session.Username,
+								"username": safeSession.Username,
 								"path":     r.URL.Path,
 								"method":   r.Method,
 								"error":    errStr,
 							},
 							TraceID: trace.FromContext(r.Context()),
 						}
-						_ = auditLogger.Log(r.Context(), entry)
+						if err := auditLogger.Log(r.Context(), entry); err != nil {
+							slog.Error("audit log write failed", "path", r.URL.Path, "error", err)
+						}
 					}()
 				}
 				writeJSON(w, http.StatusForbidden, map[string]string{

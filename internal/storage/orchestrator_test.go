@@ -292,7 +292,55 @@ func TestOrchestrator_PolicyRouting(t *testing.T) {
 }
 
 func TestOrchestrator_CacheHit(t *testing.T) {
-	t.Skip("Cache is now provided by cache-memory module; tested via module integration")
+	reg := newMockRegistry()
+	prov := newMockProvider("local")
+	reg.addProvider(&mockModule{StorageProvider: prov, info: contracts.ModuleInfo{ID: "local"}}, "local")
+	orch := NewOrchestrator(reg)
+	orch.DiscoverStorage()
+
+	// Set a mock cache that returns cached data.
+	mockCache := &mockCacheLayer{data: map[string][]byte{}}
+	orch.SetCache(mockCache)
+	ctx := context.Background()
+
+	// Put real data in storage first (write-through populates cache).
+	orch.Put(ctx, "cached", bytes.NewReader([]byte("from-storage")), 12)
+
+	// Override cache with different data to verify cache-hit path.
+	mockCache.data["cached"] = []byte("from-cache")
+
+	// Get should return cached data (cache hit, not storage).
+	rc, err := orch.Get(ctx, "cached")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer rc.Close()
+	buf, _ := io.ReadAll(rc)
+	if string(buf) != "from-cache" {
+		t.Errorf("expected 'from-cache' from cache hit, got %q", string(buf))
+	}
+}
+
+// mockCacheLayer implements contracts.CacheLayer for testing.
+type mockCacheLayer struct {
+	data map[string][]byte
+}
+
+func (m *mockCacheLayer) Get(ctx context.Context, key string) ([]byte, bool) {
+	d, ok := m.data[key]
+	return d, ok
+}
+func (m *mockCacheLayer) Set(ctx context.Context, key string, data []byte) error {
+	m.data[key] = data
+	return nil
+}
+func (m *mockCacheLayer) Invalidate(ctx context.Context, prefix string) error {
+	for k := range m.data {
+		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
+			delete(m.data, k)
+		}
+	}
+	return nil
 }
 
 func TestOrchestrator_CapabilityCheck(t *testing.T) {

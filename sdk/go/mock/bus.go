@@ -2,6 +2,7 @@ package mock
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ type EventBus struct {
 	Handlers   map[string][]contracts.EventHandler
 	moduleOwned map[string][]int // moduleID -> handler indices into a global ref list
 	handlerRefs []contracts.EventHandler
+	HandlerErrors []error // errors returned by handlers during Publish (cleared on Reset)
 }
 
 func NewEventBus() *EventBus {
@@ -33,7 +35,9 @@ func (b *EventBus) Publish(ctx context.Context, event contracts.Event) error {
 	b.mu.Unlock()
 
 	for _, h := range handlers {
-		_ = h(ctx, event)
+		if err := h(ctx, event); err != nil {
+			b.HandlerErrors = append(b.HandlerErrors, err)
+		}
 	}
 	return nil
 }
@@ -48,7 +52,15 @@ func (b *EventBus) Subscribe(ctx context.Context, eventType string, handler cont
 func (b *EventBus) Unsubscribe(ctx context.Context, eventType string, handler contracts.EventHandler) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	delete(b.Handlers, eventType)
+	// Remove only the matching handler by pointer identity, not all handlers for the event type.
+	handlers := b.Handlers[eventType]
+	for i, h := range handlers {
+		// Compare function pointers — Go allows this for functions in the same binary.
+		if fmt.Sprintf("%p", h) == fmt.Sprintf("%p", handler) {
+			b.Handlers[eventType] = append(handlers[:i], handlers[i+1:]...)
+			return nil
+		}
+	}
 	return nil
 }
 
@@ -65,25 +77,26 @@ func (b *EventBus) SubscribeModule(ctx context.Context, moduleID, eventType stri
 func (b *EventBus) UnsubscribeAll(ctx context.Context, moduleID string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if moduleID ==  {
+	if moduleID == "" {
 		return nil
 	}
 	indices := b.moduleOwned[moduleID]
 	if len(indices) == 0 {
 		return nil
 	}
-	// Collect handlers to remove
-	toRemove := make(map[contracts.EventHandler]bool)
+	// Collect handler identities to remove (using %p since function types
+	// are not comparable and cannot be used as map keys).
+	toRemove := make(map[string]bool)
 	for _, idx := range indices {
 		if idx < len(b.handlerRefs) {
-			toRemove[b.handlerRefs[idx]] = true
+			toRemove[fmt.Sprintf("%p", b.handlerRefs[idx])] = true
 		}
 	}
 	// Filter all handler maps
 	for eventType, handlers := range b.Handlers {
 		remaining := handlers[:0]
 		for _, h := range handlers {
-			if !toRemove[h] {
+			if !toRemove[fmt.Sprintf("%p", h)] {
 				remaining = append(remaining, h)
 			}
 		}
@@ -139,4 +152,5 @@ func (b *EventBus) Reset() {
 	b.Handlers = make(map[string][]contracts.EventHandler)
 	b.moduleOwned = make(map[string][]int)
 	b.handlerRefs = nil
+	b.HandlerErrors = nil
 }
