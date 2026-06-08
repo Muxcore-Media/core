@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Muxcore-Media/core/muxcore.schema.json",
+  "title": "MuxCore Configuration",
+  "description": "Configuration file for the muxcored server.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "server": {
+      "description": "HTTP API server settings.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "addr":          { "type": "string", "default": ":8080", "description": "Listen address, e.g. ':8080' or '0.0.0.0:8080'." },
+        "read_timeout":  { "type": "integer", "minimum": 1, "default": 15, "description": "HTTP read timeout in seconds." },
+        "write_timeout": { "type": "integer", "minimum": 1, "default": 15, "description": "HTTP write timeout in seconds." },
+        "cert_file":     { "type": "string", "default": "", "description": "Path to TLS certificate PEM. Required in production." },
+        "key_file":      { "type": "string", "default": "", "description": "Path to TLS private key PEM. Required in production." }
+      }
+    },
+    "grpc": {
+      "description": "gRPC mesh server settings.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "addr":         { "type": "string", "default": ":9090", "description": "gRPC listen address." },
+        "cert_file":    { "type": "string", "default": "", "description": "Path to gRPC TLS certificate PEM." },
+        "key_file":     { "type": "string", "default": "", "description": "Path to gRPC TLS private key PEM." },
+        "mtls_enabled": { "type": "boolean", "default": false, "description": "Require mutual TLS from connecting clients." },
+        "ca_cert_file": { "type": "string", "default": "", "description": "Path to CA certificate for mTLS client verification." },
+        "seed_nodes":   {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^.+:[0-9]+$" },
+          "default": [],
+          "description": "Cluster seed node addresses (host:port) to auto-join on startup. TLS required."
+        },
+        "join_token": { "type": "string", "default": "", "description": "Pre-shared token required to join the cluster. Empty = no auth." }
+      }
+    },
+    "log": {
+      "description": "Structured logging settings.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "level":  { "type": "string", "enum": ["debug", "info", "warn", "error"], "default": "info" },
+        "format": { "type": "string", "enum": ["text", "json"], "default": "text" }
+      }
+    },
+    "database": {
+      "description": "Database connection (driver provided by a database module).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "driver": { "type": "string", "default": "", "description": "Database driver name, e.g. 'postgres', 'sqlite'." },
+        "url":    { "type": "string", "default": "", "description": "Connection URL. Credentials are redacted in logs." }
+      }
+    },
+    "cache": {
+      "description": "Cache connection (driver provided by a cache module).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "driver": { "type": "string", "default": "", "description": "Cache driver name, e.g. 'redis', 'valkey'." },
+        "url":    { "type": "string", "default": "", "description": "Connection URL. Credentials are redacted in logs." }
+      }
+    },
+    "audit": {
+      "description": "Audit logging settings.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "default": "", "description": "File path for JSONL audit log. Empty = disabled (no overhead)." }
+      }
+    },
+    "storage": {
+      "description": "Storage orchestrator per-operation timeouts. Prevents hung providers from blocking callers.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "read_timeout_seconds":   { "type": "integer", "minimum": 1, "default": 30,  "description": "Deadline for Get, Exists, Stat, List, Stream operations." },
+        "write_timeout_seconds":  { "type": "integer", "minimum": 1, "default": 300, "description": "Deadline for Put operations (large files need more time)." },
+        "delete_timeout_seconds": { "type": "integer", "minimum": 1, "default": 30,  "description": "Deadline for Delete and Move operations." }
+      }
+    },
+    "modules": {
+      "description": "Per-module configuration. Keys are module IDs; values are arbitrary objects passed to the module.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "description": "Module-specific configuration. Shape is defined by each module."
+      },
+      "default": {}
+    }
+  }
+}

@@ -11,6 +11,7 @@ import (
 	"github.com/Muxcore-Media/core/pkg/contracts"
 
 	"github.com/Muxcore-Media/core/internal/registry"
+	"github.com/Muxcore-Media/core/internal/version"
 	"github.com/google/uuid"
 )
 
@@ -31,6 +32,18 @@ func (m *Manager) SetAuditLogger(a contracts.AuditLogger) {
 
 func (m *Manager) Register(mod contracts.Module, deps []string) error {
 	info := mod.Info()
+
+	// Check core version compatibility before registration.
+	if err := version.CheckModule(info.ID, info.MinCoreVersion); err != nil {
+		slog.Error("module version incompatible with core",
+			"module", info.ID,
+			"min_core_version", info.MinCoreVersion,
+			"core_version", version.String(),
+			"error", err,
+		)
+		return err
+	}
+
 	if err := m.registry.Register(mod, deps); err != nil {
 		return err
 	}

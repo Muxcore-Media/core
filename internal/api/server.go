@@ -74,7 +74,27 @@ func (s *Server) Start() error {
 	return fmt.Errorf("TLS is required — set MUXCORE_SERVER_TLS_CERT and MUXCORE_SERVER_TLS_KEY, or MUXCORE_INSECURE_DISABLE_TLS=true for development")
 }
 
+// Drain signals the HTTP server to stop accepting new connections and waits
+// for in-flight requests to complete within the given context deadline.
+// After Drain returns, no new requests will be processed. Call Shutdown
+// afterward for final cleanup.
+//
+// Typical shutdown sequence:
+//  1. srv.Drain(drainCtx)    — stop new connections, drain in-flight
+//  2. grpcSrv.GracefulStop() — drain gRPC
+//  3. modMgr.StopAll(...)    — stop modules
+//  4. srv.Shutdown(ctx)      — release remaining HTTP resources
+func (s *Server) Drain(ctx context.Context) error {
+	slog.Info("API server draining — stopping new connections")
+	// http.Server.Shutdown gracefully stops the server: closes the listener
+	// immediately (no new connections accepted) and waits for active
+	// connections to finish. This is exactly what "drain" means.
+	return s.http.Shutdown(ctx)
+}
+
 func (s *Server) Shutdown(ctx context.Context) error {
+	// After Drain, the server is already shut down. This is a no-op but
+	// harmless — Shutdown on an already-shut-down server returns nil.
 	return s.http.Shutdown(ctx)
 }
 

@@ -2,6 +2,7 @@ package grpcmesh
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 
@@ -207,7 +208,10 @@ func (s *StorageServer) Delete(ctx context.Context, req *storagev1.DeleteRequest
 	}
 	err := s.store.Delete(ctx, req.Key)
 	if err != nil {
-		return &storagev1.DeleteResponse{Deleted: false}, nil
+		if errors.Is(err, contracts.ErrNotFound) {
+			return &storagev1.DeleteResponse{Deleted: false}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "delete %q: %v", req.Key, err)
 	}
 	return &storagev1.DeleteResponse{Deleted: true}, nil
 }

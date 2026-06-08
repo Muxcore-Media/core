@@ -2,7 +2,8 @@
 
 ## Status
 
-MuxCore is **pre-1.0 alpha software**. The security features described below are
+MuxCore is **pre-1.0 beta software**. The `v0.1.0` tag marks the first
+named release. APIs and module interfaces are not yet stable. The security features described below are
 a mix of implemented, in-progress, and planned. This document distinguishes them clearly.
 
 ## Supported Versions
@@ -10,7 +11,8 @@ a mix of implemented, in-progress, and planned. This document distinguishes them
 | Version | Supported          |
 | ------- | ------------------ |
 | main    | :white_check_mark: |
-| < 1.0   | :x:                |
+| v0.1.x  | :white_check_mark: |
+| < v0.1  | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -56,6 +58,18 @@ Acknowledgment within **72 hours**. Target patch: **7 days** critical, **30 days
   - Docker HEALTHCHECK works with both HTTP and HTTPS
   - Seed node auto-join TLS guard, gRPC keepalive, CRLF trace blocker, TLS boot validation
 - **Module capability enforcement (PR #62)**: Built-in call policy and publish policy wired at bootstrap. Storage gRPC server enforces "storage" capability on all operations. Event bus deny-by-default with PublishPolicyProvider enforcement.
+- **Core completion (PR #69)**:
+  - Term-based cluster leader election — stale terms rejected, term propagated via gRPC metadata
+  - Core version compatibility enforcement — `MinCoreVersion` checked at module registration
+  - Startup invariant checks — misconfigurations caught before any subsystem initialises
+  - Event bus backpressure — per-subscriber bounded channels (256), drop-on-full with counters
+  - gRPC connection pool — heartbeat reuses connections; no per-request dial
+  - Config hot-reload via SIGHUP — secrets never logged, unsafe changes blocked
+  - Graceful shutdown order — HTTP drain before module stop prevents requests hitting stopped modules
+  - Admin endpoints — all require authentication with `admin.access` permission
+  - `/debug/pprof` — disabled by default, requires `MUXCORE_DEBUG_ENABLE=true`
+  - Heartbeat term-extraction bug fix — response headers read correctly (was reading outgoing metadata)
+  - `startup.RunAll` no longer calls `os.Exit` from library code
 
 ## Security Model
 

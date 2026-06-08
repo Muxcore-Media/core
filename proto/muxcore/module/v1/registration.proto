@@ -21,6 +21,9 @@ message RegisterRequest {
   bytes info_json = 2;
   // mesh_addr is the module's own gRPC listen address for lifecycle calls.
   string mesh_addr = 3;
+  // min_core_version is the minimum core version required by this module (SemVer).
+  // Empty means compatible with any version. Core rejects incompatible modules.
+  string min_core_version = 4;
 }
 
 // RegisterResponse is returned after a registration attempt.

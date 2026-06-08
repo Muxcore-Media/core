@@ -77,10 +77,13 @@ func (s *HealthServer) checkNode(ctx context.Context) *healthv1.HealthCheckRespo
 
 // Watch streams health status changes for a set of modules.
 func (s *HealthServer) Watch(req *healthv1.HealthWatchRequest, stream healthv1.HealthService_WatchServer) error {
-	// Streaming health watch: use client-requested interval or default to 30s.
+	// Streaming health watch: use client-requested interval, clamped to [1s, 300s].
 	interval := req.GetIntervalSeconds()
 	if interval < 1 {
-		interval = 30
+		interval = 30 // default
+	}
+	if interval > 300 {
+		interval = 300 // max 5 minutes — prevents open-forever streams
 	}
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()

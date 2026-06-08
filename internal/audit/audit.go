@@ -20,14 +20,21 @@ import (
 	"github.com/Muxcore-Media/core/pkg/contracts"
 )
 
+// maxInMemoryEntries is the maximum number of entries retained in the
+// in-memory buffer for Query/Export. Older entries are kept only on disk.
+// This prevents unbounded memory growth on long-running deployments.
+const maxInMemoryEntries = 50_000
+
 // FileLogger writes audit entries as JSONL to a local file.
 // Thread-safe. No-op when LogPath is empty.
 // Maintains a SHA-256 hash chain across entries for tamper detection.
+// The in-memory buffer retains at most maxInMemoryEntries recent entries;
+// older entries must be read directly from the JSONL file.
 type FileLogger struct {
 	mu         sync.Mutex
 	path       string
 	file       *os.File
-	entries    []contracts.AuditEntry // in-memory buffer for Query/Export
+	entries    []contracts.AuditEntry // in-memory ring buffer for Query/Export
 	lastHash   string                 // SHA-256 hash of the previous entry (hex)
 	signingKey []byte                 // optional HMAC-SHA256 signing key
 }
@@ -97,6 +104,14 @@ func (fl *FileLogger) Log(ctx context.Context, entry contracts.AuditEntry) error
 	}
 
 	fl.entries = append(fl.entries, entry)
+
+	// Cap the in-memory buffer to prevent unbounded memory growth.
+	// When the cap is exceeded, drop the oldest entries (ring-buffer semantics).
+	if len(fl.entries) > maxInMemoryEntries {
+		excess := len(fl.entries) - maxInMemoryEntries
+		fl.entries = fl.entries[excess:]
+	}
+
 	return nil
 }
 

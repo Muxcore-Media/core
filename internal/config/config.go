@@ -18,7 +18,58 @@ type Config struct {
 	Database DatabaseConfig `json:"database"`
 	Cache    CacheConfig    `json:"cache"`
 	Audit    AuditConfig    `json:"audit"`
+	Storage  StorageConfig  `json:"storage"`
 	Modules  map[string]any `json:"modules"` // per-module arbitrary config
+}
+
+// StorageConfig controls per-operation timeouts for the storage orchestrator.
+// Timeouts wrap provider calls so a hung provider cannot block callers indefinitely.
+type StorageConfig struct {
+	// ReadTimeoutSeconds caps Get, Exists, Stat, List, Stream operations. Default: 30.
+	ReadTimeoutSeconds int `json:"read_timeout_seconds"`
+	// WriteTimeoutSeconds caps Put operations (larger files need more time). Default: 300.
+	WriteTimeoutSeconds int `json:"write_timeout_seconds"`
+	// DeleteTimeoutSeconds caps Delete and Move operations. Default: 30.
+	DeleteTimeoutSeconds int `json:"delete_timeout_seconds"`
+}
+
+// RedactedJSON returns the config as JSON with secrets removed.
+// Credential URLs (database, cache) are redacted, and TLS key paths
+// are replaced with "<set>" to avoid leaking filesystem layout.
+func (c *Config) RedactedJSON() (json.RawMessage, error) {
+	// Create a copy to avoid mutating the live config.
+	redacted := *c
+	redacted.Database = DatabaseConfig{
+		Driver: c.Database.Driver,
+		URL:    redactURL(c.Database.URL),
+	}
+	redacted.Cache = CacheConfig{
+		Driver: c.Cache.Driver,
+		URL:    redactURL(c.Cache.URL),
+	}
+	// Hide TLS key paths (cert paths are less sensitive but we redact both).
+	if redacted.Server.KeyFile != "" {
+		redacted.Server.KeyFile = "<set>"
+	}
+	if redacted.Server.CertFile != "" {
+		redacted.Server.CertFile = "<set>"
+	}
+	if redacted.GRPC.KeyFile != "" {
+		redacted.GRPC.KeyFile = "<set>"
+	}
+	if redacted.GRPC.CertFile != "" {
+		redacted.GRPC.CertFile = "<set>"
+	}
+	// Hide join token.
+	if redacted.GRPC.JoinToken != "" {
+		redacted.GRPC.JoinToken = "<set>"
+	}
+
+	data, err := json.Marshal(redacted)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(data), nil
 }
 
 // GRPCConfig holds gRPC server settings.
@@ -30,6 +81,9 @@ type GRPCConfig struct {
 	CACertFile  string   `json:"ca_cert_file"`  // path to CA cert for mTLS client verification
 	SeedNodes   []string `json:"seed_nodes"`   // comma-separated host:port of existing cluster nodes to join
 	JoinToken   string   `json:"join_token"`    // pre-shared token required to join the cluster
+	// MaxMessageSizeMB is the maximum gRPC message size in megabytes.
+	// Applies to both send and receive. Default 32MB. Increase for large storage objects.
+	MaxMessageSizeMB int `json:"max_message_size_mb"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -114,7 +168,8 @@ func Default() *Config {
 			WriteTimeout: 15,
 		},
 		GRPC: GRPCConfig{
-			Addr: ":9090",
+			Addr:             ":9090",
+			MaxMessageSizeMB: 32,
 		},
 		Log: LogConfig{
 			Level:  "info",
@@ -122,7 +177,12 @@ func Default() *Config {
 		},
 		Database: DatabaseConfig{},
 		Cache:    CacheConfig{},
-		Modules:  make(map[string]any),
+		Storage: StorageConfig{
+			ReadTimeoutSeconds:   30,
+			WriteTimeoutSeconds:  300,
+			DeleteTimeoutSeconds: 30,
+		},
+		Modules: make(map[string]any),
 	}
 }
 
@@ -251,6 +311,17 @@ func (c *Config) validate() error {
 		if _, err := tls.LoadX509KeyPair(c.Server.CertFile, c.Server.KeyFile); err != nil {
 			errs = append(errs, fmt.Sprintf("server TLS cert/key invalid: %v", err))
 		}
+	}
+
+	// Validate storage timeouts. Zero means "use default" — negative is invalid.
+	if c.Storage.ReadTimeoutSeconds < 0 {
+		errs = append(errs, "storage.read_timeout_seconds must be >= 0 (0 = default 30s)")
+	}
+	if c.Storage.WriteTimeoutSeconds < 0 {
+		errs = append(errs, "storage.write_timeout_seconds must be >= 0 (0 = default 300s)")
+	}
+	if c.Storage.DeleteTimeoutSeconds < 0 {
+		errs = append(errs, "storage.delete_timeout_seconds must be >= 0 (0 = default 30s)")
 	}
 
 	if len(errs) > 0 {

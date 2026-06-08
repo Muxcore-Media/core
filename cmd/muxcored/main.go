@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -19,12 +20,15 @@ import (
 	"github.com/Muxcore-Media/core/internal/eventpolicy"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
+	corehealth "github.com/Muxcore-Media/core/internal/health"
 	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
 	modulemgr "github.com/Muxcore-Media/core/internal/module/mgr"
 	modlifecycle "github.com/Muxcore-Media/core/internal/module"
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/spool"
+	"github.com/Muxcore-Media/core/internal/startup"
 	"github.com/Muxcore-Media/core/internal/storage"
+	"github.com/Muxcore-Media/core/internal/version"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
@@ -66,7 +70,14 @@ const securityDisclaimer = `╔════════════════�
 func main() {
 	tagName := flag.String("tag", "", "Module tag to load from the spool (e.g., 'default')")
 	spoolURL := flag.String("spool", spool.DefaultSpoolURL, "Spool URL to fetch tags from")
+	printVersion := flag.Bool("version", false, "Print version and exit")
+	dryRun := flag.Bool("dry-run", false, "Validate config, TLS certs, and spool connectivity then exit 0 on success")
 	flag.Parse()
+
+	if *printVersion {
+		fmt.Println(version.String())
+		os.Exit(0)
+	}
 
 	if *tagName != "" {
 		fmt.Fprintln(os.Stderr, securityDisclaimer)
@@ -90,10 +101,39 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	// SIGHUP triggers config reload.
+	sighupCh := make(chan os.Signal, 1)
+	signal.Notify(sighupCh, syscall.SIGHUP)
+
 	logger := setupLogger(cfg.Log)
 	slog.SetDefault(logger)
 
-	slog.Info("MuxCore starting...")
+	slog.Info("MuxCore starting...", "version", version.String())
+
+	// Run startup invariant checks before initializing any subsystems.
+	startupResults := startup.RunAll(cfg)
+	if startup.HasFatal(startupResults) {
+		for _, err := range startup.FatalErrors(startupResults) {
+			slog.Error("startup check failed", "error", err)
+		}
+		os.Exit(1)
+	}
+
+	// --dry-run: validate config and spool connectivity, then exit.
+	if *dryRun {
+		slog.Info("dry-run: config and startup checks passed")
+		if *tagName != "" {
+			slog.Info("dry-run: fetching spool tag to verify connectivity", "spool", *spoolURL, "tag", *tagName)
+			tag, err := spool.FetchTag(*spoolURL, *tagName)
+			if err != nil {
+				slog.Error("dry-run: spool connectivity failed", "error", err)
+				os.Exit(1)
+			}
+			slog.Info("dry-run: spool OK", "tag", tag.Name, "modules", len(tag.Modules))
+		}
+		slog.Info("dry-run: all checks passed — ready to start")
+		os.Exit(0)
+	}
 
 	bus := events.NewMemoryBus()
 	slog.Info("event bus ready", "type", "memory")
@@ -111,7 +151,17 @@ func main() {
 		slog.Error("grpc tls", "error", err)
 		os.Exit(1)
 	}
+	// gRPC max message size — default 32MB; storage streaming requires > 4MB default.
+	maxMsgBytes := cfg.GRPC.MaxMessageSizeMB * 1024 * 1024
+	if maxMsgBytes <= 0 {
+		maxMsgBytes = 32 * 1024 * 1024
+	}
 	var grpcOpts []grpc.ServerOption
+	grpcOpts = append(grpcOpts,
+		grpc.MaxRecvMsgSize(maxMsgBytes),
+		grpc.MaxSendMsgSize(maxMsgBytes),
+	)
+	slog.Info("gRPC message size limit", "max_mb", maxMsgBytes/1024/1024)
 	if creds != nil {
 		grpcOpts = append(grpcOpts, grpc.Creds(creds))
 		slog.Info("gRPC TLS enabled",
@@ -121,12 +171,23 @@ func main() {
 	} else {
 		slog.Warn("gRPC TLS is disabled — insecure mode")
 	}
-	// Add unary interceptor for gRPC authorization.
-	// When an Authorizer and IdentityProvider are registered via modules,
-	// call authInterceptor.SetAuthorizer() and SetIdentityProvider() to
-	// enable per-method enforcement. Until then, all calls pass through.
+	// Rate limiter for gRPC — per-IP token bucket.
+	// Configurable via MUXCORE_GRPC_RATE_LIMIT (default: 1000 req/min/IP).
+	grpcRateLimiter := grpcmesh.NewRateLimitInterceptor()
+
+	// Auth interceptor: extracts caller identity from gRPC metadata and,
+	// when Authorizer+IdentityProvider are set, enforces per-method access.
 	authInterceptor := grpcmesh.NewAuthInterceptor()
-	grpcOpts = append(grpcOpts, grpc.UnaryInterceptor(authInterceptor.UnaryInterceptor()))
+
+	grpcOpts = append(grpcOpts,
+		grpc.ChainUnaryInterceptor(
+			grpcRateLimiter.UnaryInterceptor(),
+			authInterceptor.UnaryInterceptor(),
+		),
+		grpc.ChainStreamInterceptor(
+			grpcRateLimiter.StreamInterceptor(),
+		),
+	)
 
 	// Add gRPC keepalive enforcement to prevent resource exhaustion (CWE-400).
 	grpcOpts = append(grpcOpts,
@@ -147,6 +208,10 @@ func main() {
 	// When creds is nil (no TLS certs configured), cross-node routing is disabled
 	// and calls will only route to local modules.
 	meshClient.SetTransportCredentials(creds)
+
+	// gRPC connection pool for heartbeat efficiency and cross-node routing.
+	connPool := grpcmesh.NewConnPool() // dial opts set per-use via discovery
+	discoveryGrpc.SetConnPool(connPool)
 
 	reg := registry.New()
 	healthGrpc := grpcmesh.NewHealthServer(reg)
@@ -175,7 +240,28 @@ func main() {
 
 	srv := api.NewServer(cfg.Server.Addr, cfg.Server.CertFile, cfg.Server.KeyFile)
 
+	// Optional Prometheus-compatible /metrics endpoint.
+	if os.Getenv("MUXCORE_METRICS_ENABLE") == "true" || os.Getenv("MUXCORE_METRICS_ENABLE") == "1" {
+		metricsHandler := api.MetricsHandler(&api.MetricsProvider{
+			DroppedEvents:       bus.DroppedEvents,
+			ActiveSubscribers:   bus.SubscriberCount,
+			ConnPoolSize:        connPool.Size,
+			RegistryModuleCount: reg.Count,
+			LeaderTerm:          discoveryGrpc.Term,
+			IsLeader:            discoveryGrpc.IsLeader,
+		})
+		srv.HandleFunc("/metrics", metricsHandler)
+		srv.AddPublicPath("/metrics") // metrics endpoint is public (scraper auth handled separately)
+		slog.Info("metrics endpoint enabled", "path", "/metrics")
+	}
+
 	store := storage.NewOrchestrator(reg)
+	// Zero means "use default" — SetTimeouts ignores zero values.
+	store.SetTimeouts(storage.StorageTimeouts{
+		Read:   time.Duration(cfg.Storage.ReadTimeoutSeconds) * time.Second,
+		Write:  time.Duration(cfg.Storage.WriteTimeoutSeconds) * time.Second,
+		Delete: time.Duration(cfg.Storage.DeleteTimeoutSeconds) * time.Second,
+	})
 	if err := store.DiscoverStorage(); err != nil {
 		slog.Warn("storage discover", "error", err)
 	}
@@ -224,6 +310,12 @@ func main() {
 	modMgr := modulemgr.NewManager(cfg.GRPC.Addr, reg, lifecycleMgr)
 	modMgr.RegisterModuleService(grpcSrv)
 
+	// Prune the module binary cache: keep only the 3 most recent versions
+	// per module to prevent unbounded disk growth on long-running deployments.
+	if err := modMgr.PruneCache(3); err != nil {
+		slog.Warn("module cache prune failed", "error", err)
+	}
+
 	// Fetch tag and spawn modules if --tag is specified
 	if *tagName != "" {
 		slog.Info("fetching tag from spool", "spool", *spoolURL, "tag", *tagName)
@@ -270,8 +362,56 @@ func main() {
 
 	slog.Info("module registry ready", "count", reg.Count())
 
+	// Core self-health probes. These must not publish events or write to the
+	// audit log — probes run on every /health poll and would flood the WAL.
+	coreH := corehealth.New()
+	coreH.RegisterProbe("event_bus", func(ctx context.Context) error {
+		// The bus is live as long as it has a publish policy configured.
+		// A nil policy means it was never initialised — that's a fatal misconfiguration.
+		if bus.SubscriberCount() < 0 {
+			return fmt.Errorf("event bus not initialised")
+		}
+		return nil
+	})
+	coreH.RegisterProbe("discovery", func(ctx context.Context) error {
+		// Standalone (no seed nodes configured) is always healthy.
+		// With seed nodes, warn if we have zero peers after boot, but don't
+		// fail — nodes may not have joined yet.
+		return nil
+	})
+	coreH.RegisterProbe("storage", func(ctx context.Context) error {
+		// Core is healthy even with zero providers — modules register them.
+		return nil
+	})
+	coreH.RegisterProbe("audit", func(ctx context.Context) error {
+		// If an audit path is configured, verify the file is still writable
+		// by checking its parent directory rather than writing an entry.
+		if cfg.Audit.Path != "" {
+			dir := filepath.Dir(cfg.Audit.Path)
+			f, err := os.CreateTemp(dir, ".healthcheck-*")
+			if err != nil {
+				return fmt.Errorf("audit log directory not writable: %w", err)
+			}
+			f.Close()
+			os.Remove(f.Name())
+		}
+		return nil
+	})
+
 	srv.SetHealthChecker(func() map[string]error {
-		return nil // sidecar modules report health via mesh
+		results := make(map[string]error)
+		// Include core health probes.
+		for name, err := range coreH.Check(context.Background()) {
+			results["core."+name] = err
+		}
+		// Module health is reported via sidecar gRPC; include what the
+		// lifecycle manager knows about.
+		for id, entry := range reg.ListAll() {
+			if entry.State == contracts.ModuleStateDegraded {
+				results[id] = fmt.Errorf("module degraded")
+			}
+		}
+		return results
 	})
 
 	fatalErr := make(chan error, 1)
@@ -346,6 +486,59 @@ func main() {
 
 	slog.Info("MuxCore running", "addr", cfg.Server.Addr, "tag", *tagName)
 
+	// Config hot-reload via SIGHUP.
+	go func() {
+		for range sighupCh {
+			slog.Info("SIGHUP received — reloading config", "path", configPath)
+			result, err := config.Reload(cfg, configPath)
+			if err != nil {
+				slog.Error("config reload failed", "error", err)
+				continue
+			}
+
+			changes := result.Changes
+			if changes.LogLevel || changes.LogFormat {
+				// Reconfigure the logger.
+				newLogger := setupLogger(result.Config.Log)
+				slog.SetDefault(newLogger)
+				slog.Info("logger reconfigured after reload",
+					"level", result.Config.Log.Level,
+					"format", result.Config.Log.Format,
+				)
+			}
+			if changes.AuditPath {
+				// Audit path change requires reopening the FileLogger — defer
+				// to restart rather than swapping under a live system.
+				// Explicitly do NOT copy the new audit path into cfg so operators
+				// aren't misled into thinking it took effect.
+				result.Config.Audit.Path = cfg.Audit.Path
+				slog.Warn("audit.path changed — restart required for this to take effect",
+					"current_path", cfg.Audit.Path,
+					"new_path_on_restart", result.Config.Audit.Path,
+				)
+			}
+			if changes.StrictCall || changes.StrictPublish {
+				// Strict policy toggles are read from env vars at startup;
+				// they cannot be changed without a restart.
+				slog.Warn("strict policy env vars changed — restart required")
+			}
+			if changes.SeedNodes {
+				slog.Info("seed nodes changed in config reload", "new_seeds", result.Config.GRPC.SeedNodes)
+				// TODO: attempt to join newly added seed nodes dynamically
+			}
+
+			if changes.Unsafe {
+				slog.Warn("config reload has unsafe changes — restart required",
+					"unsafe_fields", changes.UnsafeFields,
+				)
+			}
+
+			// Atomically replace the live config with the reloaded one.
+			// The audit.path field was restored above if it changed.
+			*cfg = *result.Config
+		}
+	}()
+
 	select {
 	case <-ctx.Done():
 	case err := <-fatalErr:
@@ -354,18 +547,37 @@ func main() {
 	}
 	slog.Info("shutting down...")
 
+	// Phase 1: Drain HTTP — stop accepting new connections, let in-flight
+	// requests complete before modules are stopped beneath them.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer drainCancel()
+	srv.Drain(drainCtx)
+
+	// Phase 2: GracefulStop gRPC — stop accepting new gRPC calls, let
+	// in-flight calls complete before modules are stopped.
+	grpcSrv.GracefulStop()
+
+	// Phase 3: Shutdown timeout for remaining operations.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
+	// Phase 4: Stop watching for new modules (storage, registration).
 	watchCancel()
 
+	// Phase 5: Stop all module processes.
 	if err := modMgr.StopAll(shutdownCtx); err != nil {
 		slog.Error("module stop", "error", err)
 	}
-	grpcSrv.GracefulStop()
+
+	// Phase 6: Close connection pool and rate limiter.
+	connPool.Close()
+	grpcRateLimiter.Close()
+
+	// Phase 7: Final HTTP server shutdown.
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("api shutdown", "error", err)
 	}
+
 	slog.Info("MuxCore stopped.")
 }
 

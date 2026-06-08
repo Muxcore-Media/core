@@ -2,9 +2,14 @@ package contracts
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 )
+
+// ErrNotFound is returned by storage providers when a key does not exist.
+// Use errors.Is(err, contracts.ErrNotFound) to check.
+var ErrNotFound = errors.New("object not found")
 
 type ObjectInfo struct {
 	Key          string

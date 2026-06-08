@@ -1,12 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
-	"os"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -294,6 +296,130 @@ func TestGetSession_AfterAuth(t *testing.T) {
 	if capturedSession.UserID != "auth-user" {
 		t.Errorf("expected auth-user, got %q", capturedSession.UserID)
 	}
+}
+
+func TestSecurityHeaders_AllPresent(t *testing.T) {
+	os.Setenv("MUXCORE_INSECURE_DISABLE_TLS", "true")
+	srv := NewServer(":0", "", "")
+	srv.HandleFunc("/check", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/check", nil)
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, req)
+
+	expected := map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+		"X-XSS-Protection":       "0",
+		"Referrer-Policy":        "strict-origin-when-cross-origin",
+	}
+	for header, want := range expected {
+		got := rec.Header().Get(header)
+		if got != want {
+			t.Errorf("header %s: got %q, want %q", header, got, want)
+		}
+	}
+}
+
+func TestSecurityHeaders_HSTSAbsentWithoutTLS(t *testing.T) {
+	os.Setenv("MUXCORE_INSECURE_DISABLE_TLS", "true")
+	srv := NewServer(":0", "", "")
+	srv.HandleFunc("/h", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+
+	req := httptest.NewRequest(http.MethodGet, "/h", nil)
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, req)
+
+	if hsts := rec.Header().Get("Strict-Transport-Security"); hsts != "" {
+		t.Errorf("HSTS should not be set without TLS, got %q", hsts)
+	}
+}
+
+func TestMaxBodyMiddleware_RejectsOversizedBody(t *testing.T) {
+	os.Setenv("MUXCORE_INSECURE_DISABLE_TLS", "true")
+	srv := NewServer(":0", "", "")
+	srv.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
+		// Reading the body triggers MaxBytesReader rejection.
+		if _, err := io.ReadAll(r.Body); err != nil {
+			http.Error(w, "too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Build a body larger than 10MB.
+	bigBody := make([]byte, maxBodySize+1)
+	req := httptest.NewRequest(http.MethodPost, "/upload", bytes.NewReader(bigBody))
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Error("expected oversized body to be rejected")
+	}
+}
+
+func TestAuthMiddleware_BruteForceBackoff(t *testing.T) {
+	os.Setenv("MUXCORE_INSECURE_DISABLE_TLS", "true")
+	srv := NewServer(":0", "", "")
+	srv.SetAuthFunc(func(r *http.Request) (*contracts.Session, error) {
+		return nil, errors.New("bad credentials")
+	})
+	srv.HandleFunc("/api/secret", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// 5 failures from the same IP should trigger the backoff on the 6th.
+	for i := 0; i < 5; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/secret", nil)
+		req.RemoteAddr = "9.9.9.9:1234"
+		rec := httptest.NewRecorder()
+		srv.http.Handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("request %d: expected 401, got %d", i, rec.Code)
+		}
+	}
+
+	// 6th request from same IP — should be rate-limited (429).
+	req := httptest.NewRequest(http.MethodGet, "/api/secret", nil)
+	req.RemoteAddr = "9.9.9.9:9999"
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("6th failed auth should be rate-limited (429), got %d", rec.Code)
+	}
+}
+
+func TestAuthzMiddleware_ABACPath(t *testing.T) {
+	os.Setenv("MUXCORE_INSECURE_DISABLE_TLS", "true")
+	srv := NewServer(":0", "", "")
+
+	// Auth always returns a session.
+	srv.SetAuthFunc(func(r *http.Request) (*contracts.Session, error) {
+		return &contracts.Session{UserID: "u1", Roles: []string{"viewer"}}, nil
+	})
+	// ABAC authorizer — rejects everyone.
+	srv.SetAuthorizer(&rejectAllAuthorizer{})
+	srv.RouteRequire("/admin/stuff", "admin.access", "admin")
+	srv.HandleFunc("/admin/stuff", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/stuff", nil)
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 from ABAC authorizer, got %d", rec.Code)
+	}
+}
+
+// rejectAllAuthorizer denies everything.
+type rejectAllAuthorizer struct{}
+
+func (r *rejectAllAuthorizer) Can(_ context.Context, _ contracts.Session, _, _ string) (bool, error) {
+	return false, nil
 }
 
 func TestExtractClientIP(t *testing.T) {

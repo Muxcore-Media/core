@@ -1,0 +1,39 @@
+{
+  "server": {
+    "addr": ":8080",
+    "read_timeout": 15,
+    "write_timeout": 15,
+    "cert_file": "/etc/ssl/muxcore/server-cert.pem",
+    "key_file": "/etc/ssl/muxcore/server-key.pem"
+  },
+  "grpc": {
+    "addr": ":9090",
+    "cert_file": "/etc/ssl/muxcore/grpc-cert.pem",
+    "key_file": "/etc/ssl/muxcore/grpc-key.pem",
+    "mtls_enabled": false,
+    "ca_cert_file": "",
+    "seed_nodes": [],
+    "join_token": ""
+  },
+  "log": {
+    "level": "info",
+    "format": "text"
+  },
+  "database": {
+    "driver": "",
+    "url": ""
+  },
+  "cache": {
+    "driver": "",
+    "url": ""
+  },
+  "audit": {
+    "path": ""
+  },
+  "storage": {
+    "read_timeout_seconds": 30,
+    "write_timeout_seconds": 300,
+    "delete_timeout_seconds": 30
+  },
+  "modules": {}
+}

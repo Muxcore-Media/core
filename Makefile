@@ -1,4 +1,4 @@
-.PHONY: build test lint coverage proto ci clean run
+.PHONY: build test test-integration lint coverage proto ci clean run help fmt tidy docker-build dev
 
 GO ?= go
 PROTOC ?= $(shell which protoc 2>/dev/null || echo ~/.local/bin/protoc)
@@ -6,9 +6,11 @@ PROTOC_GEN_GO ?= $(shell which protoc-gen-go 2>/dev/null || echo ~/go/bin/protoc
 PROTOC_GEN_GO_GRPC ?= $(shell which protoc-gen-go-grpc 2>/dev/null || echo ~/go/bin/protoc-gen-go-grpc)
 MODULE_DIR ?= ../modules
 CORE_PKGS ?= ./internal/... ./pkg/... ./cmd/...
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "0.0.0-dev")
+LDFLAGS ?= -s -w -X github.com/Muxcore-Media/core/internal/version.Version=$(VERSION)
 
 build:
-	$(GO) build -ldflags="-s -w" -o muxcored ./cmd/muxcored
+	$(GO) build -ldflags="$(LDFLAGS)" -o muxcored ./cmd/muxcored
 
 build-modules:
 	@for d in $(MODULE_DIR)/*/; do \
@@ -21,6 +23,9 @@ build-modules:
 
 test:
 	$(GO) test -race -count=1 -timeout 60s $(CORE_PKGS)
+
+test-integration:
+	$(GO) test -tags=integration -race -count=1 -timeout 120s ./internal/integration/...
 
 test-modules:
 	@for d in $(MODULE_DIR)/*/; do \
@@ -77,3 +82,31 @@ run: build
 
 clean:
 	rm -f muxcored coverage.out coverage.html
+
+fmt:
+	$(GO) fmt ./...
+
+tidy:
+	$(GO) mod tidy
+
+docker-build:
+	docker build -t muxcore:dev .
+
+dev:
+	docker-compose up -d
+
+help:
+	@echo "MuxCore build targets:"
+	@echo "  build             Build the muxcored binary"
+	@echo "  test              Run unit tests with race detection"
+	@echo "  test-integration  Run integration tests (spins up real subsystems)"
+	@echo "  lint         Run golangci-lint (or go vet if not installed)"
+	@echo "  coverage     Generate HTML coverage report"
+	@echo "  proto        Regenerate protobuf Go code"
+	@echo "  ci           Full CI pipeline (lint + test + build)"
+	@echo "  run          Build and run locally"
+	@echo "  fmt          Run go fmt ./..."
+	@echo "  tidy         Run go mod tidy"
+	@echo "  docker-build Build Docker image (muxcore:dev)"
+	@echo "  dev          Start development services via docker-compose"
+	@echo "  clean        Remove build artifacts"

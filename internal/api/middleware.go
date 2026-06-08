@@ -64,6 +64,9 @@ func securityHeadersMiddleware(next http.Handler, cspHeader string, tlsActive bo
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
+		// Disable the legacy XSS auditor — it causes more problems than it solves
+		// and is deprecated in all modern browsers (CWE-79 mitigation via CSP instead).
+		w.Header().Set("X-XSS-Protection", "0")
 		w.Header().Set("X-Permitted-Cross-Domain-Policies", "none")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")

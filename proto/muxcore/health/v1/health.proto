@@ -31,6 +31,10 @@ message HealthCheckResponse {
   string error = 4;
   // timestamp is the Unix timestamp (seconds) of the check.
   int64 timestamp = 5;
+  // load carries optional resource metrics from the module or node.
+  // Keys are metric names (e.g., "cpu_pct", "mem_mb", "queue_depth").
+  // Values are floating-point readings. Modules populate this via Health().
+  map<string, double> load = 6;
 }
 
 message HealthWatchRequest {

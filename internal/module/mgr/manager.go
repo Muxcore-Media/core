@@ -11,8 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	modulemgr "github.com/Muxcore-Media/core/internal/module"
 	modulev1 "github.com/Muxcore-Media/core/proto/gen/muxcore/module/v1"
@@ -22,12 +24,29 @@ import (
 	"google.golang.org/grpc"
 )
 
+// RestartPolicy controls how the manager handles unexpected module exits.
+type RestartPolicy string
+
+const (
+	// RestartNever does not restart the module on exit. Default.
+	RestartNever RestartPolicy = "never"
+	// RestartOnFailure restarts the module only on non-zero exit codes.
+	RestartOnFailure RestartPolicy = "on-failure"
+	// RestartAlways restarts the module on any exit (including clean exit 0).
+	RestartAlways RestartPolicy = "always"
+)
+
+// maxRestartAttempts is the maximum number of consecutive restarts before
+// the manager gives up and logs a permanent failure.
+const maxRestartAttempts = 5
+
 // ModuleBinary is a resolved module binary ready to run.
 type ModuleBinary struct {
-	ID      string
-	Version string
-	Path    string
-	Repo    string
+	ID            string
+	Version       string
+	Path          string
+	Repo          string
+	RestartPolicy RestartPolicy
 }
 
 // Manager spawns and tracks sidecar module processes.
@@ -156,17 +175,84 @@ func (m *Manager) Spawn(ctx context.Context, bin *ModuleBinary) error {
 		proxy.TrackProcess(cmd)
 	}
 
-	go func() {
+	go m.watchProcess(ctx, cmd, bin)
+
+	return nil
+}
+
+// watchProcess monitors a sidecar process and applies the restart policy on exit.
+func (m *Manager) watchProcess(ctx context.Context, cmd *exec.Cmd, bin *ModuleBinary) {
+	for attempt := 0; ; attempt++ {
 		err := cmd.Wait()
+
 		m.mu.Lock()
 		delete(m.processes, bin.ID)
 		m.mu.Unlock()
-		if err != nil && ctx.Err() == nil {
-			slog.Error("module exited unexpectedly", "id", bin.ID, "error", err)
-		}
-	}()
 
-	return nil
+		if ctx.Err() != nil {
+			// Context cancelled — shutdown in progress, don't restart.
+			return
+		}
+
+		cleanExit := err == nil
+
+		// Decide whether to restart.
+		shouldRestart := false
+		switch bin.RestartPolicy {
+		case RestartAlways:
+			shouldRestart = attempt < maxRestartAttempts
+		case RestartOnFailure:
+			shouldRestart = !cleanExit && attempt < maxRestartAttempts
+		default: // RestartNever
+			shouldRestart = false
+		}
+
+		if !cleanExit {
+			slog.Error("module exited unexpectedly",
+				"id", bin.ID,
+				"error", err,
+				"attempt", attempt,
+				"restart", shouldRestart,
+			)
+		}
+
+		if !shouldRestart {
+			return
+		}
+
+		// Exponential back-off: 1s, 2s, 4s, 8s, 16s, capped at 30s.
+		backoff := time.Duration(1<<attempt) * time.Second
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second
+		}
+		slog.Info("restarting module", "id", bin.ID, "backoff", backoff, "attempt", attempt+1)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+
+		// Spawn a new process for the same binary.
+		newCmd := exec.CommandContext(ctx, bin.Path,
+			"--muxcore-mesh-addr", m.meshAddr,
+			"--muxcore-module-id", bin.ID,
+		)
+		newCmd.Stdout = os.Stdout
+		newCmd.Stderr = os.Stderr
+
+		if startErr := newCmd.Start(); startErr != nil {
+			slog.Error("module restart failed", "id", bin.ID, "error", startErr)
+			return
+		}
+
+		m.mu.Lock()
+		m.processes[bin.ID] = newCmd
+		m.mu.Unlock()
+		slog.Info("module restarted", "id", bin.ID, "pid", newCmd.Process.Pid)
+
+		cmd = newCmd
+	}
 }
 
 // TrackProxy registers a SidecarProxy for health tracking.
@@ -194,6 +280,66 @@ func (m *Manager) VerifyChecksum(bin *ModuleBinary, expected string) error {
 		return fmt.Errorf("checksum mismatch for %s: expected %s, got %s", bin.ID, expected, actual)
 	}
 	slog.Info("module checksum verified", "id", bin.ID, "checksum", expected[:16]+"...")
+	return nil
+}
+
+// PruneCache removes old cached module binaries, keeping only the most recent
+// keepVersions versions per module ID. Versions are sorted lexicographically
+// (semver tags produced by `git describe` sort correctly this way). A
+// keepVersions of 0 removes all cached versions. Call on startup to prevent
+// unbounded cache growth.
+func (m *Manager) PruneCache(keepVersions int) error {
+	entries, err := os.ReadDir(m.cacheDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // cache doesn't exist yet
+		}
+		return fmt.Errorf("prune cache: read %s: %w", m.cacheDir, err)
+	}
+
+	var pruned, kept int
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		moduleDir := filepath.Join(m.cacheDir, e.Name())
+		versions, err := os.ReadDir(moduleDir)
+		if err != nil {
+			continue
+		}
+
+		// Sort versions: lexicographic order is sufficient for semver tags.
+		versionNames := make([]string, 0, len(versions))
+		for _, v := range versions {
+			if v.IsDir() {
+				versionNames = append(versionNames, v.Name())
+			}
+		}
+		sort.Strings(versionNames)
+
+		// Keep only the last keepVersions; remove the rest.
+		remove := versionNames
+		if keepVersions > 0 && len(versionNames) > keepVersions {
+			remove = versionNames[:len(versionNames)-keepVersions]
+		} else if keepVersions > 0 {
+			remove = nil
+		}
+
+		for _, v := range remove {
+			path := filepath.Join(moduleDir, v)
+			if err := os.RemoveAll(path); err != nil {
+				slog.Warn("prune cache: remove failed", "path", path, "error", err)
+				continue
+			}
+			pruned++
+			slog.Debug("pruned cached module version", "module", e.Name(), "version", v)
+		}
+		kept += len(versionNames) - len(remove)
+	}
+
+	if pruned > 0 {
+		slog.Info("module cache pruned", "removed", pruned, "retained", kept, "keep_per_module", keepVersions)
+	}
 	return nil
 }
 
@@ -260,6 +406,11 @@ func (s *registrationServer) Register(ctx context.Context, req *modulev1.Registe
 	}
 	if info.ID == "" {
 		return &modulev1.RegisterResponse{MeshAddr: s.mgr.meshAddr, Accepted: false, Error: "module ID is required"}, nil
+	}
+
+	// If the proto field carries min_core_version but info_json doesn't, use the proto value.
+	if info.MinCoreVersion == "" && req.MinCoreVersion != "" {
+		info.MinCoreVersion = req.MinCoreVersion
 	}
 
 	// Create a proxy that satisfies contracts.Module for registry registration.

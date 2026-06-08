@@ -22,12 +22,15 @@ func (o *Orchestrator) Stream(ctx context.Context, key string, offset, length in
 		return nil, err
 	}
 
+	tctx, cancel := o.withTimeout(ctx, o.readTimeout)
+	defer cancel()
+
 	if streamable, ok := prov.(contracts.Streamable); ok {
-		return streamable.Stream(ctx, key, offset, length)
+		return streamable.Stream(tctx, key, offset, length)
 	}
 
 	// Fallback: read the whole object and return a sub-slice.
-	rc, err := prov.Get(ctx, key)
+	rc, err := prov.Get(tctx, key)
 	if err != nil {
 		return nil, err
 	}

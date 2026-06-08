@@ -52,6 +52,9 @@ message JoinResponse {
   repeated NodeInfo members = 2;
   // leader_id is the current cluster leader.
   string leader_id = 3;
+  // term is the current leader's term number. Nodes reject messages from
+  // peers with a lower term (stale leadership). Monotonically increasing.
+  uint64 term = 4;
 }
 
 message LeaveRequest {
@@ -66,11 +69,16 @@ message HeartbeatRequest {
   map<string, double> load = 2;
   // modules lists the module IDs currently running on this node.
   repeated string modules = 3;
+  // term is the sender's current view of the leader term.
+  uint64 term = 4;
 }
 
 message HeartbeatResponse {
   // leader_id may change after leader election.
   string leader_id = 1;
+  // term is the current leader term. If higher than the sender's term,
+  // the sender must update its term and acknowledge the new leader.
+  uint64 term = 2;
 }
 
 message MembersRequest {}

@@ -43,6 +43,11 @@ type ModuleInfo struct {
 	Capabilities []string              // granular capability strings for routing/discovery
 	Contracts    []ContractDeclaration // typed contracts this module implements
 	DependsOn    []string              // module IDs that must be initialized before this module starts. Cycles detected by Registry.StartupOrder().
+	// MinCoreVersion is the minimum core version required by this module.
+	// Uses SemVer (e.g., "1.2.0"). Empty means compatible with any version.
+	// Core rejects modules whose MinCoreVersion is greater than the running
+	// core version or targets a different major version.
+	MinCoreVersion string
 }
 
 type Module interface {

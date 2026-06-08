@@ -3,6 +3,7 @@
 [![CI](https://github.com/Muxcore-Media/core/actions/workflows/ci.yml/badge.svg)](https://github.com/Muxcore-Media/core/actions)
 [![Go Version](https://img.shields.io/badge/Go-1.26-blue)](https://go.dev/)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/Muxcore-Media/core)](https://github.com/Muxcore-Media/core/releases)
 
 > **AI transparency:** Portions of this codebase may be written with AI
 > assistance. Every change — human, AI, or hybrid — goes through the same
@@ -52,6 +53,9 @@ muxcored --tag default
 
 That starts the loom and loads the official default modules from the spool. To start without modules (bare loom), omit `--tag`.
 → **[Full getting started guide](https://github.com/Muxcore-Media/core/wiki/Getting-Started)**
+
+Config file: copy [`muxcore.example.json`](muxcore.example.json) to `muxcore.json` and edit.
+JSON Schema for editor validation: [`muxcore.schema.json`](muxcore.schema.json)
 
 ---
 
