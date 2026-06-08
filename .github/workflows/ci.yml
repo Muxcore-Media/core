@@ -15,13 +15,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-<<<<<<< HEAD
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
-=======
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
->>>>>>> 65077c9 (build(deps): bump actions/setup-go from 5 to 6)
         with:
           go-version: "1.26.3"
       - run: go mod verify
@@ -33,13 +28,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-<<<<<<< HEAD
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
-=======
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
->>>>>>> 65077c9 (build(deps): bump actions/setup-go from 5 to 6)
         with:
           go-version: "1.26.3"
       - run: go vet ./internal/... ./pkg/... ./cmd/... ./sdk/...
@@ -58,13 +48,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-<<<<<<< HEAD
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
-=======
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
->>>>>>> 65077c9 (build(deps): bump actions/setup-go from 5 to 6)
         with:
           go-version: "1.26.3"
       - run: go test -race -count=1 -timeout 120s ./internal/... ./pkg/...
@@ -82,13 +67,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-<<<<<<< HEAD
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
-=======
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
->>>>>>> 65077c9 (build(deps): bump actions/setup-go from 5 to 6)
         with:
           go-version: "1.26.3"
       - run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/... ./cmd/...
@@ -104,13 +84,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-<<<<<<< HEAD
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
-=======
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
->>>>>>> 65077c9 (build(deps): bump actions/setup-go from 5 to 6)
         with:
           go-version: "1.26.3"
       - run: go build -ldflags="-s -w -X github.com/Muxcore-Media/core/internal/version.Version=$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)" -o muxcored ./cmd/muxcored
@@ -130,13 +105,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-<<<<<<< HEAD
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
-=======
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
->>>>>>> 65077c9 (build(deps): bump actions/setup-go from 5 to 6)
         with:
           go-version: "1.26.3"
       - name: Build binary for provenance
@@ -221,13 +191,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-<<<<<<< HEAD
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
-=======
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
->>>>>>> 65077c9 (build(deps): bump actions/setup-go from 5 to 6)
         with:
           go-version: "1.26.3"
       - run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
