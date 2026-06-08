@@ -2,9 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,12 +14,13 @@ import (
 	"github.com/Muxcore-Media/core/internal/api"
 	"github.com/Muxcore-Media/core/internal/config"
 	"github.com/Muxcore-Media/core/internal/events"
+	"github.com/Muxcore-Media/core/internal/grpcmesh"
 	"github.com/Muxcore-Media/core/internal/module"
-	_ "github.com/Muxcore-Media/core/internal/presets" // build-tag-gated module selection
+	_ "github.com/Muxcore-Media/core/internal/presets"
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/storage"
 	"github.com/Muxcore-Media/core/pkg/contracts"
-	"github.com/google/uuid"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -50,34 +50,53 @@ func main() {
 	bus := events.NewMemoryBus()
 	slog.Info("event bus ready", "type", "memory")
 
+	meshSrv := grpcmesh.NewServer()
+	meshClient := grpcmesh.NewClient(meshSrv)
+	grpcSrv := grpc.NewServer()
+	meshSrv.RegisterWithGRPC(grpcSrv)
+
+
 	reg := registry.New()
+	healthGrpc := grpcmesh.NewHealthServer(reg)
+	healthGrpc.RegisterWithGRPC(grpcSrv)
+
+	eventGrpc := grpcmesh.NewEventServer(bus)
+	eventGrpc.RegisterWithGRPC(grpcSrv)
+
+	discoveryGrpc := grpcmesh.NewDiscoveryServer(
+		"muxcore-"+cfg.GRPC.Addr,
+		cfg.GRPC.Addr,
+		cfg.Server.Addr,
+	)
+	discoveryGrpc.RegisterWithGRPC(grpcSrv)
 	mgr := module.NewManager(reg)
 
 	srv := api.NewServer(cfg.Server.Addr)
 
 	store := storage.NewOrchestrator(reg)
-	if err := store.Discover(); err != nil {
+	if err := store.DiscoverStorage(); err != nil {
 		slog.Warn("storage discover", "error", err)
 	}
-	cache := storage.NewMemoryCache()
-	store.SetCache(cache)
+	store.DiscoverCache()
 	slog.Info("storage orchestrator ready", "providers", store.ProviderCount())
 
-	// Cluster is nil until a cluster module is discovered.
 	deps := contracts.ModuleDeps{
 		Registry: reg,
 		EventBus: bus,
 		Routes:   srv,
 		Cluster:  nil,
 		Storage:  store,
+		Mesh:     meshClient,
 	}
 
 	modules := contracts.LoadRegistered(deps)
 
-	// Discover infrastructure modules.
+	// Discover infrastructure modules
 	var cl contracts.Cluster
 	var wp contracts.WorkerPool
 	var al contracts.AuditLogger
+	var rl contracts.RateLimiterProvider
+	var hm contracts.HealthMonitor
 	for _, mod := range modules {
 		if c, ok := mod.(contracts.Cluster); ok {
 			cl = c
@@ -88,10 +107,22 @@ func main() {
 		if a, ok := mod.(contracts.AuditLogger); ok {
 			al = a
 		}
+		if r, ok := mod.(contracts.RateLimiterProvider); ok {
+			rl = r
+		}
+		if h, ok := mod.(contracts.HealthMonitor); ok {
+			hm = h
+		}
 	}
 	deps.Cluster = cl
 	deps.WorkerPool = wp
 	deps.Audit = al
+
+	// Wire rate limiter into API server
+	if rl != nil {
+		srv.SetRateLimiter(rl)
+		slog.Info("rate limiter enabled", "module", "ratelimit-tokenbucket")
+	}
 
 	for _, mod := range modules {
 		if err := mgr.Register(mod, nil); err != nil {
@@ -102,13 +133,14 @@ func main() {
 
 	slog.Info("module registry ready", "count", reg.Count())
 
+	// Wire auth
 	authModules := reg.FindByKind(contracts.ModuleKindAuth)
 	if len(authModules) > 0 {
 		if provider, ok := authModules[0].Module.(contracts.AuthProvider); ok {
 			srv.SetAuthFunc(func(r *http.Request) (*contracts.Session, error) {
 				token := r.Header.Get("Authorization")
 				if token == "" {
-					return nil, fmt.Errorf("missing Authorization header")
+					return nil, errMissingAuth
 				}
 				token = strings.TrimPrefix(token, "Bearer ")
 				session, err := provider.Validate(r.Context(), token)
@@ -132,7 +164,18 @@ func main() {
 		}
 	}()
 
-	// Start cluster early so other modules can use it during Init/Start.
+	grpcLis, err := net.Listen("tcp", cfg.GRPC.Addr)
+	if err != nil {
+		slog.Error("grpc listen", "error", err)
+		os.Exit(1)
+	}
+	go func() {
+		slog.Info("gRPC mesh listening", "addr", cfg.GRPC.Addr)
+		if err := grpcSrv.Serve(grpcLis); err != nil {
+			slog.Error("grpc server", "error", err)
+		}
+	}()
+
 	if cl != nil {
 		if err := cl.Start(ctx); err != nil {
 			slog.Error("cluster start", "error", err)
@@ -150,31 +193,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				results := mgr.HealthCheck(context.Background())
-				for id, err := range results {
-					if err != nil {
-						slog.Warn("module degraded", "id", id, "error", err)
-						payload, _ := json.Marshal(map[string]string{"module_id": id, "error": err.Error()})
-						bus.Publish(context.Background(), contracts.Event{
-							ID:        uuid.New().String(),
-							Type:      contracts.EventModuleDegraded,
-							Source:    "core",
-							Payload:   payload,
-							Timestamp: time.Now(),
-						})
-					}
-				}
-			}
+	// Start health monitor if available
+	if hm != nil {
+		if err := hm.StartMonitoring(ctx, reg, bus); err != nil {
+			slog.Error("health monitor start", "error", err)
+		} else {
+			slog.Info("health monitor started")
 		}
-	}()
+	}
 
 	slog.Info("MuxCore running", "addr", cfg.Server.Addr)
 
@@ -184,6 +210,10 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
+	if hm != nil {
+		hm.Stop(shutdownCtx)
+	}
+	grpcSrv.GracefulStop()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("api shutdown", "error", err)
 	}
@@ -197,6 +227,12 @@ func main() {
 	}
 	slog.Info("MuxCore stopped.")
 }
+
+var errMissingAuth = errStr("missing Authorization header")
+
+type errStr string
+
+func (e errStr) Error() string { return string(e) }
 
 func setupLogger(lc config.LogConfig) *slog.Logger {
 	level := slog.LevelInfo

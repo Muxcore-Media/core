@@ -18,21 +18,14 @@ type Orchestrator struct {
 	registry  contracts.ServiceRegistry
 	providers map[string]contracts.StorageProvider
 	policies  []RoutingPolicy
-	cache     CacheLayer
+	cache     contracts.CacheLayer
 }
 
 // RoutingPolicy decides which provider handles a given key.
 type RoutingPolicy struct {
-	Name     string // human-readable name for the policy
-	Prefix   string // key prefix this policy handles, e.g. "media/" or "backups/"
-	Provider string // module ID of the preferred provider
-}
-
-// CacheLayer is an optional read-through cache.
-type CacheLayer interface {
-	Get(ctx context.Context, key string) ([]byte, bool)
-	Set(ctx context.Context, key string, data []byte) error
-	Invalidate(ctx context.Context, prefix string) error
+	Name     string
+	Prefix   string
+	Provider string
 }
 
 // NewOrchestrator creates an Orchestrator that uses the given registry for
@@ -44,8 +37,8 @@ func NewOrchestrator(reg contracts.ServiceRegistry) *Orchestrator {
 	}
 }
 
-// Discover finds all registered storage modules and adds them to the pool.
-func (o *Orchestrator) Discover() error {
+// DiscoverStorage finds all registered storage modules and adds them to the pool.
+func (o *Orchestrator) DiscoverStorage() error {
 	entries := o.registry.FindByKind(contracts.ModuleKindStorage)
 	for _, entry := range entries {
 		provider, ok := entry.Module.(contracts.StorageProvider)
@@ -59,6 +52,31 @@ func (o *Orchestrator) Discover() error {
 	return nil
 }
 
+// DiscoverCache finds a cache module from the registry and sets it as the read-through cache.
+// If no cache module is registered, the orchestrator operates without a cache.
+func (o *Orchestrator) DiscoverCache() {
+	// Check for dedicated cache module by capability
+	entries := o.registry.FindByCapability("cache.local")
+	for _, entry := range entries {
+		if cache, ok := entry.Module.(contracts.CacheLayer); ok {
+			o.mu.Lock()
+			o.cache = cache
+			o.mu.Unlock()
+			return
+		}
+	}
+	// Also check storage modules that implement CacheLayer
+	entries = o.registry.FindByKind(contracts.ModuleKindStorage)
+	for _, entry := range entries {
+		if cache, ok := entry.Module.(contracts.CacheLayer); ok {
+			o.mu.Lock()
+			o.cache = cache
+			o.mu.Unlock()
+			return
+		}
+	}
+}
+
 // AddPolicy registers a routing policy.
 func (o *Orchestrator) AddPolicy(p RoutingPolicy) {
 	o.mu.Lock()
@@ -66,19 +84,17 @@ func (o *Orchestrator) AddPolicy(p RoutingPolicy) {
 	o.mu.Unlock()
 }
 
-// SetCache sets the cache layer for read-through caching.
-func (o *Orchestrator) SetCache(c CacheLayer) {
+// SetCache directly sets the cache layer (for testing or forced override).
+func (o *Orchestrator) SetCache(c contracts.CacheLayer) {
 	o.mu.Lock()
 	o.cache = c
 	o.mu.Unlock()
 }
 
-// route returns the provider for a given key based on routing policies.
 func (o *Orchestrator) route(key string) (contracts.StorageProvider, error) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 
-	// Check routing policies first
 	for _, p := range o.policies {
 		if strings.HasPrefix(key, p.Prefix) {
 			if prov, ok := o.providers[p.Provider]; ok {
@@ -86,14 +102,12 @@ func (o *Orchestrator) route(key string) (contracts.StorageProvider, error) {
 			}
 		}
 	}
-	// Fall back to first available provider
 	for _, prov := range o.providers {
 		return prov, nil
 	}
 	return nil, fmt.Errorf("no storage provider available for key %q", key)
 }
 
-// Put stores data using the routed provider.
 func (o *Orchestrator) Put(ctx context.Context, key string, data io.Reader, size int64) error {
 	prov, err := o.route(key)
 	if err != nil {
@@ -102,9 +116,7 @@ func (o *Orchestrator) Put(ctx context.Context, key string, data io.Reader, size
 	return prov.Put(ctx, key, data, size)
 }
 
-// Get retrieves data, checking cache first.
 func (o *Orchestrator) Get(ctx context.Context, key string) (io.ReadCloser, error) {
-	// Check cache
 	o.mu.RLock()
 	cache := o.cache
 	o.mu.RUnlock()
@@ -121,7 +133,6 @@ func (o *Orchestrator) Get(ctx context.Context, key string) (io.ReadCloser, erro
 	return prov.Get(ctx, key)
 }
 
-// Delete removes data.
 func (o *Orchestrator) Delete(ctx context.Context, key string) error {
 	prov, err := o.route(key)
 	if err != nil {
@@ -130,7 +141,6 @@ func (o *Orchestrator) Delete(ctx context.Context, key string) error {
 	return prov.Delete(ctx, key)
 }
 
-// Exists checks whether data exists at the given key.
 func (o *Orchestrator) Exists(ctx context.Context, key string) (bool, error) {
 	prov, err := o.route(key)
 	if err != nil {
@@ -139,7 +149,6 @@ func (o *Orchestrator) Exists(ctx context.Context, key string) (bool, error) {
 	return prov.Exists(ctx, key)
 }
 
-// Stat returns metadata for the given key.
 func (o *Orchestrator) Stat(ctx context.Context, key string) (contracts.ObjectInfo, error) {
 	prov, err := o.route(key)
 	if err != nil {
@@ -148,7 +157,6 @@ func (o *Orchestrator) Stat(ctx context.Context, key string) (contracts.ObjectIn
 	return prov.Stat(ctx, key)
 }
 
-// Move moves data from src to dst, using atomic move if the provider supports it.
 func (o *Orchestrator) Move(ctx context.Context, src, dst string) error {
 	prov, err := o.route(src)
 	if err != nil {
@@ -157,7 +165,6 @@ func (o *Orchestrator) Move(ctx context.Context, src, dst string) error {
 	return prov.Move(ctx, src, dst)
 }
 
-// List returns all objects under the given prefix.
 func (o *Orchestrator) List(ctx context.Context, prefix string) ([]contracts.ObjectInfo, error) {
 	prov, err := o.route(prefix)
 	if err != nil {
@@ -166,14 +173,12 @@ func (o *Orchestrator) List(ctx context.Context, prefix string) ([]contracts.Obj
 	return prov.List(ctx, prefix)
 }
 
-// ProviderCount returns the number of discovered storage providers.
 func (o *Orchestrator) ProviderCount() int {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	return len(o.providers)
 }
 
-// CapabilityCheck returns which capability a provider supports for a key.
 func (o *Orchestrator) CapabilityCheck(ctx context.Context, key string) ([]string, error) {
 	prov, err := o.route(key)
 	if err != nil {

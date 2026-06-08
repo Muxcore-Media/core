@@ -33,3 +33,17 @@ type LockHandle interface {
 	// Unlock releases the lock.
 	Unlock(ctx context.Context) error
 }
+
+// CacheLayer is an optional read-through cache for the storage orchestrator.
+// Unlike CacheProvider (distributed caches for application state), CacheLayer
+// provides local caching for storage objects. Implemented by cache-memory
+// and similar modules. Core discovers a CacheLayer at bootstrap; if none is
+// found, the orchestrator operates without a cache.
+type CacheLayer interface {
+	// Get returns cached data for the given key. The bool indicates a cache hit.
+	Get(ctx context.Context, key string) ([]byte, bool)
+	// Set caches data for the given key.
+	Set(ctx context.Context, key string, data []byte) error
+	// Invalidate removes all cached entries whose key has the given prefix.
+	Invalidate(ctx context.Context, prefix string) error
+}

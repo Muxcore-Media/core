@@ -34,9 +34,8 @@ func TestBootstrapFullStack(t *testing.T) {
 	srv := api.NewServer(cfg.Server.Addr)
 
 	store := storage.NewOrchestrator(reg)
-	store.Discover()
-	cache := storage.NewMemoryCache()
-	store.SetCache(cache)
+	store.DiscoverStorage()
+	// Cache is now module-discovered
 
 	deps := contracts.ModuleDeps{
 		Registry: reg,

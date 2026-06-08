@@ -9,10 +9,10 @@
 package presets
 
 import (
-	// Essential modules for the default configuration.
-	// Each module's init() calls contracts.Register() so it's
-	// automatically loaded at bootstrap.
 	_ "github.com/Muxcore-Media/admin-ui"
 	_ "github.com/Muxcore-Media/api-rest"
+	_ "github.com/Muxcore-Media/cache-memory"
+	_ "github.com/Muxcore-Media/health-monitor"
+	_ "github.com/Muxcore-Media/ratelimit-tokenbucket"
 	_ "github.com/Muxcore-Media/scheduler-cron"
 )

@@ -16,7 +16,7 @@ type Server struct {
 	mux           *http.ServeMux
 	healthChecker func() map[string]error
 	AuthFunc      func(r *http.Request) (*contracts.Session, error)
-	RateLimiter   *RateLimiter
+	rateLimiter   contracts.RateLimiterProvider
 }
 
 func NewServer(addr string) *Server {
@@ -31,7 +31,6 @@ func NewServer(addr string) *Server {
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
-	s.RateLimiter = NewRateLimiter(100, time.Minute) // 100 req/min default
 	s.rebuildChain()
 	return s
 }
@@ -56,30 +55,28 @@ func (s *Server) HandleFunc(pattern string, handler func(http.ResponseWriter, *h
 }
 
 // SetHealthChecker sets a function that returns per-module health status.
-// The returned map must contain all registered module IDs; nil values indicate healthy.
 func (s *Server) SetHealthChecker(fn func() map[string]error) {
 	s.healthChecker = fn
 }
 
 // SetAuthFunc sets the authentication function for the middleware chain.
-// If fn is nil, auth is skipped (open mode). When called, the handler chain
-// is rebuilt to include or exclude the auth middleware.
 func (s *Server) SetAuthFunc(fn func(r *http.Request) (*contracts.Session, error)) {
 	s.AuthFunc = fn
 	s.rebuildChain()
 }
 
-// rebuildChain constructs the middleware chain in the correct order:
-//  1. Recovery (innermost — catches panics from the mux)
-//  2. Rate limit (if RateLimiter is set)
-//  3. Auth (if AuthFunc is set)
-//  4. Logging
-//  5. Trace (outermost — extracts/generates trace ID from request header)
+// SetRateLimiter sets the rate limiter module for the middleware chain.
+func (s *Server) SetRateLimiter(rl contracts.RateLimiterProvider) {
+	s.rateLimiter = rl
+	s.rebuildChain()
+}
+
+// rebuildChain constructs the middleware chain.
 func (s *Server) rebuildChain() {
 	var h http.Handler = s.mux
 	h = recoveryMiddleware(h)
-	if s.RateLimiter != nil {
-		h = rateLimitMiddleware(s.RateLimiter)(h)
+	if s.rateLimiter != nil && s.rateLimiter.Enabled() {
+		h = rateLimitMiddleware(s.rateLimiter)(h)
 	}
 	if s.AuthFunc != nil {
 		h = authMiddleware(s.AuthFunc)(h)
@@ -95,7 +92,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If health checker is set, include per-module health status
 	if s.healthChecker != nil {
 		moduleHealth := s.healthChecker()
 		degraded := false
@@ -119,15 +115,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("HX-Request") == "true" {
 			w.Header().Set("Content-Type", "text/html")
 			if degraded {
-				w.Write([]byte(`<span class="inline-flex items-center gap-1.5">
-	<span class="w-1.5 h-1.5 rounded-full bg-yellow-400"></span>
-	System: Degraded
-	</span>`))
+				w.Write([]byte(`<span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-yellow-400"></span>System: Degraded</span>`))
 			} else {
-				w.Write([]byte(`<span class="inline-flex items-center gap-1.5">
-	<span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>
-	System: Online
-	</span>`))
+				w.Write([]byte(`<span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>System: Online</span>`))
 			}
 			return
 		}
@@ -140,13 +130,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// No health checker — simple response
 	if r.Header.Get("HX-Request") == "true" {
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(`<span class="inline-flex items-center gap-1.5">
-	<span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>
-	System: Online
-	</span>`))
+		w.Write([]byte(`<span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>System: Online</span>`))
 		return
 	}
 
@@ -168,4 +154,41 @@ func withLogging(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 		slog.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start), "trace_id", trace.FromContext(r.Context()))
 	})
+}
+
+func rateLimitMiddleware(limiter contracts.RateLimiterProvider) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/health" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			ip := extractClientIP(r)
+			if !limiter.Allow(ip) {
+				w.Header().Set("Retry-After", "60")
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{
+					"error":   "rate_limited",
+					"message": "too many requests, try again later",
+				})
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func extractClientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		return xff
+	}
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+	host := r.RemoteAddr
+	for i := len(host) - 1; i >= 0; i-- {
+		if host[i] == 58 {
+			return host[:i]
+		}
+	}
+	return host
 }

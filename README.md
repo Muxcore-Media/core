@@ -202,7 +202,7 @@ See [Module System](https://github.com/Muxcore-Media/core/wiki/Module-System) an
 | Layer | Technology |
 |-------|------------|
 | Language | Go |
-| Core dependency | `github.com/google/uuid` (1 runtime dep); `google.golang.org/grpc` + `google.golang.org/protobuf` for proto contracts (compile-time only) |
+| Core dependency | `github.com/google/uuid` (1 runtime dep) |
 | Module contracts | `pkg/contracts` in core |
 | Internal Mesh | gRPC + protobuf |
 | Event Bus (core) | In-memory pub/sub |
@@ -256,6 +256,11 @@ docker compose up
 | Prometheus | [prometheus-metrics](https://github.com/Muxcore-Media/prometheus-metrics) | provider |
 | Storage Tiering | [storage-tiering](https://github.com/Muxcore-Media/storage-tiering) | provider |
 | Worker Pool | [worker-pool](https://github.com/Muxcore-Media/worker-pool) | scheduler |
+
+
+| Token Bucket RL | [ratelimit-tokenbucket](https://github.com/Muxcore-Media/ratelimit-tokenbucket) | provider |
+| Memory Cache | [cache-memory](https://github.com/Muxcore-Media/cache-memory) | provider |
+| Health Monitor | [health-monitor](https://github.com/Muxcore-Media/health-monitor) | provider |
 
 Marketplace catalog: [marketplace-catalog](https://github.com/Muxcore-Media/marketplace-catalog)
 

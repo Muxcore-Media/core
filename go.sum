@@ -2,6 +2,12 @@ github.com/Muxcore-Media/admin-ui v0.0.0-20260515223153-3de51fbac62b h1:A0sdlHNM
 github.com/Muxcore-Media/admin-ui v0.0.0-20260515223153-3de51fbac62b/go.mod h1:/kWf67SXD6Wr0LNQicHrU1tybWTt54px/9g1xHRYhuI=
 github.com/Muxcore-Media/api-rest v0.0.0-20260515223152-6c992b31e7f0 h1:pxTOCjk3baXfd3OnFVgfV3MMXnXmnZaLUKThTrWcFHY=
 github.com/Muxcore-Media/api-rest v0.0.0-20260515223152-6c992b31e7f0/go.mod h1:QWKXi1HLk7GW4NGevxTkwR0KcvrCEo/XAw36dAvWjMM=
+github.com/Muxcore-Media/cache-memory v0.0.0-20260525213131-39cae802558d h1:NHUo7taGF377YnvatEXwOqeU3BHi08thmaEIofHZgP8=
+github.com/Muxcore-Media/cache-memory v0.0.0-20260525213131-39cae802558d/go.mod h1:znXw5Qg+LvL5l9pgPfjE+cfAlKBPF8zDfZby0eyFslw=
+github.com/Muxcore-Media/health-monitor v0.0.0-20260525212452-df7746738105 h1:WpCrlETOzb6mkpGahzRqiCukiHkGGUAP/a/tfMBUSZk=
+github.com/Muxcore-Media/health-monitor v0.0.0-20260525212452-df7746738105/go.mod h1:c5FsJzAd2m/yAStA3bp1Jm2lV9OR1/Zi8hAjqaEQp+Q=
+github.com/Muxcore-Media/ratelimit-tokenbucket v0.0.0-20260525212449-4201c75ed833 h1:cizk+JlS0yXDLXzk6P7ecopHs2WA13VWAw4MqMp6ZTs=
+github.com/Muxcore-Media/ratelimit-tokenbucket v0.0.0-20260525212449-4201c75ed833/go.mod h1:VnpVih1nMNRGeZySdsWEQ1JIHa282Hq92pZv8uT58EE=
 github.com/Muxcore-Media/scheduler-cron v0.0.0-20260515223147-f2d561bd4213 h1:bpyB6CZAo/Nk90xgfOvhj+/iAkOV/uBEec7OD1fflaU=
 github.com/Muxcore-Media/scheduler-cron v0.0.0-20260515223147-f2d561bd4213/go.mod h1:O3v3Lv4d/eq2JuT3VbxRjNYPsrV3/Cg4Kido+3BrrnA=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=

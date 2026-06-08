@@ -10,10 +10,16 @@ import (
 // Config is the top-level configuration for MuxCore.
 type Config struct {
 	Server   ServerConfig   `json:"server"`
+	GRPC     GRPCConfig     `json:"grpc"`
 	Log      LogConfig      `json:"log"`
 	Database DatabaseConfig `json:"database"`
 	Cache    CacheConfig    `json:"cache"`
 	Modules  map[string]any `json:"modules"` // per-module arbitrary config
+}
+
+// GRPCConfig holds gRPC server settings.
+type GRPCConfig struct {
+	Addr string `json:"addr"` // listen address, e.g. ":9090"
 }
 
 // ServerConfig holds HTTP server settings.
@@ -48,6 +54,9 @@ func Default() *Config {
 			Addr:         ":8080",
 			ReadTimeout:  15,
 			WriteTimeout: 15,
+		},
+		GRPC: GRPCConfig{
+			Addr: ":9090",
 		},
 		Log: LogConfig{
 			Level:  "info",
