@@ -261,11 +261,13 @@ func (m *Manager) publishModuleRegistered(info contracts.ModuleInfo) {
 		slog.Error("failed to marshal module.registered event", "module", info.ID, "error", err)
 		return
 	}
-	_ = m.bus.Publish(context.Background(), contracts.Event{
+	if err := m.bus.Publish(context.Background(), contracts.Event{
 		Type:    contracts.EventModuleRegistered,
 		Source:  info.ID,
 		Payload: payload,
-	})
+	}); err != nil {
+		slog.Warn("publish module.registered event failed", "module", info.ID, "error", err)
+	}
 }
 
 // publishModuleUnregistered publishes a module.unregistered event on the event bus.
@@ -280,11 +282,13 @@ func (m *Manager) publishModuleUnregistered(info contracts.ModuleInfo) {
 		slog.Error("failed to marshal module.unregistered event", "module", info.ID, "error", err)
 		return
 	}
-	_ = m.bus.Publish(context.Background(), contracts.Event{
+	if err := m.bus.Publish(context.Background(), contracts.Event{
 		Type:    contracts.EventModuleUnregistered,
 		Source:  info.ID,
 		Payload: payload,
-	})
+	}); err != nil {
+		slog.Warn("publish module.unregistered event failed", "module", info.ID, "error", err)
+	}
 }
 
 // publishModuleDegraded publishes a module.degraded event on the event bus.
@@ -300,9 +304,11 @@ func (m *Manager) publishModuleDegraded(info contracts.ModuleInfo, err error) {
 		slog.Error("failed to marshal module.degraded event", "module", info.ID, "error", marshalErr)
 		return
 	}
-	_ = m.bus.Publish(context.Background(), contracts.Event{
+	if err := m.bus.Publish(context.Background(), contracts.Event{
 		Type:    contracts.EventModuleDegraded,
 		Source:  info.ID,
 		Payload: payload,
-	})
+	}); err != nil {
+		slog.Warn("publish module.degraded event failed", "module", info.ID, "error", err)
+	}
 }

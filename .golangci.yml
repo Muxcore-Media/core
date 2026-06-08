@@ -17,6 +17,8 @@ linters:
     - gosec        # security-focused static analysis
     - bodyclose    # check HTTP response bodies are closed
     - noctx        # detect HTTP requests without context
+    - errorlint    # check error wrapping conventions
+    - forcetypeassert # flag unchecked type assertions
   disable-all: false
 
 run:

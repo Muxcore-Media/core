@@ -72,6 +72,21 @@ type DiscoveryServer struct {
 	// connPool is an optional gRPC connection pool for heartbeat efficiency.
 	// When set, heartbeats reuse connections instead of creating new ones.
 	connPool *ConnPool
+	// requireAuth gates query methods (FindByCapability/FindByRole/Resolve/
+	// Members/Watch) behind caller authentication. When false (default),
+	// these methods are open. When true, requests without a caller identity
+	// in context are rejected with codes.Unauthenticated.
+	requireAuth bool
+	// maxWatchers is the maximum number of concurrent Watch streams. Default 100.
+	maxWatchers int
+}
+
+// SetMaxWatchers configures the maximum number of concurrent Watch streams.
+// 0 or negative uses the default of 100.
+func (s *DiscoveryServer) SetMaxWatchers(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maxWatchers = n
 }
 
 // SetConnPool attaches a connection pool for heartbeat and cross-node routing.
@@ -79,6 +94,32 @@ func (s *DiscoveryServer) SetConnPool(p *ConnPool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.connPool = p
+}
+
+// SetRequireAuth controls whether discovery query methods require an
+// authenticated caller. When true, Watch/Members/FindBy* return
+// Unauthenticated for requests with no caller identity.
+func (s *DiscoveryServer) SetRequireAuth(require bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requireAuth = require
+}
+
+// checkAuth returns an error if requireAuth is set and the caller has no
+// identity in context (no x-caller-id metadata and no mTLS identity).
+func (s *DiscoveryServer) checkAuth(ctx context.Context) error {
+	s.mu.RLock()
+	requireAuth := s.requireAuth
+	s.mu.RUnlock()
+	if !requireAuth {
+		return nil
+	}
+	callerID := contracts.CallerIDFromContext(ctx)
+	if callerID == "" {
+		return status.Error(codes.Unauthenticated,
+			"discovery: authentication required — set MUXCORE_GRPC_REQUIRE_DISCOVERY_AUTH=false or deploy an auth module")
+	}
+	return nil
 }
 
 // NewDiscoveryServer creates a discovery server. The leader is initially empty;
@@ -100,6 +141,7 @@ func NewDiscoveryServer(nodeID, grpcAddr, httpAddr, joinToken string, moduleIDs 
 		moduleIDs:         moduleIDs,
 	}
 	go ds.evictLoop()
+	go ds.joinCleanupLoop()
 	return ds
 }
 
@@ -190,17 +232,13 @@ func (s *DiscoveryServer) Join(ctx context.Context, req *discoveryv1.JoinRequest
 	s.members[node.GetId()] = node
 	s.lastSeen[node.GetId()] = time.Now()
 
-	// If this is the first member, it becomes leader (term 1).
-	// Otherwise, run election to ensure the lowest-ID node is leader.
 	wasLeader := s.leaderID
 	s.electLeaderLocked()
 
-	// Generate cluster ID if this is the first node joining.
 	if s.clusterID == "" {
 		s.clusterID = uuid.New().String()
 	}
 
-	// Emit appropriate cluster events.
 	event := &discoveryv1.ClusterEvent{
 		Type:     discoveryv1.ClusterEvent_TYPE_NODE_JOINED,
 		Node:     node,
@@ -225,14 +263,12 @@ func (s *DiscoveryServer) Join(ctx context.Context, req *discoveryv1.JoinRequest
 
 	currentTerm := s.term
 	leaderID := s.leaderID
-	s.mu.Unlock()
 
-	s.mu.RLock()
 	memberList := make([]*discoveryv1.NodeInfo, 0, len(s.members))
 	for _, m := range s.members {
 		memberList = append(memberList, m)
 	}
-	s.mu.RUnlock()
+	s.mu.Unlock()
 
 	resp := &discoveryv1.JoinResponse{
 		Members:   memberList,
@@ -241,7 +277,9 @@ func (s *DiscoveryServer) Join(ctx context.Context, req *discoveryv1.JoinRequest
 	}
 
 	// Propagate term via gRPC response metadata.
-	_ = grpc.SetHeader(ctx, metadata.Pairs(mdKeyTerm, fmt.Sprintf("%d", currentTerm)))
+	if err := grpc.SetHeader(ctx, metadata.Pairs(mdKeyTerm, fmt.Sprintf("%d", currentTerm))); err != nil {
+		slog.Warn("discovery: failed to set term header", "error", err)
+	}
 
 	return resp, nil
 }
@@ -338,12 +376,17 @@ func (s *DiscoveryServer) Heartbeat(ctx context.Context, req *discoveryv1.Heartb
 	}
 
 	// Propagate term via gRPC response metadata.
-	_ = grpc.SetHeader(ctx, metadata.Pairs(mdKeyTerm, fmt.Sprintf("%d", currentTerm)))
+	if err := grpc.SetHeader(ctx, metadata.Pairs(mdKeyTerm, fmt.Sprintf("%d", currentTerm))); err != nil {
+		slog.Warn("discovery: failed to set term header on heartbeat response", "error", err)
+	}
 
 	return resp, nil
 }
 
 func (s *DiscoveryServer) Members(ctx context.Context, req *discoveryv1.MembersRequest) (*discoveryv1.MembersResponse, error) {
+	if err := s.checkAuth(ctx); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	memberList := make([]*discoveryv1.NodeInfo, 0, len(s.members))
 	for _, m := range s.members {
@@ -353,7 +396,9 @@ func (s *DiscoveryServer) Members(ctx context.Context, req *discoveryv1.MembersR
 	currentTerm := s.term
 	s.mu.RUnlock()
 
-	_ = grpc.SetHeader(ctx, metadata.Pairs(mdKeyTerm, fmt.Sprintf("%d", currentTerm)))
+	if err := grpc.SetHeader(ctx, metadata.Pairs(mdKeyTerm, fmt.Sprintf("%d", currentTerm))); err != nil {
+		slog.Warn("discovery: failed to set term header on members response", "error", err)
+	}
 
 	return &discoveryv1.MembersResponse{
 		Members:  memberList,
@@ -362,11 +407,18 @@ func (s *DiscoveryServer) Members(ctx context.Context, req *discoveryv1.MembersR
 }
 
 func (s *DiscoveryServer) Watch(req *discoveryv1.MembersRequest, stream discoveryv1.DiscoveryService_WatchServer) error {
+	if err := s.checkAuth(stream.Context()); err != nil {
+		return err
+	}
 	ch := make(chan *discoveryv1.ClusterEvent, 16)
 	s.mu.Lock()
-	if len(s.watchers) >= 100 {
+	maxWatchers := s.maxWatchers
+	if maxWatchers <= 0 {
+		maxWatchers = 100
+	}
+	if len(s.watchers) >= maxWatchers {
 		s.mu.Unlock()
-		return status.Error(codes.ResourceExhausted, "too many watchers")
+		return status.Errorf(codes.ResourceExhausted, "too many watchers (max %d)", maxWatchers)
 	}
 	s.watchers[ch] = struct{}{}
 	// Send current leader info on watch start so clients get initial state.
@@ -381,10 +433,12 @@ func (s *DiscoveryServer) Watch(req *discoveryv1.MembersRequest, stream discover
 	}()
 
 	// Send initial snapshot via metadata.
-	_ = stream.SetHeader(metadata.Pairs(
+	if err := stream.SetHeader(metadata.Pairs(
 		mdKeyTerm, fmt.Sprintf("%d", currentTerm),
 		"x-cluster-leader-id", currentLeader,
-	))
+	)); err != nil {
+		slog.Warn("discovery: failed to set watch stream header", "error", err)
+	}
 
 	for {
 		select {
@@ -543,6 +597,28 @@ func (s *DiscoveryServer) evictLoop() {
 	}
 }
 
+// joinCleanupLoop periodically purges stale join attempt records.
+func (s *DiscoveryServer) joinCleanupLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case <-ticker.C:
+			s.joinMu.Lock()
+			cutoff := time.Now().Add(-10 * time.Minute)
+			for addr, t := range s.joinAttempts {
+				if t.Before(cutoff) {
+					delete(s.joinAttempts, addr)
+					delete(s.joinAttemptCounts, addr)
+				}
+			}
+			s.joinMu.Unlock()
+		}
+	}
+}
+
 // evictDeadNodes removes nodes that haven't sent a heartbeat within the
 // eviction timeout window. If the evicted node was the leader, a new
 // leader election is triggered. Caller must NOT hold the lock.
@@ -687,6 +763,9 @@ func (s *DiscoveryServer) Close() {
 
 // FindByCapability returns modules that advertise the given capability.
 func (s *DiscoveryServer) FindByCapability(ctx context.Context, req *discoveryv1.FindByCapabilityRequest) (*discoveryv1.FindByCapabilityResponse, error) {
+	if err := s.checkAuth(ctx); err != nil {
+		return nil, err
+	}
 	if s.reg == nil {
 		return &discoveryv1.FindByCapabilityResponse{}, nil
 	}
@@ -700,6 +779,9 @@ func (s *DiscoveryServer) FindByCapability(ctx context.Context, req *discoveryv1
 
 // FindByRole returns modules with the given role.
 func (s *DiscoveryServer) FindByRole(ctx context.Context, req *discoveryv1.FindByRoleRequest) (*discoveryv1.FindByRoleResponse, error) {
+	if err := s.checkAuth(ctx); err != nil {
+		return nil, err
+	}
 	if s.reg == nil {
 		return &discoveryv1.FindByRoleResponse{}, nil
 	}
@@ -713,6 +795,9 @@ func (s *DiscoveryServer) FindByRole(ctx context.Context, req *discoveryv1.FindB
 
 // Resolve looks up a single module by ID.
 func (s *DiscoveryServer) Resolve(ctx context.Context, req *discoveryv1.ResolveRequest) (*discoveryv1.ResolveResponse, error) {
+	if err := s.checkAuth(ctx); err != nil {
+		return nil, err
+	}
 	if s.reg == nil {
 		return &discoveryv1.ResolveResponse{Found: false}, nil
 	}

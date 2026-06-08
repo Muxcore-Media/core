@@ -74,19 +74,6 @@ func diffConfigs(old, new *Config) *ChangedFields {
 		c.AuditPath = true
 	}
 
-	// Strict policy toggles are read from env vars, not config file.
-	// We check env vars since those take precedence.
-	oldStrictCall := os.Getenv("MUXCORE_STRICT_CALL_POLICY")
-	newStrictCall := oldStrictCall // env vars don't change on reload, but we check anyway
-	if oldStrictCall != newStrictCall {
-		c.StrictCall = true
-	}
-	oldStrictPub := os.Getenv("MUXCORE_STRICT_PUBLISH_POLICY")
-	newStrictPub := oldStrictPub
-	if oldStrictPub != newStrictPub {
-		c.StrictPublish = true
-	}
-
 	// Seed nodes comparison.
 	if !stringSlicesEqual(old.GRPC.SeedNodes, new.GRPC.SeedNodes) {
 		c.SeedNodes = true

@@ -155,6 +155,40 @@ func TestScanModuleSource_EmptyDirectory(t *testing.T) {
 	}
 }
 
+func TestScanModuleSource_UnsafeInCommentAllowed(t *testing.T) {
+	dir := t.TempDir()
+	// "unsafe" appears only in a comment and a string literal — neither is an import.
+	os.WriteFile(filepath.Join(dir, "safe.go"), []byte(`package main
+
+// This function does NOT use the unsafe package internally.
+// See docs for details on memory safety.
+const note = "avoiding unsafe pointer arithmetic"
+
+func main() {}
+`), 0644)
+
+	found, err := scanModuleSource(dir)
+	if err != nil {
+		t.Fatalf("comment/string containing 'unsafe' should not trigger rejection: %v", err)
+	}
+	if len(found) != 0 {
+		t.Errorf("expected no patterns, got %v", found)
+	}
+}
+
+func TestScanModuleSource_BlankUnsafeImportRejected(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "blank.go"), []byte(`package main
+
+import _ "unsafe"
+`), 0644)
+
+	_, err := scanModuleSource(dir)
+	if err == nil {
+		t.Fatal("blank import of 'unsafe' should be rejected")
+	}
+}
+
 // --- moduleIDFromRepo ---
 
 func TestModuleIDFromRepo(t *testing.T) {

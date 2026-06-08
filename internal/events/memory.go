@@ -51,6 +51,8 @@ type sub struct {
 // to matching subscribers via bounded per-subscriber channels, providing
 // backpressure protection: slow subscribers have events dropped rather
 // than blocking the publisher or consuming unbounded memory.
+//
+// Call Close() during shutdown to cancel all subscriber worker goroutines.
 type MemoryBus struct {
 	mu            sync.RWMutex
 	subscribers   []*sub
@@ -63,6 +65,8 @@ type MemoryBus struct {
 	wal *WALWriter
 	// moduleTimeouts maps moduleID → per-handler timeout override.
 	moduleTimeouts map[string]time.Duration
+	// closed signals that the bus has been shut down.
+	closed chan struct{}
 }
 
 // NewMemoryBus creates an in-memory event bus.
@@ -70,7 +74,25 @@ func NewMemoryBus() *MemoryBus {
 	return &MemoryBus{
 		sem:            make(chan struct{}, runtime.NumCPU()*2),
 		moduleTimeouts: make(map[string]time.Duration),
+		closed:         make(chan struct{}),
 	}
+}
+
+// Close cancels all subscriber worker goroutines and prevents new subscriptions.
+// Safe to call multiple times. After Close, Subscribe/SubscribeModule return an error.
+func (b *MemoryBus) Close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	select {
+	case <-b.closed:
+		return
+	default:
+		close(b.closed)
+	}
+	for _, s := range b.subscribers {
+		s.cancel()
+	}
+	b.subscribers = nil
 }
 
 // SetAuditLogger configures an audit logger for event bus operations.
@@ -88,11 +110,18 @@ func (b *MemoryBus) SetNodeID(id string) {
 }
 
 // SetPublishPolicy configures a publish policy provider consulted before
-// every Publish() call. When nil (default), all publishes are allowed.
+// every Publish() call. When nil, all publishes are denied (deny-by-default).
 func (b *MemoryBus) SetPublishPolicy(p contracts.PublishPolicyProvider) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.publishPolicy = p
+}
+
+// PublishPolicy returns the current publish policy, or nil if none.
+func (b *MemoryBus) PublishPolicy() contracts.PublishPolicyProvider {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.publishPolicy
 }
 
 // SetSubscriberTimeout sets a per-module handler timeout override.
@@ -125,7 +154,7 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 	publishPolicy := b.publishPolicy
 	b.mu.RUnlock()
 	if publishPolicy == nil {
-		return fmt.Errorf("publish denied: no publish policy configured — event %q cannot be dispatched", event.Type)
+		return fmt.Errorf("publish denied: no publish policy configured — event %q cannot be dispatched. Deploy a module implementing publish.policy", event.Type)
 	}
 	callerID := contracts.CallerIDFromContext(ctx)
 	if rpp, ok := publishPolicy.(contracts.ResourcePublishPolicyProvider); ok {
@@ -233,6 +262,12 @@ func (b *MemoryBus) SubscribeModule(ctx context.Context, moduleID, eventType str
 func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType string, handler contracts.EventHandler, timeout time.Duration) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	select {
+	case <-b.closed:
+		return fmt.Errorf("event bus is closed")
+	default:
+	}
 
 	// Audit the subscription if configured.
 	auditLogger := b.audit
@@ -495,12 +530,14 @@ func (b *MemoryBus) Request(ctx context.Context, event contracts.Event, timeout 
 		return contracts.Event{}, err
 	}
 
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case r := <-ch:
 		return r.event, r.err
 	case <-ctx.Done():
 		return contracts.Event{}, ctx.Err()
-	case <-time.After(timeout):
+	case <-timer.C:
 		return contracts.Event{}, fmt.Errorf("request timed out after %s", timeout)
 	}
 }

@@ -38,6 +38,8 @@ type Orchestrator struct {
 	readTimeout   time.Duration
 	writeTimeout  time.Duration
 	deleteTimeout time.Duration
+	// auditSem limits concurrent audit goroutines to prevent unbounded bursts.
+	auditSem chan struct{}
 }
 
 // StorageTimeouts holds per-operation deadline durations for the orchestrator.
@@ -63,6 +65,7 @@ func NewOrchestrator(reg contracts.Registry) *Orchestrator {
 		readTimeout:   30 * time.Second,
 		writeTimeout:  5 * time.Minute,
 		deleteTimeout: 30 * time.Second,
+		auditSem:      make(chan struct{}, 100),
 	}
 }
 
@@ -149,17 +152,32 @@ func validateKey(key string) error {
 	if key == "" {
 		return fmt.Errorf("storage key must not be empty")
 	}
-	if strings.Contains(key, "..") {
+	return validateKeyOrPrefix(key)
+}
+
+// validatePrefix validates a prefix for List operations. Unlike validateKey,
+// the empty string is allowed and means "match all objects".
+func validatePrefix(prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+	return validateKeyOrPrefix(prefix)
+}
+
+// validateKeyOrPrefix applies the common validation rules shared by
+// validateKey and validatePrefix.
+func validateKeyOrPrefix(s string) error {
+	if strings.Contains(s, "..") {
 		return fmt.Errorf("storage key must not contain '..'")
 	}
-	if strings.HasPrefix(key, "/") {
-		return fmt.Errorf("storage key must not start with '/': %q", key)
+	if strings.HasPrefix(s, "/") {
+		return fmt.Errorf("storage key must not start with '/': %q", s)
 	}
-	if strings.ContainsRune(key, '\x00') {
+	if strings.ContainsRune(s, '\x00') {
 		return fmt.Errorf("storage key must not contain null bytes")
 	}
-	if len(key) > 1024 {
-		return fmt.Errorf("storage key too long (%d bytes)", len(key))
+	if len(s) > 1024 {
+		return fmt.Errorf("storage key too long (%d bytes)", len(s))
 	}
 	return nil
 }
@@ -208,34 +226,42 @@ func (o *Orchestrator) Put(ctx context.Context, key string, data io.Reader, size
 		return fmt.Errorf("object size %d exceeds maximum %d", size, MaxObjectSize)
 	}
 
-	// If size is unknown (e.g., -1 or 0 for streaming), use a LimitReader.
-	reader := data
-	if size <= 0 || size > MaxObjectSize {
-		reader = io.LimitReader(data, MaxObjectSize+1)
-	}
-
 	prov, err := o.route(key)
 	if err != nil {
 		return err
 	}
 
-	buf, err := io.ReadAll(reader)
-	if err != nil {
-		return err
-	}
-	if int64(len(buf)) > MaxObjectSize {
-		return fmt.Errorf("object exceeds maximum size %d", MaxObjectSize)
-	}
-
 	putCtx, cancel := o.withTimeout(ctx, o.writeTimeout)
 	defer cancel()
 
-	if err := prov.Put(putCtx, key, bytes.NewReader(buf), int64(len(buf))); err != nil {
-		return err
+	var actualSize int64
+	var cacheBuf []byte
+
+	if size > 0 {
+		// Size is known — pass the reader directly without buffering.
+		// The provider can stream the data incrementally.
+		actualSize = size
+		if err := prov.Put(putCtx, key, data, size); err != nil {
+			return err
+		}
+	} else {
+		// Size is unknown — read into memory to determine size, capped at MaxObjectSize+1.
+		buf, rerr := io.ReadAll(io.LimitReader(data, MaxObjectSize+1))
+		if rerr != nil {
+			return rerr
+		}
+		if int64(len(buf)) > MaxObjectSize {
+			return fmt.Errorf("object exceeds maximum size %d", MaxObjectSize)
+		}
+		actualSize = int64(len(buf))
+		cacheBuf = buf
+		if err := prov.Put(putCtx, key, bytes.NewReader(buf), actualSize); err != nil {
+			return err
+		}
 	}
 
 	// Audit successful storage put.
-	o.auditStorage("storage.put", key, int64(len(buf)))
+	o.auditStorage(ctx, "storage.put", key, actualSize)
 
 	// Write-through: update cache after successful Put.
 	// Cache races with SetCache/DiscoverCache are acceptable — eventually consistent.
@@ -243,7 +269,16 @@ func (o *Orchestrator) Put(ctx context.Context, key string, data io.Reader, size
 	cache := o.cache
 	o.mu.RUnlock()
 	if cache != nil {
-		_ = cache.Set(ctx, key, buf)
+		if cacheBuf != nil {
+			if err := cache.Set(ctx, key, cacheBuf); err != nil {
+				slog.Warn("cache set failed", "key", key, "error", err)
+			}
+		} else {
+			// When size was known we didn't buffer; fetch from provider for cache.
+			if err := cache.Invalidate(ctx, key); err != nil {
+				slog.Warn("cache invalidate failed", "key", key, "error", err)
+			}
+		}
 	}
 
 	return nil
@@ -297,14 +332,16 @@ func (o *Orchestrator) Delete(ctx context.Context, key string) error {
 	}
 
 	// Audit successful storage delete.
-	o.auditStorage("storage.delete", key, 0)
+	o.auditStorage(ctx, "storage.delete", key, 0)
 
 	// Invalidate cache entry after successful Delete.
 	o.mu.RLock()
 	cache := o.cache
 	o.mu.RUnlock()
 	if cache != nil {
-		_ = cache.Invalidate(ctx, key)
+		if err := cache.Invalidate(ctx, key); err != nil {
+			slog.Warn("cache invalidate failed", "key", key, "error", err)
+		}
 	}
 
 	return nil
@@ -353,12 +390,12 @@ func (o *Orchestrator) Move(ctx context.Context, src, dst string) error {
 		return err
 	}
 	// Audit successful storage move.
-	o.auditStorage("storage.move", dst, 0)
+	o.auditStorage(ctx, "storage.move", dst, 0)
 	return nil
 }
 
 func (o *Orchestrator) List(ctx context.Context, prefix string) ([]contracts.ObjectInfo, error) {
-	if err := validateKey(prefix); err != nil {
+	if err := validatePrefix(prefix); err != nil {
 		return nil, err
 	}
 	prov, err := o.route(prefix)
@@ -415,8 +452,11 @@ func (o *Orchestrator) ProviderInfo() []StorageProviderInfo {
 }
 
 func (o *Orchestrator) CapabilityCheck(ctx context.Context, key string) ([]string, error) {
-	if err := validateKey(key); err != nil {
-		return nil, err
+	// Empty key is allowed — means "check capabilities of the default provider".
+	if key != "" {
+		if err := validateKey(key); err != nil {
+			return nil, err
+		}
 	}
 	prov, err := o.route(key)
 	if err != nil {
@@ -441,40 +481,48 @@ func (o *Orchestrator) CapabilityCheck(ctx context.Context, key string) ([]strin
 	return caps, nil
 }
 // auditStorage records a storage operation via the audit logger.
-// It is a fire-and-forget operation; failures are silently dropped.
-func (o *Orchestrator) auditStorage(action, key string, size int64) {
+// It uses the caller's context for cancellation and limits concurrent audit
+// goroutines to 100 to prevent unbounded goroutine bursts.
+func (o *Orchestrator) auditStorage(ctx context.Context, action, key string, size int64) {
 	o.mu.RLock()
 	auditLogger := o.audit
 	o.mu.RUnlock()
 	if auditLogger == nil {
 		return
 	}
-	details := map[string]string{
-		"key": key,
+	select {
+	case o.auditSem <- struct{}{}:
+		go func() {
+			defer func() { <-o.auditSem }()
+			details := map[string]string{
+				"key": key,
+			}
+			if size > 0 {
+				details["size_bytes"] = fmt.Sprintf("%d", size)
+			}
+			entry := contracts.AuditEntry{
+				ID:        uuid.New().String(),
+				Timestamp: time.Now(),
+				Actor:     "system",
+				Action:    action,
+				Resource:  key,
+				Details:   details,
+			}
+			if err := auditLogger.Log(ctx, entry); err != nil {
+				slog.Error("audit log write failed", "action", action, "error", err)
+			}
+		}()
+	default:
+		slog.Warn("audit storage: too many concurrent audit logs, dropping entry", "action", action, "key", key)
 	}
-	if size > 0 {
-		details["size_bytes"] = fmt.Sprintf("%d", size)
-	}
-	go func() {
-		entry := contracts.AuditEntry{
-			ID:        uuid.New().String(),
-			Timestamp: time.Now(),
-			Actor:     "system",
-			Action:    action,
-			Resource:  key,
-			Details:   details,
-		}
-		if err := auditLogger.Log(context.Background(), entry); err != nil {
-			slog.Error("audit log write failed", "action", action, "error", err)
-		}
-	}()
 }
 
 // WatchModules subscribes to module.registered events and automatically
 // re-discovers storage providers and cache layers when new modules appear.
 // Call this after bootstrap to enable dynamic provider registration.
-// The returned cancel function stops watching.
-func (o *Orchestrator) WatchModules(bus contracts.EventBus) (cancel func()) {
+// ctx controls the subscription lifecycle — when ctx is cancelled the
+// subscription is unsubscribed. The returned cancel function also stops watching.
+func (o *Orchestrator) WatchModules(ctx context.Context, bus contracts.EventBus) (cancel func()) {
 	if bus == nil {
 		slog.Warn("WatchModules called with nil EventBus - module discovery watching disabled")
 		return func() {}
@@ -509,10 +557,14 @@ func (o *Orchestrator) WatchModules(bus contracts.EventBus) (cancel func()) {
 		return nil
 	}
 
-	_ = bus.Subscribe(context.Background(), contracts.EventModuleRegistered, handler)
+	if err := bus.Subscribe(ctx, contracts.EventModuleRegistered, handler); err != nil {
+		slog.Error("WatchModules: subscribe failed", "error", err)
+	}
 
 	return func() {
-		_ = bus.Unsubscribe(context.Background(), contracts.EventModuleRegistered, handler)
+		if err := bus.Unsubscribe(ctx, contracts.EventModuleRegistered, handler); err != nil {
+			slog.Warn("WatchModules: unsubscribe failed", "error", err)
+		}
 	}
 }
 

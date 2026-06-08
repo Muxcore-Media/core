@@ -1,0 +1,45 @@
+[Unit]
+Description=MuxCore distributed fabric for media orchestration
+Documentation=https://github.com/Muxcore-Media/core
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=muxcore
+Group=muxcore
+# Environment file — set MUXCORE_ADDR, MUXCORE_TLS_CERT, etc.
+EnvironmentFile=-/etc/muxcore/muxcore.conf
+ExecStart=/usr/local/bin/muxcored --tag default
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+# Timeout for graceful shutdown
+TimeoutStopSec=30
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+MemoryDenyWriteExecute=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+# RemoveProcess restricts to basic signal/wait/status syscalls
+# MuxCore modules may need more; adjust as needed
+SystemCallFilter=@system-service
+# ReadWritePaths for module cache, audit log, and event journal
+ReadWritePaths=/var/lib/muxcore /var/log/muxcore
+# Capabilities
+CapabilityBoundingSet=
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

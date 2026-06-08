@@ -21,9 +21,7 @@ import (
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/audit"
-	"github.com/Muxcore-Media/core/internal/callpolicy"
 	"github.com/Muxcore-Media/core/internal/config"
-	"github.com/Muxcore-Media/core/internal/eventpolicy"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
 	"github.com/Muxcore-Media/core/internal/health"
@@ -44,6 +42,7 @@ type harness struct {
 	reg      *registry.Registry
 	store    *storage.Orchestrator
 	modMgr   *module.Manager
+	meshSrv  *grpcmesh.Server
 	grpcSrv  *grpc.Server
 	grpcAddr string
 	audit    *audit.FileLogger
@@ -67,11 +66,8 @@ func newHarness(t *testing.T) *harness {
 	auditLogger, _ := audit.NewFileLogger("")
 	bus.SetAuditLogger(auditLogger)
 
-	// Wire policies.
-	callPol := callpolicy.NewBuiltinPolicy(reg)
-	eventPol := eventpolicy.NewBuiltinPolicy(reg)
-	bus.SetPublishPolicy(eventPol)
-
+	// Publish policy is nil — bus will deny all publishes (deny-by-default).
+	// Tests that need events must set a policy explicitly.
 	modMgr := module.NewManager(reg, bus)
 
 	// gRPC server on a random port.
@@ -84,12 +80,9 @@ func newHarness(t *testing.T) *harness {
 	meshSrv := grpcmesh.NewServer()
 	meshSrv.RegisterWithGRPC(grpcSrv)
 	meshClient := grpcmesh.NewClient(meshSrv)
-	_ = callPol
-	meshClient.SetCallPolicy(callPol)
 
 	storageGrpc := grpcmesh.NewStorageServer(store)
 	storageGrpc.RegisterWithGRPC(grpcSrv)
-	storageGrpc.SetCallPolicy(callPol)
 
 	go grpcSrv.Serve(lis)
 
@@ -99,6 +92,7 @@ func newHarness(t *testing.T) *harness {
 		reg:      reg,
 		store:    store,
 		modMgr:   modMgr,
+		meshSrv:  meshSrv,
 		grpcSrv:  grpcSrv,
 		grpcAddr: lis.Addr().String(),
 		audit:    auditLogger,
@@ -405,12 +399,19 @@ func TestIntegration_Registry_DependencyOrder(t *testing.T) {
 // --- Stubs ---
 
 type stubModule struct {
-	id, name, version string
+	id, name, version        string
+	roles, caps              []string
 	inited, started, stopped bool
 }
 
 func (m *stubModule) Info() contracts.ModuleInfo {
-	return contracts.ModuleInfo{ID: m.id, Name: m.name, Version: m.version}
+	return contracts.ModuleInfo{
+		ID:           m.id,
+		Name:         m.name,
+		Version:      m.version,
+		Roles:        m.roles,
+		Capabilities: m.caps,
+	}
 }
 func (m *stubModule) Init(_ context.Context) error  { m.inited = true; return nil }
 func (m *stubModule) Start(_ context.Context) error { m.started = true; return nil }

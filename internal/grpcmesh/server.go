@@ -24,6 +24,12 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// isInsecureTLS returns true when the MUXCORE_INSECURE_DISABLE_TLS env var is set.
+func isInsecureTLS() bool {
+	v := os.Getenv("MUXCORE_INSECURE_DISABLE_TLS")
+	return v == "true" || v == "1"
+}
+
 // ErrRemoteRoutingUnavailable is returned when a cross-node call is attempted
 // but no cluster module has been configured for remote routing.
 var ErrRemoteRoutingUnavailable = errors.New("cross-node routing unavailable: no cluster module configured")
@@ -251,6 +257,13 @@ func (c *Client) SetCallPolicy(policy contracts.CallPolicyProvider) {
 	c.callPolicy = policy
 }
 
+// CallPolicy returns the currently registered call policy, or nil if none.
+func (c *Client) CallPolicy() contracts.CallPolicyProvider {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.callPolicy
+}
+
 // SetTransportCredentials sets the TLS credentials used for cross-node gRPC connections.
 // When nil, cross-node routing is disabled — the mesh will only route to local modules.
 // This prevents accidental plaintext fallback in production.
@@ -364,7 +377,7 @@ func (c *Client) RegisterHandler(moduleID string, handler contracts.MeshHandler)
 //	MUXCORE_GRPC_MTLS_ENABLED — if "true" or "1", enable mutual TLS
 func GRPCTransportCredentials(certFile, keyFile, caCertFile string, mtlsEnabled bool) (credentials.TransportCredentials, error) {
 	if certFile == "" && keyFile == "" {
-		if os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "true" || os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "1" {
+		if isInsecureTLS() {
 			return nil, nil // insecure mode explicitly enabled
 		}
 		return nil, fmt.Errorf("TLS is required for gRPC — set MUXCORE_GRPC_TLS_CERT and MUXCORE_GRPC_TLS_KEY to enable encryption")

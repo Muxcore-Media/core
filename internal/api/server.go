@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/trace"
@@ -33,16 +35,29 @@ type Server struct {
 	// Modules serving HTML content (e.g. admin UI) must call SetCSP with
 	// appropriate directives for script-src, style-src, img-src, connect-src.
 	cspHeader string
+
+	// authFailureCleanup stops the background auth failure map cleanup ticker.
+	authFailureCleanup chan struct{}
+	// authFailureMu guards the authFailures map for the cleanup loop.
+	authFailureMu   sync.Mutex
+	authFailures    map[string]*authFailureRecord
+	// trustedProxies is the list of CIDR ranges whose X-Forwarded-For we trust.
+	trustedProxies []net.IPNet
 }
 
 func NewServer(addr, certFile, keyFile string) *Server {
 	mux := http.NewServeMux()
 	s := &Server{
-		mux:              mux,
-		publicPaths:      map[string]bool{"/health": true},
-		cspHeader:        "default-src 'none'; frame-ancestors 'none'",
-		routePermissions: make(map[string]RoutePermission),
+		mux:                mux,
+		publicPaths:        map[string]bool{"/health": true},
+		cspHeader:          "default-src 'none'; frame-ancestors 'none'",
+		routePermissions:   make(map[string]RoutePermission),
+		authFailureCleanup: make(chan struct{}),
+		authFailures:       make(map[string]*authFailureRecord),
+		trustedProxies:     []net.IPNet{{IP: net.IPv4(127, 0, 0, 0), Mask: net.CIDRMask(8, 32)}, {IP: net.ParseIP("::1"), Mask: net.CIDRMask(128, 128)}},
 	}
+	// Start auth failure cleanup ticker once, not per rebuildChain call.
+	go s.authFailureCleanupLoop()
 
 	mux.HandleFunc("/health", s.handleHealth)
 
@@ -52,6 +67,16 @@ func NewServer(addr, certFile, keyFile string) *Server {
 		WriteTimeout:   15 * time.Second,
 		IdleTimeout:    120 * time.Second,
 		MaxHeaderBytes: 65536, // 64 KB
+		TLSConfig: &tls.Config{
+			MinVersion:               tls.VersionTLS12,
+			PreferServerCipherSuites: true,
+			CipherSuites: []uint16{
+				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			},
+		},
 	}
 	s.rebuildChain()
 	s.certFile = certFile
@@ -67,7 +92,7 @@ func (s *Server) Start() error {
 	if s.certFile != "" && s.keyFile != "" {
 		return s.http.ListenAndServeTLS(s.certFile, s.keyFile)
 	}
-	if os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "true" || os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "1" {
+	if insecureTLSCheck() {
 		slog.Warn("API server starting without TLS — insecure mode explicitly enabled")
 		return s.http.ListenAndServe()
 	}
@@ -93,9 +118,57 @@ func (s *Server) Drain(ctx context.Context) error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	close(s.authFailureCleanup)
 	// After Drain, the server is already shut down. This is a no-op but
 	// harmless — Shutdown on an already-shut-down server returns nil.
 	return s.http.Shutdown(ctx)
+}
+
+// authFailureCleanupLoop periodically purges stale auth failure records.
+// Entries with no activity for over 10 minutes are removed.
+func (s *Server) authFailureCleanupLoop() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.authFailureCleanup:
+			return
+		case <-ticker.C:
+			s.authFailureMu.Lock()
+			cutoff := time.Now().Add(-10 * time.Minute)
+			for ip, rec := range s.authFailures {
+				if rec.lastActivity.Before(cutoff) {
+					delete(s.authFailures, ip)
+				}
+			}
+			s.authFailureMu.Unlock()
+		}
+	}
+}
+
+// SetTrustedProxies configures CIDR ranges whose X-Forwarded-For headers are
+// trusted. By default only loopback (127.0.0.0/8, ::1/128) is trusted.
+// Pass nil to trust only loopback. Pass an empty-but-initialized slice to
+// trust no proxy at all (X-Forwarded-For is ignored entirely).
+func (s *Server) SetTrustedProxies(cidrs []string) {
+	if len(cidrs) == 0 {
+		s.trustedProxies = []net.IPNet{{IP: net.IPv4(127, 0, 0, 0), Mask: net.CIDRMask(8, 32)}, {IP: net.ParseIP("::1"), Mask: net.CIDRMask(128, 128)}}
+		return
+	}
+	parsed := make([]net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			slog.Warn("ignoring invalid trusted proxy CIDR", "cidr", c, "error", err)
+			continue
+		}
+		parsed = append(parsed, *n)
+	}
+	if len(parsed) == 0 {
+		parsed = append(parsed, net.IPNet{IP: net.IPv4(127, 0, 0, 0), Mask: net.CIDRMask(8, 32)})
+	}
+	parsed = append(parsed, net.IPNet{IP: net.ParseIP("::1"), Mask: net.CIDRMask(128, 128)})
+	s.trustedProxies = parsed
 }
 
 // Handle registers an http.Handler for the given pattern.
@@ -167,31 +240,32 @@ func (s *Server) AddPublicPath(path string) {
 
 // rebuildChain constructs the middleware chain.
 // Order: MaxBytesReader (outermost) → security headers → recovery → rate limit → auth → authz → audit → logging → trace.
+// In Go HTTP middleware, the last wrapper applied executes first, so the build
+// order is the reverse of the execution order.
 func (s *Server) rebuildChain() {
-	tlsActive := (s.certFile != "" && s.keyFile != "") ||
-		(os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") != "true" && os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") != "1")
+	tlsActive := (s.certFile != "" && s.keyFile != "") || !insecureTLSCheck()
 
 	var h http.Handler = s.mux
-	// Enforce request body size limit via MaxBytesReader to prevent
-	// memory exhaustion (CWE-770). Applied outermost so oversized
-	// bodies are rejected before any handler logic runs.
-	h = maxBodyMiddleware(h)
-	h = securityHeadersMiddleware(h, s.cspHeader, tlsActive)
-	h = recoveryMiddleware(h)
-	if s.rateLimiter != nil && s.rateLimiter.Enabled() {
-		h = rateLimitMiddleware(s.rateLimiter, s.publicPaths)(h)
-	}
-	if s.AuthFunc != nil {
-		h = authMiddleware(s.AuthFunc, s.auditLogger, s.publicPaths)(h)
+	trusted := replicateSlice(s.trustedProxies)
+	// Build from innermost to outermost:
+	// trace (innermost, executes last before handler)
+	h = trace.HTTPMiddleware(h)
+	h = withLogging(h)
+	if s.auditLogger != nil {
+		h = auditMiddleware(s.auditLogger, s.nodeID, s.publicPaths, trusted)(h)
 	}
 	if s.authorizer != nil {
-		h = authzMiddleware(s.authorizer, s.auditLogger, s.routePermissions)(h)
+		h = authzMiddleware(s.authorizer, s.auditLogger, s.routePermissions, trusted)(h)
 	}
-	if s.auditLogger != nil {
-		h = auditMiddleware(s.auditLogger, s.nodeID, s.publicPaths)(h)
+	if s.AuthFunc != nil {
+		h = authMiddleware(s.AuthFunc, s.auditLogger, s.publicPaths, trusted, s.authFailures, &s.authFailureMu)(h)
 	}
-	h = withLogging(h)
-	h = trace.HTTPMiddleware(h)
+	if s.rateLimiter != nil && s.rateLimiter.Enabled() {
+		h = rateLimitMiddleware(s.rateLimiter, s.publicPaths, trusted)(h)
+	}
+	h = recoveryMiddleware(h)
+	h = securityHeadersMiddleware(h, s.cspHeader, tlsActive)
+	h = maxBodyMiddleware(h)
 	s.http.Handler = h
 }
 
@@ -207,7 +281,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		modules := make(map[string]string, len(moduleHealth))
 		for id, err := range moduleHealth {
 			if err != nil {
-				modules[id] = err.Error()
+				modules[id] = "error"
 				degraded = true
 			} else {
 				modules[id] = "ok"
@@ -251,6 +325,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// insecureTLSCheck returns true when the MUXCORE_INSECURE_DISABLE_TLS
+// environment variable is set to "true" or "1".
+func insecureTLSCheck() bool {
+	v := os.Getenv("MUXCORE_INSECURE_DISABLE_TLS")
+	return v == "true" || v == "1"
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -267,14 +348,14 @@ func withLogging(next http.Handler) http.Handler {
 	})
 }
 
-func rateLimitMiddleware(limiter contracts.RateLimiterProvider, publicPaths map[string]bool) func(http.Handler) http.Handler {
+func rateLimitMiddleware(limiter contracts.RateLimiterProvider, publicPaths map[string]bool, trustedProxies []net.IPNet) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if publicPaths[r.URL.Path] {
 				next.ServeHTTP(w, r)
 				return
 			}
-			ip := extractClientIP(r)
+			ip := extractClientIP(r, trustedProxies)
 			if !limiter.Allow(r.Context(), ip) {
 				w.Header().Set("Retry-After", "60")
 				writeJSON(w, http.StatusTooManyRequests, map[string]string{
@@ -288,22 +369,41 @@ func rateLimitMiddleware(limiter contracts.RateLimiterProvider, publicPaths map[
 	}
 }
 
-func extractClientIP(r *http.Request) string {
-	// Only trust the rightmost IP in X-Forwarded-For (the immediate upstream proxy).
-	// Validate it with net.ParseIP to prevent IP spoofing for rate limit bypass.
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if ip := parseRightmostXFF(xff); ip != "" {
-			return ip
+func replicateSlice(src []net.IPNet) []net.IPNet {
+	dst := make([]net.IPNet, len(src))
+	copy(dst, src)
+	return dst
+}
+
+func isTrustedProxy(addr string, trustedProxies []net.IPNet) bool {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return false
+	}
+	for _, n := range trustedProxies {
+		if n.Contains(ip) {
+			return true
 		}
 	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		if ip := net.ParseIP(xri); ip != nil {
-			return ip.String()
-		}
-	}
+	return false
+}
+
+func extractClientIP(r *http.Request, trustedProxies []net.IPNet) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if isTrustedProxy(host, trustedProxies) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if ip := parseRightmostXFF(xff); ip != "" {
+				return ip
+			}
+		}
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			if ip := net.ParseIP(xri); ip != nil {
+				return ip.String()
+			}
+		}
 	}
 	return host
 }

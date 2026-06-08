@@ -1,11 +1,12 @@
 package mgr
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -160,8 +161,11 @@ func (m *Manager) Spawn(ctx context.Context, bin *ModuleBinary) error {
 		"--muxcore-mesh-addr", m.meshAddr,
 		"--muxcore-module-id", bin.ID,
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Prefix module output so it's distinguishable from core's own log lines.
+	// In JSON log mode (MUXCORE_LOG_FORMAT=json) unprefixed text output from
+	// modules corrupts the JSON stream — this prefix makes filtering possible.
+	cmd.Stdout = newPrefixedWriter(os.Stdout, "[module:"+bin.ID+"] ")
+	cmd.Stderr = newPrefixedWriter(os.Stderr, "[module:"+bin.ID+":err] ")
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("spawn %s: %w", bin.ID, err)
@@ -238,8 +242,8 @@ func (m *Manager) watchProcess(ctx context.Context, cmd *exec.Cmd, bin *ModuleBi
 			"--muxcore-mesh-addr", m.meshAddr,
 			"--muxcore-module-id", bin.ID,
 		)
-		newCmd.Stdout = os.Stdout
-		newCmd.Stderr = os.Stderr
+		newCmd.Stdout = newPrefixedWriter(os.Stdout, "[module:"+bin.ID+"] ")
+		newCmd.Stderr = newPrefixedWriter(os.Stderr, "[module:"+bin.ID+":err] ")
 
 		if startErr := newCmd.Start(); startErr != nil {
 			slog.Error("module restart failed", "id", bin.ID, "error", startErr)
@@ -464,25 +468,36 @@ func scanModuleSource(buildDir string) ([]string, error) {
 		if d.IsDir() || !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil
+
+		// Parse the AST so import checks are not confused by comments or
+		// string literals that mention "unsafe" or "C" without importing them.
+		fset := token.NewFileSet()
+		f, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if parseErr != nil {
+			return nil // skip files that don't parse (generated stubs, etc.)
 		}
 
-		// Reject: unsafe package
-		if bytes.Contains(data, []byte("unsafe")) {
-			return fmt.Errorf("module contains unsafe package import: %s", filepath.Base(path))
+		// Reject imports of "unsafe" or cgo ("C") — both enable memory-unsafe
+		// or arbitrary-C-code execution and are prohibited in sidecar modules.
+		for _, imp := range f.Imports {
+			importPath := strings.Trim(imp.Path.Value, `"`)
+			switch importPath {
+			case "unsafe":
+				return fmt.Errorf("module imports unsafe package: %s", filepath.Base(path))
+			case "C":
+				return fmt.Errorf("module imports cgo (\"C\"): %s", filepath.Base(path))
+			}
 		}
 
-		// Reject: cgo
-		if bytes.Contains(data, []byte("import \"C\"")) {
-			return fmt.Errorf("module contains cgo import: %s", filepath.Base(path))
-		}
-
-		// Detect (warn): go:generate directives
-		if bytes.Contains(data, []byte("//go:generate")) {
-			if !slicesContains(found, "go:generate") {
-				found = append(found, "go:generate")
+		// Detect (warn): //go:generate directives execute arbitrary commands
+		// during go build and should be reviewed by the operator.
+		for _, cg := range f.Comments {
+			for _, c := range cg.List {
+				if strings.HasPrefix(c.Text, "//go:generate") {
+					if !slicesContains(found, "go:generate") {
+						found = append(found, "go:generate")
+					}
+				}
 			}
 		}
 		return nil

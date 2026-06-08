@@ -7,14 +7,17 @@ import (
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
 // EventServer implements the EventService gRPC service.
 // It relays events between nodes when NATS is not in use.
 type EventServer struct {
 	eventsv1.UnimplementedEventServiceServer
-	bus contracts.EventBus
+	bus         contracts.EventBus
+	requireAuth bool
 }
 
 // NewEventServer creates an event relay gRPC server.
@@ -22,14 +25,40 @@ func NewEventServer(bus contracts.EventBus) *EventServer {
 	return &EventServer{bus: bus}
 }
 
+// SetRequireAuth controls whether Subscribe and Publish require an
+// authenticated caller (non-empty x-caller-id in context). When true,
+// unauthenticated requests receive codes.Unauthenticated.
+func (s *EventServer) SetRequireAuth(require bool) {
+	s.requireAuth = require
+}
+
+func (s *EventServer) checkAuth(ctx context.Context) error {
+	if !s.requireAuth {
+		return nil
+	}
+	if contracts.CallerIDFromContext(ctx) == "" {
+		return status.Error(codes.Unauthenticated,
+			"events: authentication required — set MUXCORE_GRPC_REQUIRE_EVENTS_AUTH=false or deploy an auth module")
+	}
+	return nil
+}
+
 // RegisterWithGRPC registers this server with a gRPC server.
 func (s *EventServer) RegisterWithGRPC(srv *grpc.Server) {
 	eventsv1.RegisterEventServiceServer(srv, s)
 }
 
+const maxEventPayloadSize = 10 << 20 // 10 MB
+
 // Publish receives an event from a remote node and publishes it locally.
 func (s *EventServer) Publish(ctx context.Context, req *eventsv1.PublishRequest) (*eventsv1.PublishResponse, error) {
+	if err := s.checkAuth(ctx); err != nil {
+		return nil, err
+	}
 	pb := req.GetEvent()
+	if len(pb.GetPayload()) > maxEventPayloadSize {
+		return nil, status.Errorf(codes.InvalidArgument, "event payload exceeds maximum size %d bytes", maxEventPayloadSize)
+	}
 
 	// Override source_node from authenticated peer to prevent source spoofing.
 	if p, ok := peer.FromContext(ctx); ok {
@@ -64,6 +93,9 @@ func (s *EventServer) Publish(ctx context.Context, req *eventsv1.PublishRequest)
 
 // Subscribe streams events matching the given types from the remote node.
 func (s *EventServer) Subscribe(req *eventsv1.SubscribeRequest, stream eventsv1.EventService_SubscribeServer) error {
+	if err := s.checkAuth(stream.Context()); err != nil {
+		return err
+	}
 	ctx := stream.Context()
 
 	// Track all subscriptions so we can clean them up when the stream ends.
@@ -74,11 +106,12 @@ func (s *EventServer) Subscribe(req *eventsv1.SubscribeRequest, stream eventsv1.
 	subs := make([]subscription, 0, len(req.GetEventTypes()))
 
 	// Unsubscribe all tracked subscriptions on stream termination.
-	defer func() {
+		defer func() {
 		for _, sub := range subs {
-			// Use background context so unsubscription is not cancelled
-			// by the already-cancelled stream context.
-			_ = s.bus.Unsubscribe(context.Background(), sub.eventType, sub.handler)
+			if err := s.bus.Unsubscribe(context.Background(), sub.eventType, sub.handler); err != nil {
+				slog.Warn("events: unsubscribe failed during stream cleanup",
+					"event_type", sub.eventType, "error", err)
+			}
 		}
 	}()
 

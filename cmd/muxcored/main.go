@@ -2,22 +2,25 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/api"
 	"github.com/Muxcore-Media/core/internal/audit"
-	"github.com/Muxcore-Media/core/internal/callpolicy"
 	"github.com/Muxcore-Media/core/internal/config"
-	"github.com/Muxcore-Media/core/internal/eventpolicy"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
 	corehealth "github.com/Muxcore-Media/core/internal/health"
@@ -29,6 +32,7 @@ import (
 	"github.com/Muxcore-Media/core/internal/startup"
 	"github.com/Muxcore-Media/core/internal/storage"
 	"github.com/Muxcore-Media/core/internal/version"
+	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
@@ -105,6 +109,9 @@ func main() {
 	sighupCh := make(chan os.Signal, 1)
 	signal.Notify(sighupCh, syscall.SIGHUP)
 
+	// cfgMu protects cfg from concurrent reads during SIGHUP reload.
+	var cfgMu sync.Mutex
+
 	logger := setupLogger(cfg.Log)
 	slog.SetDefault(logger)
 
@@ -136,6 +143,13 @@ func main() {
 	}
 
 	bus := events.NewMemoryBus()
+	// Enable WAL if MUXCORE_EVENT_JOURNAL_PATH is set.
+	if journalPath := os.Getenv("MUXCORE_EVENT_JOURNAL_PATH"); journalPath != "" {
+		if err := bus.EnableWAL(journalPath); err != nil {
+			slog.Error("enable WAL", "path", journalPath, "error", err)
+			os.Exit(1)
+		}
+	}
 	slog.Info("event bus ready", "type", "memory")
 
 	meshSrv := grpcmesh.NewServer()
@@ -171,21 +185,20 @@ func main() {
 	} else {
 		slog.Warn("gRPC TLS is disabled — insecure mode")
 	}
-	// Rate limiter for gRPC — per-IP token bucket.
-	// Configurable via MUXCORE_GRPC_RATE_LIMIT (default: 1000 req/min/IP).
-	grpcRateLimiter := grpcmesh.NewRateLimitInterceptor()
-
 	// Auth interceptor: extracts caller identity from gRPC metadata and,
 	// when Authorizer+IdentityProvider are set, enforces per-method access.
 	authInterceptor := grpcmesh.NewAuthInterceptor()
 
 	grpcOpts = append(grpcOpts,
 		grpc.ChainUnaryInterceptor(
-			grpcRateLimiter.UnaryInterceptor(),
+			grpcLoggingInterceptor,
+			grpcPanicRecoveryInterceptor,
 			authInterceptor.UnaryInterceptor(),
 		),
 		grpc.ChainStreamInterceptor(
-			grpcRateLimiter.StreamInterceptor(),
+			grpcLoggingStreamInterceptor,
+			grpcPanicRecoveryStreamInterceptor,
+			authInterceptor.StreamInterceptor(),
 		),
 	)
 
@@ -218,6 +231,10 @@ func main() {
 	healthGrpc.RegisterWithGRPC(grpcSrv)
 
 	eventGrpc := grpcmesh.NewEventServer(bus)
+	// MUXCORE_GRPC_REQUIRE_EVENTS_AUTH=true restricts event Publish/Subscribe to
+	// callers with a verified identity (x-caller-id set by auth interceptor).
+	// Default: open (backward compat). Enable only after deploying an auth module.
+	eventGrpc.SetRequireAuth(os.Getenv("MUXCORE_GRPC_REQUIRE_EVENTS_AUTH") == "true")
 	eventGrpc.RegisterWithGRPC(grpcSrv)
 
 	nodeID := "muxcore-" + cfg.GRPC.Addr
@@ -235,6 +252,9 @@ func main() {
 			return ids
 		},
 	)
+	// MUXCORE_GRPC_REQUIRE_DISCOVERY_AUTH=true restricts Members/Watch/Find* to
+	// callers with a verified identity. Default: open (backward compat).
+	discoveryGrpc.SetRequireAuth(os.Getenv("MUXCORE_GRPC_REQUIRE_DISCOVERY_AUTH") == "true")
 	discoveryGrpc.RegisterWithGRPC(grpcSrv)
 
 
@@ -249,10 +269,36 @@ func main() {
 			RegistryModuleCount: reg.Count,
 			LeaderTerm:          discoveryGrpc.Term,
 			IsLeader:            discoveryGrpc.IsLeader,
+			StorageProviderCount: store.ProviderCount,
+			ModuleDegradedCount: func() int {
+				var n int
+				for _, e := range reg.ListAll() {
+					if e.State == contracts.ModuleStateDegraded {
+						n++
+					}
+				}
+				return n
+			},
+			GoroutineCount: runtime.NumGoroutine,
+			AllocBytes: func() uint64 {
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				return m.Alloc
+			},
 		})
 		srv.HandleFunc("/metrics", metricsHandler)
 		srv.AddPublicPath("/metrics") // metrics endpoint is public (scraper auth handled separately)
 		slog.Info("metrics endpoint enabled", "path", "/metrics")
+	}
+
+	// Debug profiling endpoints (pprof). Enable via MUXCORE_DEBUG_ENABLE=true.
+	if os.Getenv("MUXCORE_DEBUG_ENABLE") == "true" || os.Getenv("MUXCORE_DEBUG_ENABLE") == "1" {
+		srv.HandleFunc("/debug/pprof/", pprof.Index)
+		srv.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		srv.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		srv.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		srv.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		slog.Info("debug profiling endpoints enabled", "path", "/debug/pprof/")
 	}
 
 	store := storage.NewOrchestrator(reg)
@@ -267,13 +313,19 @@ func main() {
 	}
 	store.DiscoverCache()
 	slog.Info("storage orchestrator ready", "providers", store.ProviderCount())
-	watchCancel := store.WatchModules(bus)
+	watchCancel := store.WatchModules(ctx, bus)
 
 	// Set up default audit logger (no-op when cfg.Audit.Path is empty)
 	auditLogger, err := audit.NewFileLogger(cfg.Audit.Path)
 	if err != nil {
 		slog.Error("audit logger", "error", err)
 		os.Exit(1)
+	}
+	if cfg.Audit.MaxSizeMB > 0 {
+		auditLogger.MaxSizeMB = cfg.Audit.MaxSizeMB
+	}
+	if cfg.Audit.MaxRotatedFiles > 0 {
+		auditLogger.MaxRotatedFiles = cfg.Audit.MaxRotatedFiles
 	}
 	defer auditLogger.Close()
 	bus.SetAuditLogger(auditLogger)
@@ -284,22 +336,32 @@ func main() {
 	storageGrpc.RegisterWithGRPC(grpcSrv)
 
 	// --- Module capability enforcement ---
-	// Create built-in policies backed by the module registry.
-	// Call policy: enforces inter-module mesh call access.
-	// Publish policy: enforces event publication access.
-	// Storage policy: enforces storage read/write access.
-	// When MUXCORE_STRICT_CALL_POLICY=true, capability mismatches are hard-denied
-	// instead of soft-warned.
-	callPolicy := callpolicy.NewBuiltinPolicy(reg)
-	meshClient.SetCallPolicy(callPolicy)
-	storageGrpc.SetCallPolicy(callPolicy)
+	// Discover call policy provider from the registry.
+	// If none is registered, use a deny-by-default fallback (secure default).
+	if callPolicyEntries := reg.FindByCapability("call.policy"); len(callPolicyEntries) > 0 {
+		if cp, ok := callPolicyEntries[0].Module.(contracts.CallPolicyProvider); ok {
+			meshClient.SetCallPolicy(cp)
+			storageGrpc.SetCallPolicy(cp)
+			slog.Info("call policy provider loaded from registry",
+				"module", callPolicyEntries[0].Info.ID)
+		}
+	}
+	// If no module provides a call policy, mesh calls are denied by default.
+	if meshClient.CallPolicy() == nil {
+		slog.Info("no call policy provider registered — inter-module calls denied by default")
+	}
 
-	eventPolicy := eventpolicy.NewBuiltinPolicy(reg)
-	bus.SetPublishPolicy(eventPolicy)
-	slog.Info("module capability enforcement enabled",
-		"call_policy_strict", callPolicy.Strict(),
-		"publish_policy_strict", eventPolicy.Strict(),
-	)
+	// Discover publish policy provider from the registry.
+	if pubPolicyEntries := reg.FindByCapability("publish.policy"); len(pubPolicyEntries) > 0 {
+		if pp, ok := pubPolicyEntries[0].Module.(contracts.PublishPolicyProvider); ok {
+			bus.SetPublishPolicy(pp)
+			slog.Info("publish policy provider loaded from registry",
+				"module", pubPolicyEntries[0].Info.ID)
+		}
+	}
+	if bus.PublishPolicy() == nil {
+		slog.Info("no publish policy provider registered — event publication denied by default")
+	}
 
 	// Attach registry for sidecar module discovery queries
 	discoveryGrpc.SetRegistry(reg)
@@ -364,30 +426,38 @@ func main() {
 
 	// Core self-health probes. These must not publish events or write to the
 	// audit log — probes run on every /health poll and would flood the WAL.
+	startTime := time.Now()
 	coreH := corehealth.New()
 	coreH.RegisterProbe("event_bus", func(ctx context.Context) error {
-		// The bus is live as long as it has a publish policy configured.
-		// A nil policy means it was never initialised — that's a fatal misconfiguration.
-		if bus.SubscriberCount() < 0 {
+		sc := bus.SubscriberCount()
+		if sc < 0 {
 			return fmt.Errorf("event bus not initialised")
+		}
+		if dc := bus.DroppedEvents(); dc > 0 {
+			return fmt.Errorf("event bus dropped %d events", dc)
 		}
 		return nil
 	})
 	coreH.RegisterProbe("discovery", func(ctx context.Context) error {
-		// Standalone (no seed nodes configured) is always healthy.
-		// With seed nodes, warn if we have zero peers after boot, but don't
-		// fail — nodes may not have joined yet.
+		ms := discoveryGrpc.MembersSnapshot()
+		if len(cfg.GRPC.SeedNodes) > 0 && len(ms) == 0 {
+			return fmt.Errorf("seed nodes configured but no cluster peers discovered")
+		}
 		return nil
 	})
 	coreH.RegisterProbe("storage", func(ctx context.Context) error {
-		// Core is healthy even with zero providers — modules register them.
+		pc := store.ProviderCount()
+		if pc == 0 {
+			return fmt.Errorf("no storage providers registered")
+		}
 		return nil
 	})
 	coreH.RegisterProbe("audit", func(ctx context.Context) error {
-		// If an audit path is configured, verify the file is still writable
-		// by checking its parent directory rather than writing an entry.
-		if cfg.Audit.Path != "" {
-			dir := filepath.Dir(cfg.Audit.Path)
+		cfgMu.Lock()
+		auditPath := cfg.Audit.Path
+		cfgMu.Unlock()
+		if auditPath != "" {
+			dir := filepath.Dir(auditPath)
 			f, err := os.CreateTemp(dir, ".healthcheck-*")
 			if err != nil {
 				return fmt.Errorf("audit log directory not writable: %w", err)
@@ -400,17 +470,16 @@ func main() {
 
 	srv.SetHealthChecker(func() map[string]error {
 		results := make(map[string]error)
-		// Include core health probes.
 		for name, err := range coreH.Check(context.Background()) {
 			results["core."+name] = err
 		}
-		// Module health is reported via sidecar gRPC; include what the
-		// lifecycle manager knows about.
 		for id, entry := range reg.ListAll() {
 			if entry.State == contracts.ModuleStateDegraded {
 				results[id] = fmt.Errorf("module degraded")
 			}
 		}
+		results["_uptime"] = fmt.Errorf("%s", time.Since(startTime).Round(time.Second))
+		results["_version"] = fmt.Errorf("%s", version.String())
 		return results
 	})
 
@@ -446,8 +515,8 @@ func main() {
 		localNode := discoveryGrpc.LocalNode()
 		for _, seed := range cfg.GRPC.SeedNodes {
 			go func(seedAddr string) {
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
+				joinCtx, joinCancel := context.WithTimeout(ctx, 10*time.Second)
+				defer joinCancel()
 				dialOpts := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
 				conn, err := grpc.NewClient(seedAddr, dialOpts...)
 				if err != nil {
@@ -456,7 +525,7 @@ func main() {
 				}
 				defer conn.Close()
 				client := discoveryv1.NewDiscoveryServiceClient(conn)
-				resp, err := client.Join(ctx, &discoveryv1.JoinRequest{Node: localNode})
+				resp, err := client.Join(joinCtx, &discoveryv1.JoinRequest{Node: localNode})
 				if err != nil {
 					slog.Warn("auto-join: join request failed", "seed", seedAddr, "error", err)
 					return
@@ -477,7 +546,7 @@ func main() {
 	var hbDialOpts []grpc.DialOption
 	if creds != nil {
 		hbDialOpts = append(hbDialOpts, grpc.WithTransportCredentials(creds))
-	} else if os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "true" || os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "1" {
+	} else if insecureTLSCheck() {
 		hbDialOpts = append(hbDialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	} else {
 		slog.Warn("heartbeat disabled: TLS is required for cluster heartbeat communication")
@@ -487,8 +556,14 @@ func main() {
 	slog.Info("MuxCore running", "addr", cfg.Server.Addr, "tag", *tagName)
 
 	// Config hot-reload via SIGHUP.
+	// Stops when ctx is cancelled (shutdown).
 	go func() {
-		for range sighupCh {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-sighupCh:
+			}
 			slog.Info("SIGHUP received — reloading config", "path", configPath)
 			result, err := config.Reload(cfg, configPath)
 			if err != nil {
@@ -498,7 +573,6 @@ func main() {
 
 			changes := result.Changes
 			if changes.LogLevel || changes.LogFormat {
-				// Reconfigure the logger.
 				newLogger := setupLogger(result.Config.Log)
 				slog.SetDefault(newLogger)
 				slog.Info("logger reconfigured after reload",
@@ -507,24 +581,14 @@ func main() {
 				)
 			}
 			if changes.AuditPath {
-				// Audit path change requires reopening the FileLogger — defer
-				// to restart rather than swapping under a live system.
-				// Explicitly do NOT copy the new audit path into cfg so operators
-				// aren't misled into thinking it took effect.
 				result.Config.Audit.Path = cfg.Audit.Path
 				slog.Warn("audit.path changed — restart required for this to take effect",
 					"current_path", cfg.Audit.Path,
 					"new_path_on_restart", result.Config.Audit.Path,
 				)
 			}
-			if changes.StrictCall || changes.StrictPublish {
-				// Strict policy toggles are read from env vars at startup;
-				// they cannot be changed without a restart.
-				slog.Warn("strict policy env vars changed — restart required")
-			}
 			if changes.SeedNodes {
 				slog.Info("seed nodes changed in config reload", "new_seeds", result.Config.GRPC.SeedNodes)
-				// TODO: attempt to join newly added seed nodes dynamically
 			}
 
 			if changes.Unsafe {
@@ -533,9 +597,19 @@ func main() {
 				)
 			}
 
-			// Atomically replace the live config with the reloaded one.
-			// The audit.path field was restored above if it changed.
+			cfgMu.Lock()
 			*cfg = *result.Config
+			cfgMu.Unlock()
+
+			// Publish config reload event so other subsystems can react.
+			payload, _ := json.Marshal(map[string]any{
+				"changes": changes,
+			})
+			bus.Publish(ctx, contracts.Event{
+				Type:    "config.reloaded",
+				Source:  "muxcored",
+				Payload: payload,
+			})
 		}
 	}()
 
@@ -547,38 +621,116 @@ func main() {
 	}
 	slog.Info("shutting down...")
 
-	// Phase 1: Drain HTTP — stop accepting new connections, let in-flight
+	// Phase 1: Stop SIGHUP handling to prevent config reload during teardown.
+	signal.Stop(sighupCh)
+
+	// Phase 2: Drain HTTP — stop accepting new connections, let in-flight
 	// requests complete before modules are stopped beneath them.
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer drainCancel()
 	srv.Drain(drainCtx)
 
-	// Phase 2: GracefulStop gRPC — stop accepting new gRPC calls, let
+	// Phase 3: GracefulStop gRPC — stop accepting new gRPC calls, let
 	// in-flight calls complete before modules are stopped.
 	grpcSrv.GracefulStop()
 
-	// Phase 3: Shutdown timeout for remaining operations.
+	// Phase 4: Shutdown timeout for remaining operations.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
-	// Phase 4: Stop watching for new modules (storage, registration).
+	// Phase 5: Stop watching for new modules (storage, registration).
 	watchCancel()
 
-	// Phase 5: Stop all module processes.
+	// Phase 6: Cancel all event bus subscriber workers.
+	bus.Close()
+
+	// Phase 7: Stop all module processes.
 	if err := modMgr.StopAll(shutdownCtx); err != nil {
 		slog.Error("module stop", "error", err)
 	}
 
-	// Phase 6: Close connection pool and rate limiter.
+	// Phase 8: Close connection pool and rate limiter.
 	connPool.Close()
 	grpcRateLimiter.Close()
 
-	// Phase 7: Final HTTP server shutdown.
+	// Phase 9: Stop discovery eviction loop.
+	discoveryGrpc.Close()
+
+	// Phase 10: Final HTTP server shutdown.
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("api shutdown", "error", err)
 	}
 
 	slog.Info("MuxCore stopped.")
+}
+
+// grpcPanicRecoveryInterceptor catches panics in gRPC handlers and returns
+// an Internal error instead of crashing the process.
+func grpcPanicRecoveryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (_ interface{}, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("gRPC panic recovered",
+				"method", info.FullMethod,
+				"error", rec,
+				"stack", string(debug.Stack()),
+			)
+			err = status.Error(codes.Internal, "internal server error")
+		}
+	}()
+	return handler(ctx, req)
+}
+
+// grpcPanicRecoveryStreamInterceptor catches panics in gRPC stream handlers.
+func grpcPanicRecoveryStreamInterceptor(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (_ error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("gRPC stream panic recovered",
+				"method", info.FullMethod,
+				"error", rec,
+				"stack", string(debug.Stack()),
+			)
+		}
+	}()
+	return handler(srv, stream)
+}
+
+// grpcLoggingInterceptor logs every gRPC unary call with method, duration, and peer.
+func grpcLoggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	start := time.Now()
+	resp, err := handler(ctx, req)
+	duration := time.Since(start)
+	level := slog.LevelDebug
+	if err != nil {
+		level = slog.LevelWarn
+	}
+	slog.Log(ctx, level, "gRPC call",
+		"method", info.FullMethod,
+		"duration", duration,
+		"error", err,
+	)
+	return resp, err
+}
+
+// grpcLoggingStreamInterceptor logs gRPC stream start.
+func grpcLoggingStreamInterceptor(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	slog.Debug("gRPC stream started",
+		"method", info.FullMethod,
+		"is_server_stream", info.IsServerStream,
+	)
+	err := handler(srv, stream)
+	if err != nil {
+		slog.Warn("gRPC stream ended",
+			"method", info.FullMethod,
+			"error", err,
+		)
+	}
+	return err
+}
+
+// insecureTLSCheck returns true if MUXCORE_INSECURE_DISABLE_TLS is set to true/1.
+func insecureTLSCheck() bool {
+	v := os.Getenv("MUXCORE_INSECURE_DISABLE_TLS")
+	return v == "true" || v == "1"
 }
 
 func setupLogger(lc config.LogConfig) *slog.Logger {

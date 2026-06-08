@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -25,24 +26,41 @@ import (
 // This prevents unbounded memory growth on long-running deployments.
 const maxInMemoryEntries = 50_000
 
+// defaultMaxAuditSizeMB is the default audit log rotation threshold.
+// When the file exceeds this size, it is renamed to .1 and a new file opened.
+const defaultMaxAuditSizeMB = 100
+
+// defaultMaxRotatedFiles is how many rotated files to keep (.1, .2, ...).
+const defaultMaxRotatedFiles = 5
+
 // FileLogger writes audit entries as JSONL to a local file.
 // Thread-safe. No-op when LogPath is empty.
 // Maintains a SHA-256 hash chain across entries for tamper detection.
 // The in-memory buffer retains at most maxInMemoryEntries recent entries;
 // older entries must be read directly from the JSONL file.
+//
+// Log rotation: when the file exceeds MaxSizeMB, it is rotated (renamed
+// to path.1, path.2, ..., up to MaxRotatedFiles). Rotation is done on
+// each Log() call — no background goroutine needed.
 type FileLogger struct {
-	mu         sync.Mutex
-	path       string
-	file       *os.File
-	entries    []contracts.AuditEntry // in-memory ring buffer for Query/Export
-	lastHash   string                 // SHA-256 hash of the previous entry (hex)
-	signingKey []byte                 // optional HMAC-SHA256 signing key
+	mu              sync.Mutex
+	path            string
+	file            *os.File
+	entries         []contracts.AuditEntry // in-memory ring buffer for Query/Export
+	lastHash        string                 // SHA-256 hash of the previous entry (hex)
+	signingKey      []byte                 // optional HMAC-SHA256 signing key
+	MaxSizeMB       int                    // rotate when file exceeds this size (0 = defaultMaxAuditSizeMB)
+	MaxRotatedFiles int                    // number of rotated files to keep (0 = defaultMaxRotatedFiles)
 }
 
 // NewFileLogger creates an audit logger. If logPath is empty, all operations
 // are no-ops (safe to wire with zero config).
 func NewFileLogger(logPath string) (*FileLogger, error) {
-	fl := &FileLogger{path: logPath}
+	fl := &FileLogger{
+		path:            logPath,
+		MaxSizeMB:       defaultMaxAuditSizeMB,
+		MaxRotatedFiles: defaultMaxRotatedFiles,
+	}
 	if logPath == "" {
 		return fl, nil
 	}
@@ -65,6 +83,7 @@ func (fl *FileLogger) SetSigningKey(key []byte) {
 
 // Log writes an audit entry as a single JSON line. No-op when LogPath is empty.
 // Populates PrevEntryHash (SHA-256 chain) and Signature (HMAC-SHA256 if signing key set).
+// Rotates the log file when it exceeds MaxSizeMB.
 func (fl *FileLogger) Log(ctx context.Context, entry contracts.AuditEntry) error {
 	if fl.path == "" {
 		return nil
@@ -72,6 +91,12 @@ func (fl *FileLogger) Log(ctx context.Context, entry contracts.AuditEntry) error
 
 	fl.mu.Lock()
 	defer fl.mu.Unlock()
+
+	// Rotate if the file exceeds the size threshold.
+	if err := fl.maybeRotateLocked(); err != nil {
+		slog.Error("audit: log rotation failed", "error", err)
+		// Continue writing to the current file rather than losing entries.
+	}
 
 	// Link the hash chain: PrevEntryHash = SHA-256 of the previous entry's JSON.
 	entry.PrevEntryHash = fl.lastHash
@@ -101,6 +126,9 @@ func (fl *FileLogger) Log(ctx context.Context, entry contracts.AuditEntry) error
 
 	if _, err := fl.file.Write(data); err != nil {
 		return fmt.Errorf("audit: write entry: %w", err)
+	}
+	if err := fl.file.Sync(); err != nil {
+		return fmt.Errorf("audit: sync entry: %w", err)
 	}
 
 	fl.entries = append(fl.entries, entry)
@@ -244,6 +272,53 @@ func (fl *FileLogger) VerifyChainIntegrity(ctx context.Context, from, to time.Ti
 }
 
 // Close flushes and closes the underlying file.
+// maybeRotateLocked checks the current log file size and rotates if needed.
+// Rotation: path.1, path.2, ... path.N (N = MaxRotatedFiles).
+// Oldest file (.N) is deleted. Caller must hold fl.mu.
+func (fl *FileLogger) maybeRotateLocked() error {
+	if fl.file == nil {
+		return nil
+	}
+	maxBytes := int64(fl.MaxSizeMB) * 1024 * 1024
+	if maxBytes <= 0 {
+		maxBytes = int64(defaultMaxAuditSizeMB) * 1024 * 1024
+	}
+
+	info, err := fl.file.Stat()
+	if err != nil || info.Size() < maxBytes {
+		return nil // no rotation needed
+	}
+
+	// Close the current file before renaming.
+	fl.file.Close()
+	fl.file = nil
+
+	maxRotated := fl.MaxRotatedFiles
+	if maxRotated <= 0 {
+		maxRotated = defaultMaxRotatedFiles
+	}
+
+	// Shift existing rotated files: .N-1 → .N, ..., .1 → .2
+	for i := maxRotated; i > 1; i-- {
+		older := fmt.Sprintf("%s.%d", fl.path, i)
+		newer := fmt.Sprintf("%s.%d", fl.path, i-1)
+		if _, err := os.Stat(newer); err == nil {
+			os.Rename(newer, older)
+		}
+	}
+	// Rename current file to .1
+	os.Rename(fl.path, fl.path+".1")
+
+	// Open a new file.
+	f, err := os.OpenFile(fl.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("audit: open new log after rotation: %w", err)
+	}
+	fl.file = f
+	slog.Info("audit: log rotated", "path", fl.path, "max_mb", fl.MaxSizeMB)
+	return nil
+}
+
 func (fl *FileLogger) Close() error {
 	fl.mu.Lock()
 	defer fl.mu.Unlock()

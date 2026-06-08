@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/trace"
@@ -25,6 +26,11 @@ const (
 
 	// walDefaultReplay is whether to replay WAL on startup by default.
 	walDefaultReplay = true
+
+	// walDiskFreeMinBytes is the minimum free disk space before WAL writes are
+	// suspended. When available space drops below this threshold, writes are
+	// dropped and an error-level log is emitted.
+	walDiskFreeMinBytes = 100 * 1024 * 1024 // 100 MB
 )
 
 // WALSegment is a single WAL journal file on disk.
@@ -106,6 +112,16 @@ func (w *WALWriter) Write(event contracts.Event) (uint64, error) {
 		Event:     event,
 	}
 
+	// Check disk space before writing to avoid silent data loss when full.
+	if free, err := w.diskFree(); err == nil && free < walDiskFreeMinBytes {
+		slog.Error("wal: disk critically low — dropping event to prevent filesystem full",
+			"free_bytes", free,
+			"min_bytes", walDiskFreeMinBytes,
+			"dir", w.dir,
+		)
+		return 0, fmt.Errorf("wal: disk free space %d bytes below minimum %d", free, walDiskFreeMinBytes)
+	}
+
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return 0, fmt.Errorf("wal: marshal entry %d: %w", w.seq, err)
@@ -129,18 +145,32 @@ func (w *WALWriter) Write(event contracts.Event) (uint64, error) {
 	return w.seq, nil
 }
 
-// Flush ensures all buffered writes are persisted to disk.
+// Flush ensures all buffered writes are persisted to disk and fsynced.
 func (w *WALWriter) Flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.writer.Flush()
+	if err := w.writer.Flush(); err != nil {
+		return err
+	}
+	return w.file.Sync()
 }
 
-// Close flushes and closes the WAL.
+// Sync performs an fsync on the underlying file. Call after Flush to ensure
+// data is durably on disk. Use FlushSync for a combined flush+sync.
+func (w *WALWriter) Sync() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.file.Sync()
+}
+
+// Close flushes, syncs, and closes the WAL.
 func (w *WALWriter) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if err := w.writer.Flush(); err != nil {
+		return err
+	}
+	if err := w.file.Sync(); err != nil {
 		return err
 	}
 	return w.file.Close()
@@ -256,17 +286,35 @@ func (w *WALWriter) scanLastSeq(path string) (uint64, error) {
 	defer f.Close()
 
 	var lastSeq uint64
+	var skipped int
 	scanner := bufio.NewScanner(f)
 	// Increase buffer for large event payloads.
 	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
 	for scanner.Scan() {
 		var entry walEntry
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			skipped++
 			continue // skip corrupted lines
 		}
 		lastSeq = entry.Seq
 	}
+	if skipped > 0 {
+		slog.Warn("wal: skipped corrupted lines during startup scan",
+			"segment", filepath.Base(path),
+			"skipped_lines", skipped,
+		)
+	}
 	return lastSeq, scanner.Err()
+}
+
+// diskFree returns the number of free bytes available on the filesystem
+// containing the WAL directory.
+func (w *WALWriter) diskFree() (uint64, error) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(w.dir, &stat); err != nil {
+		return 0, err
+	}
+	return stat.Bavail * uint64(stat.Bsize), nil //nolint:unconvert
 }
 
 func (w *WALWriter) openCurrentSegment() error {
@@ -314,6 +362,9 @@ func (w *WALWriter) openSegment(path string) error {
 
 func (w *WALWriter) rotateLocked() error {
 	if err := w.writer.Flush(); err != nil {
+		return err
+	}
+	if err := w.file.Sync(); err != nil {
 		return err
 	}
 	if err := w.file.Close(); err != nil {

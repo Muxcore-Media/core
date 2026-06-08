@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -156,7 +157,9 @@ func redactURL(raw string) string {
 
 // AuditConfig holds audit logging settings.
 type AuditConfig struct {
-	Path string `json:"path"` // file path for JSONL audit log; empty = disabled
+	Path            string `json:"path"`              // file path for JSONL audit log; empty = disabled
+	MaxSizeMB       int    `json:"max_size_mb"`       // rotate when file exceeds this size (default: 100 MB)
+	MaxRotatedFiles int    `json:"max_rotated_files"` // number of rotated files to keep (default: 5)
 }
 
 // Default returns a Config populated with sensible defaults.
@@ -293,6 +296,19 @@ func (c *Config) validate() error {
 	}
 	if c.Server.WriteTimeout <= 0 {
 		errs = append(errs, "server.write_timeout must be positive")
+	}
+	if c.Server.Addr != "" {
+		if _, err := net.ResolveTCPAddr("tcp", c.Server.Addr); err != nil {
+			errs = append(errs, fmt.Sprintf("server.addr %q is not a valid TCP address: %v", c.Server.Addr, err))
+		}
+	}
+	if c.GRPC.Addr != "" {
+		if _, err := net.ResolveTCPAddr("tcp", c.GRPC.Addr); err != nil {
+			errs = append(errs, fmt.Sprintf("grpc.addr %q is not a valid TCP address: %v", c.GRPC.Addr, err))
+		}
+	}
+	if c.GRPC.MaxMessageSizeMB <= 0 {
+		errs = append(errs, "grpc.max_message_size_mb must be positive (default 32)")
 	}
 
 	// Validate already-normalized values (case normalization done in Load()).

@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
@@ -69,6 +70,12 @@ func (r *Registry) Register(module contracts.Module, deps []string) error {
 		r.capIndex[cap][info.ID] = true
 	}
 
+	slog.Debug("registry: module registered",
+		"id", info.ID,
+		"name", info.Name,
+		"version", info.Version,
+		"capabilities", info.Capabilities,
+	)
 	return nil
 }
 
@@ -168,6 +175,7 @@ func (r *Registry) SetState(id string, state contracts.ModuleState) error {
 		return fmt.Errorf("module %q not found", id)
 	}
 	entry.State = state
+	slog.Debug("registry: module state changed", "id", id, "state", string(state))
 	return nil
 }
 
@@ -180,6 +188,11 @@ func (r *Registry) SetHealth(id string, err error) error {
 		return fmt.Errorf("module %q not found", id)
 	}
 	entry.Health = err
+	if err != nil {
+		slog.Warn("registry: module health degraded", "id", id, "error", err)
+	} else {
+		slog.Debug("registry: module health restored", "id", id)
+	}
 	return nil
 }
 

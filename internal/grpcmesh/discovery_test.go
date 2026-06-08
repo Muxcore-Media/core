@@ -1,11 +1,17 @@
 package grpcmesh
 
 import (
+	"context"
+	"net"
+	"sync"
 	"testing"
 	"time"
 
 	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
 // newDS builds a minimal DiscoveryServer for unit testing the election logic.
@@ -195,3 +201,231 @@ func TestSetConnPool(t *testing.T) {
 		t.Error("expected connPool to be set")
 	}
 }
+
+// --- Join error paths ---
+
+func TestJoin_MissingNodeID(t *testing.T) {
+	ds := NewDiscoveryServer("self", ":9090", ":8080", "", nil)
+	defer ds.Close()
+	_, err := ds.Join(context.Background(), &discoveryv1.JoinRequest{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument for missing node ID, got %v", err)
+	}
+}
+
+func TestJoin_WrongToken(t *testing.T) {
+	ds := NewDiscoveryServer("self", ":9090", ":8080", "correct-token", nil)
+	defer ds.Close()
+
+	ctx := metadata.NewIncomingContext(context.Background(),
+		metadata.Pairs("x-cluster-join-token", "wrong-token"))
+	req := &discoveryv1.JoinRequest{
+		Node: &discoveryv1.NodeInfo{Id: "node-b", GrpcAddr: ":9091", HttpAddr: ":8081"},
+	}
+	_, err := ds.Join(ctx, req)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Errorf("expected PermissionDenied for wrong token, got %v", err)
+	}
+}
+
+func TestJoin_CorrectToken(t *testing.T) {
+	ds := NewDiscoveryServer("self", ":9090", ":8080", "correct-token", nil)
+	defer ds.Close()
+
+	ctx := metadata.NewIncomingContext(context.Background(),
+		metadata.Pairs("x-cluster-join-token", "correct-token"))
+	req := &discoveryv1.JoinRequest{
+		Node: &discoveryv1.NodeInfo{Id: "node-b", GrpcAddr: ":9091", HttpAddr: ":8081"},
+	}
+	resp, err := ds.Join(ctx, req)
+	if err != nil {
+		t.Fatalf("expected success with correct token, got %v", err)
+	}
+	if len(resp.Members) == 0 {
+		t.Error("expected at least one member in response")
+	}
+}
+
+func TestJoin_RateLimit(t *testing.T) {
+	ds := NewDiscoveryServer("self", ":9090", ":8080", "", nil)
+	defer ds.Close()
+
+	// Inject a fake peer address so the rate limiter can key on it.
+	ctx := peer.NewContext(context.Background(), &peer.Peer{
+		Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4"), Port: 1234},
+	})
+	req := &discoveryv1.JoinRequest{
+		Node: &discoveryv1.NodeInfo{Id: "node-x", GrpcAddr: ":9091", HttpAddr: ":8081"},
+	}
+
+	// First 3 attempts in the rate-limit window should succeed.
+	for i := 0; i < 3; i++ {
+		if _, err := ds.Join(ctx, req); err != nil {
+			t.Fatalf("attempt %d: expected success, got %v", i+1, err)
+		}
+	}
+	// 4th attempt within the 20s window should be rate-limited.
+	_, err := ds.Join(ctx, req)
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Errorf("expected ResourceExhausted on 4th attempt, got %v", err)
+	}
+}
+
+// --- Leave ---
+
+func TestLeave_NonMember(t *testing.T) {
+	ds := NewDiscoveryServer("self", ":9090", ":8080", "", nil)
+	defer ds.Close()
+	_, err := ds.Leave(context.Background(), &discoveryv1.LeaveRequest{NodeId: "never-joined"})
+	if err != nil {
+		t.Errorf("Leave for unknown node should be a no-op, got %v", err)
+	}
+}
+
+func TestLeave_NonLeaderNode(t *testing.T) {
+	ds := newDS("node-a", "node-a", "node-b")
+	ds.leaderID = "node-a"
+	ds.term = 1
+
+	_, err := ds.Leave(context.Background(), &discoveryv1.LeaveRequest{NodeId: "node-b"})
+	if err != nil {
+		t.Fatalf("Leave non-leader: %v", err)
+	}
+	if ds.leaderID != "node-a" {
+		t.Errorf("leader changed after non-leader left, got %q", ds.leaderID)
+	}
+	if _, ok := ds.members["node-b"]; ok {
+		t.Error("node-b should have been removed from members")
+	}
+}
+
+// --- Eviction ---
+
+func TestEvictDeadNodes_EvictsStaleNode(t *testing.T) {
+	ds := newDS("node-a", "node-a", "node-b")
+	ds.leaderID = "node-a"
+	ds.evictionTimeout = 10 * time.Second
+
+	ds.mu.Lock()
+	ds.lastSeen["node-b"] = time.Now().Add(-20 * time.Second) // older than timeout
+	ds.mu.Unlock()
+
+	ds.evictDeadNodes()
+
+	ds.mu.RLock()
+	_, still := ds.members["node-b"]
+	ds.mu.RUnlock()
+
+	if still {
+		t.Error("expected node-b to be evicted after missing heartbeat deadline")
+	}
+}
+
+func TestEvictDeadNodes_FreshNodeKept(t *testing.T) {
+	ds := newDS("node-a", "node-a", "node-b")
+	ds.leaderID = "node-a"
+	ds.evictionTimeout = 30 * time.Second
+
+	// Both nodes have a recent heartbeat — neither should be evicted.
+	ds.evictDeadNodes()
+
+	ds.mu.RLock()
+	_, aOK := ds.members["node-a"]
+	_, bOK := ds.members["node-b"]
+	ds.mu.RUnlock()
+
+	if !aOK || !bOK {
+		t.Error("expected both fresh nodes to survive eviction check")
+	}
+}
+
+// --- Watch event delivery ---
+
+func TestWatch_EventDelivery(t *testing.T) {
+	ds := NewDiscoveryServer("node-a", ":9090", ":8080", "", nil)
+	defer ds.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	stream := &fakeWatchStream{ctx: ctx}
+	watchDone := make(chan error, 1)
+	go func() {
+		watchDone <- ds.Watch(&discoveryv1.MembersRequest{}, stream)
+	}()
+
+	// Wait briefly for the watcher to register before triggering a join.
+	time.Sleep(20 * time.Millisecond)
+
+	ds.Join(context.Background(), &discoveryv1.JoinRequest{
+		Node: &discoveryv1.NodeInfo{Id: "node-b", GrpcAddr: ":9091", HttpAddr: ":8081"},
+	})
+
+	// Allow event to be delivered, then cancel to stop the Watch loop.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-watchDone:
+		if err != nil {
+			t.Errorf("Watch returned unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("Watch goroutine did not stop after context cancel")
+	}
+
+	stream.mu.Lock()
+	n := len(stream.events)
+	stream.mu.Unlock()
+	if n == 0 {
+		t.Error("expected at least one event delivered to Watch stream after Join")
+	}
+}
+
+func TestWatch_TooManyWatchers(t *testing.T) {
+	ds := newDS("self")
+	ds.maxWatchers = 2
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel1()
+	defer cancel2()
+
+	done1, done2 := make(chan error, 1), make(chan error, 1)
+	go func() { done1 <- ds.Watch(&discoveryv1.MembersRequest{}, &fakeWatchStream{ctx: ctx1}) }()
+	go func() { done2 <- ds.Watch(&discoveryv1.MembersRequest{}, &fakeWatchStream{ctx: ctx2}) }()
+	time.Sleep(20 * time.Millisecond)
+
+	// Third watcher should be rejected.
+	ctx3, cancel3 := context.WithCancel(context.Background())
+	defer cancel3()
+	stream3 := &fakeWatchStream{ctx: ctx3}
+	err := ds.Watch(&discoveryv1.MembersRequest{}, stream3)
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Errorf("expected ResourceExhausted when watcher limit reached, got %v", err)
+	}
+
+	cancel1()
+	cancel2()
+}
+
+// fakeWatchStream implements grpc.ServerStreamingServer[*discoveryv1.ClusterEvent]
+// (≡ discoveryv1.DiscoveryService_WatchServer) for in-process testing.
+type fakeWatchStream struct {
+	ctx    context.Context
+	events []*discoveryv1.ClusterEvent
+	mu     sync.Mutex
+}
+
+func (f *fakeWatchStream) Send(e *discoveryv1.ClusterEvent) error {
+	f.mu.Lock()
+	f.events = append(f.events, e)
+	f.mu.Unlock()
+	return nil
+}
+func (f *fakeWatchStream) Context() context.Context       { return f.ctx }
+func (f *fakeWatchStream) SetHeader(metadata.MD) error    { return nil }
+func (f *fakeWatchStream) SendHeader(metadata.MD) error   { return nil }
+func (f *fakeWatchStream) SetTrailer(metadata.MD)         {}
+func (f *fakeWatchStream) SendMsg(any) error              { return nil }
+func (f *fakeWatchStream) RecvMsg(any) error              { return nil }

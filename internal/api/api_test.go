@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -440,8 +441,12 @@ func TestExtractClientIP(t *testing.T) {
 			for k, v := range tt.headers {
 				req.Header.Set(k, v)
 			}
+			defaultTrusted := []net.IPNet{
+				{IP: net.IPv4(127, 0, 0, 0), Mask: net.CIDRMask(8, 32)},
+				{IP: net.ParseIP("::1"), Mask: net.CIDRMask(128, 128)},
+			}
 			req.RemoteAddr = tt.remote
-			ip := extractClientIP(req)
+			ip := extractClientIP(req, defaultTrusted)
 			if ip != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, ip)
 			}

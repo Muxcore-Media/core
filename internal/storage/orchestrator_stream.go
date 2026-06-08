@@ -36,10 +36,11 @@ func (o *Orchestrator) Stream(ctx context.Context, key string, offset, length in
 	}
 	defer rc.Close()
 
-	// Cap fallback read at MaxObjectSize to prevent memory exhaustion (CWE-770).
-	data, err := io.ReadAll(io.LimitReader(rc, MaxObjectSize+1))
-	if err != nil {
-		return nil, fmt.Errorf("stream fallback read: %w", err)
+	// Read the content into memory capped at MaxObjectSize. The context
+	// deadline is enforced by tctx which controls the Get call above.
+	data, readErr := io.ReadAll(io.LimitReader(rc, MaxObjectSize+1))
+	if readErr != nil {
+		return nil, fmt.Errorf("stream fallback read: %w", readErr)
 	}
 	if int64(len(data)) > MaxObjectSize {
 		return nil, fmt.Errorf("object exceeds maximum size %d", MaxObjectSize)

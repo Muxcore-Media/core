@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/events"
-	"github.com/Muxcore-Media/core/internal/eventpolicy"
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
@@ -21,7 +20,6 @@ func startEventServer(t *testing.T) (eventsv1.EventServiceClient, *events.Memory
 
 	reg := registry.New()
 	bus := events.NewMemoryBus()
-	bus.SetPublishPolicy(eventpolicy.NewBuiltinPolicy(reg))
 
 	srv := NewEventServer(bus)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")

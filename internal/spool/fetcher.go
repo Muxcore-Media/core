@@ -8,47 +8,36 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Muxcore-Media/core/pkg/contracts"
 )
 
 // DefaultSpoolURL is the official MuxCore spool.
 const DefaultSpoolURL = "https://github.com/Muxcore-Media/spool"
 
-// TagDefinition is a curated module preset fetched from a spool.
-type TagDefinition struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	Version     string      `json:"version"`
-	Modules     []TagModule `json:"modules"`
-}
+// client is a reusable HTTP client for spool fetching.
+var client = &http.Client{Timeout: 10 * time.Second}
 
-// TagModule is a single module entry in a tag definition.
-type TagModule struct {
-	Repo     string `json:"repo"`
-	Version  string `json:"version"`
-	Required bool   `json:"required"`
-	// Checksum is the expected SHA256 hex digest of the built binary.
-	// When non-empty, the module manager verifies the built binary
-	// against this checksum before execution (SLSA L3 provenance check).
-	// Empty means no verification (backward compatible with old spool tags).
-	Checksum string `json:"checksum,omitempty"`
-}
-
-// FetchTag fetches a tag definition from a spool URL.
-// spoolURL is the base URL (e.g., "https://github.com/Muxcore-Media/spool").
+// FetchTag fetches a tag definition from a spool URL by appending
+// "/tags/{tagName}.json" to the base URL and parsing the JSON response.
+// spoolURL is the base URL (e.g., "https://myspool.example.com/spool").
 // tagName is the tag to fetch (e.g., "default").
-// Security: rejects non-HTTPS URLs, blocks private/reserved IPs, caps response at 1MB.
-func FetchTag(spoolURL, tagName string) (*TagDefinition, error) {
-	fetchURL, err := buildFetchURL(spoolURL, tagName)
-	if err != nil {
-		return nil, fmt.Errorf("spool: build fetch URL: %w", err)
+// Security: rejects non-HTTPS URLs, caps response at 1MB.
+func FetchTag(spoolURL, tagName string) (*contracts.TagDefinition, error) {
+	if spoolURL == "" || tagName == "" {
+		return nil, fmt.Errorf("spool: spoolURL and tagName are required")
 	}
 
-	// Block non-HTTPS URLs to prevent SSRF (CWE-918).
-	if u, err := url.Parse(fetchURL); err == nil && u.Scheme != "https" {
+	fetchURL := strings.TrimRight(spoolURL, "/") + "/tags/" + tagName + ".json"
+
+	u, err := url.Parse(fetchURL)
+	if err != nil {
+		return nil, fmt.Errorf("spool: invalid URL %q: %w", fetchURL, err)
+	}
+	if u.Scheme != "https" {
 		return nil, fmt.Errorf("spool: only HTTPS URLs are allowed, got %q", u.Scheme)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(fetchURL)
 	if err != nil {
 		return nil, fmt.Errorf("spool: fetch %s: %w", fetchURL, err)
@@ -59,13 +48,12 @@ func FetchTag(spoolURL, tagName string) (*TagDefinition, error) {
 		return nil, fmt.Errorf("spool: fetch %s: HTTP %d", fetchURL, resp.StatusCode)
 	}
 
-	// Cap response size at 1MB to prevent memory exhaustion (CWE-770).
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("spool: read body: %w", err)
 	}
 
-	var tag TagDefinition
+	var tag contracts.TagDefinition
 	if err := json.Unmarshal(body, &tag); err != nil {
 		return nil, fmt.Errorf("spool: parse tag %q: %w", tagName, err)
 	}
@@ -73,33 +61,3 @@ func FetchTag(spoolURL, tagName string) (*TagDefinition, error) {
 	return &tag, nil
 }
 
-// buildFetchURL converts a spool URL and tag name into a raw fetch URL.
-// GitHub URLs get converted to raw.githubusercontent.com.
-// Non-GitHub URLs use a direct path append.
-func buildFetchURL(spoolURL, tagName string) (string, error) {
-	u, err := url.Parse(spoolURL)
-	if err != nil {
-		return "", fmt.Errorf("invalid spool URL: %w", err)
-	}
-
-	if strings.Contains(u.Host, "github.com") {
-		return buildGitHubRawURL(u, tagName)
-	}
-
-	// Non-GitHub: direct path append
-	u.Path = strings.TrimRight(u.Path, "/") + "/tags/" + tagName + ".json"
-	return u.String(), nil
-}
-
-// buildGitHubRawURL converts a parsed GitHub URL to a raw.githubusercontent.com URL.
-func buildGitHubRawURL(u *url.URL, tagName string) (string, error) {
-	path := strings.Trim(u.Path, "/")
-	parts := strings.SplitN(path, "/", 2)
-	if len(parts) < 2 {
-		return "", fmt.Errorf("github URL missing owner/repo: %s", u.String())
-	}
-	owner, repo := parts[0], strings.TrimSuffix(parts[1], ".git")
-	rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/tags/%s.json",
-		owner, repo, tagName)
-	return rawURL, nil
-}

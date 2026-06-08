@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	storagev1 "github.com/Muxcore-Media/core/proto/gen/muxcore/storage/v1"
@@ -84,7 +85,15 @@ func (s *StorageServer) Put(stream storagev1.StorageService_PutServer) error {
 	if key == "" {
 		return status.Error(codes.InvalidArgument, "key is required in first PutRequest")
 	}
+	if len(key) > 1024 {
+		return status.Errorf(codes.InvalidArgument, "key too long (%d bytes)", len(key))
+	}
+	if strings.Contains(key, "..") {
+		return status.Error(codes.InvalidArgument, "key must not contain '..'")
+	}
 	totalSize = firstReq.TotalSize
+
+	const maxChunkSize = 64 << 20 // 64 MB per chunk
 
 	pr, pw := io.Pipe()
 
@@ -94,6 +103,11 @@ func (s *StorageServer) Put(stream storagev1.StorageService_PutServer) error {
 		defer pw.Close()
 		// Write first chunk
 		chunk := firstReq.Chunk
+		if len(chunk) > maxChunkSize {
+			pw.CloseWithError(status.Errorf(codes.InvalidArgument, "chunk exceeds maximum size %d bytes", maxChunkSize))
+			errCh <- fmt.Errorf("chunk too large: %d bytes", len(chunk))
+			return
+		}
 		wrote += int64(len(chunk))
 		if _, werr := pw.Write(chunk); werr != nil {
 			pw.CloseWithError(werr)
@@ -109,6 +123,11 @@ func (s *StorageServer) Put(stream storagev1.StorageService_PutServer) error {
 			if recvErr != nil {
 				pw.CloseWithError(recvErr)
 				errCh <- recvErr
+				return
+			}
+			if len(req.Chunk) > maxChunkSize {
+				pw.CloseWithError(status.Errorf(codes.InvalidArgument, "chunk exceeds maximum size %d bytes", maxChunkSize))
+				errCh <- fmt.Errorf("chunk too large: %d bytes", len(req.Chunk))
 				return
 			}
 			wrote += int64(len(req.Chunk))
@@ -148,6 +167,12 @@ func (s *StorageServer) Get(req *storagev1.GetRequest, stream storagev1.StorageS
 	key := req.Key
 	if key == "" {
 		return status.Error(codes.InvalidArgument, "key is required")
+	}
+	if len(key) > 1024 {
+		return status.Errorf(codes.InvalidArgument, "key too long (%d bytes)", len(key))
+	}
+	if strings.Contains(key, "..") {
+		return status.Error(codes.InvalidArgument, "key must not contain '..'")
 	}
 
 	var reader io.ReadCloser
@@ -205,6 +230,12 @@ func (s *StorageServer) Delete(ctx context.Context, req *storagev1.DeleteRequest
 	}
 	if req.Key == "" {
 		return nil, status.Error(codes.InvalidArgument, "key is required")
+	}
+	if len(req.Key) > 1024 {
+		return nil, status.Errorf(codes.InvalidArgument, "key too long (%d bytes)", len(req.Key))
+	}
+	if strings.Contains(req.Key, "..") {
+		return nil, status.Error(codes.InvalidArgument, "key must not contain '..'")
 	}
 	err := s.store.Delete(ctx, req.Key)
 	if err != nil {

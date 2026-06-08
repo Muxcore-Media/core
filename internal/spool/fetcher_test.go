@@ -5,17 +5,19 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/Muxcore-Media/core/pkg/contracts"
 )
 
-func TestFetchTag_Success(t *testing.T) {
-	tag := TagDefinition{
+func TestFetchTag_HTTPS(t *testing.T) {
+	tag := contracts.TagDefinition{
 		Name:    "default",
 		Version: "1.0.0",
-		Modules: []TagModule{
+		Modules: []contracts.TagModule{
 			{Repo: "https://github.com/Muxcore-Media/admin-ui", Version: "v1.0.0", Required: true},
 		},
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/tags/default.json" {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -24,66 +26,61 @@ func TestFetchTag_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// httptest server runs on http:// — test buildFetchURL directly then inject a mock.
-	// The FetchTag HTTPS check is correct for production; test the URL building separately.
-	u, err := buildFetchURL(srv.URL, "default")
+	got, err := FetchTag(srv.URL, "default")
 	if err != nil {
-		t.Fatalf("buildFetchURL failed: %v", err)
+		t.Fatalf("FetchTag failed: %v", err)
 	}
-	// Override to test the HTTP path with a mock fetcher.
-	// We test the full FetchTag with HTTPS below.
-	if u == "" {
-		t.Fatal("expected non-empty URL")
+	if got.Name != "default" {
+		t.Errorf("expected name 'default', got %q", got.Name)
+	}
+	if len(got.Modules) != 1 {
+		t.Errorf("expected 1 module, got %d", len(got.Modules))
 	}
 }
 
-func TestFetchTag_HTTPError(t *testing.T) {
+func TestFetchTag_HTTPRejected(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	_, err := FetchTag(srv.URL, "test")
+	if err == nil {
+		t.Fatal("expected error for HTTP URL (non-TLS)")
+	}
+}
+
+func TestFetchTag_NotFound(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
 
-	// FetchTag requires HTTPS; test that HTTP URLs are rejected.
 	_, err := FetchTag(srv.URL, "nonexistent")
 	if err == nil {
-		t.Fatal("expected error for HTTP URL")
+		t.Fatal("expected error for 404")
+	}
+}
+
+func TestFetchTag_EmptyInput(t *testing.T) {
+	_, err := FetchTag("", "tag")
+	if err == nil {
+		t.Fatal("expected error for empty URL")
+	}
+	_, err = FetchTag("https://example.com", "")
+	if err == nil {
+		t.Fatal("expected error for empty tag name")
 	}
 }
 
 func TestFetchTag_InvalidJSON(t *testing.T) {
-	// FetchTag requires HTTPS; test parsing via buildFetchURL + manual check.
-	_, err := buildFetchURL("https://example.com", "bad")
-	if err != nil {
-		t.Fatalf("buildFetchURL failed: %v", err)
-	}
-	// Full FetchTag with HTTP is rejected by the HTTPS guard — tested in TestFetchTag_HTTPError.
-}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`not json`))
+	}))
+	defer srv.Close()
 
-func TestBuildFetchURL_GitHub(t *testing.T) {
-	u, err := buildFetchURL("https://github.com/Muxcore-Media/spool", "default")
-	if err != nil {
-		t.Fatalf("buildFetchURL failed: %v", err)
-	}
-	expected := "https://raw.githubusercontent.com/Muxcore-Media/spool/master/tags/default.json"
-	if u != expected {
-		t.Errorf("expected %q, got %q", expected, u)
-	}
-}
-
-func TestBuildFetchURL_NonGitHub(t *testing.T) {
-	u, err := buildFetchURL("https://my-spool.example.com", "custom")
-	if err != nil {
-		t.Fatalf("buildFetchURL failed: %v", err)
-	}
-	expected := "https://my-spool.example.com/tags/custom.json"
-	if u != expected {
-		t.Errorf("expected %q, got %q", expected, u)
-	}
-}
-
-func TestBuildFetchURL_InvalidURL(t *testing.T) {
-	_, err := buildFetchURL("://bad-url", "tag")
+	_, err := FetchTag(srv.URL, "bad")
 	if err == nil {
-		t.Fatal("expected error for invalid URL")
+		t.Fatal("expected error for invalid JSON")
 	}
 }

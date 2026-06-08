@@ -10,18 +10,16 @@ import (
 // Each field is a function that returns the current value — called on
 // every scrape so the response is always fresh.
 type MetricsProvider struct {
-	// DroppedEvents returns total events dropped by the event bus.
-	DroppedEvents func() int64
-	// ActiveSubscribers returns total active event subscriptions.
-	ActiveSubscribers func() int
-	// ConnPoolSize returns the number of pooled gRPC connections.
-	ConnPoolSize func() int
-	// RegistryModuleCount returns total registered modules.
-	RegistryModuleCount func() int
-	// LeaderTerm returns the current cluster election term.
-	LeaderTerm func() uint64
-	// IsLeader reports whether this node is the cluster leader.
-	IsLeader func() bool
+	DroppedEvents        func() int64
+	ActiveSubscribers    func() int
+	ConnPoolSize         func() int
+	RegistryModuleCount  func() int
+	LeaderTerm           func() uint64
+	IsLeader             func() bool
+	StorageProviderCount func() int
+	ModuleDegradedCount  func() int
+	GoroutineCount       func() int
+	AllocBytes           func() uint64
 }
 
 // MetricsHandler returns an http.HandlerFunc that emits Prometheus-format
@@ -114,6 +112,30 @@ func MetricsHandler(p *MetricsProvider) http.HandlerFunc {
 			gauge("muxcore_cluster_is_leader",
 				"1 if this node is the cluster leader, 0 otherwise.",
 				isLeader)
+		}
+
+		if p.StorageProviderCount != nil {
+			gauge("muxcore_storage_provider_count",
+				"Number of registered storage providers.",
+				float64(p.StorageProviderCount()))
+		}
+
+		if p.ModuleDegradedCount != nil {
+			gauge("muxcore_module_degraded_count",
+				"Number of modules in degraded state.",
+				float64(p.ModuleDegradedCount()))
+		}
+
+		if p.GoroutineCount != nil {
+			gauge("muxcore_goroutine_count",
+				"Current number of Go runtime goroutines.",
+				float64(p.GoroutineCount()))
+		}
+
+		if p.AllocBytes != nil {
+			gauge("muxcore_memory_alloc_bytes",
+				"Current heap memory allocation in bytes.",
+				float64(p.AllocBytes()))
 		}
 
 		fmt.Fprint(w, sb.String())

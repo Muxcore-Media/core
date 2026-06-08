@@ -248,6 +248,88 @@ func TestMemoryBus_SubscribeFrom_ReplaysThenLive(t *testing.T) {
 	}
 }
 
+func TestWALWriter_NewWALWriter_DirNotWritable(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root: root bypasses directory permissions")
+	}
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "readonly")
+	if err := os.MkdirAll(walDir, 0555); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// WAL needs to create a segment file inside the directory.
+	// With 0555 (no write bit), file creation should fail.
+	_, err := NewWALWriter(walDir)
+	if err == nil {
+		t.Error("expected error when WAL directory is not writable")
+	}
+}
+
+func TestWALWriter_ReplayFrom_ContextCancel(t *testing.T) {
+	dir := t.TempDir()
+	w, _ := NewWALWriter(dir)
+	defer w.Close()
+
+	for i := 0; i < 200; i++ {
+		w.Write(makeEvent("evt"))
+	}
+	w.Flush()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	replayed := 0
+	err := w.ReplayFrom(ctx, 0, func(e contracts.Event) error {
+		replayed++
+		if replayed == 10 {
+			cancel()
+		}
+		return nil
+	})
+	if err == nil {
+		t.Error("expected context.Canceled error when replay context is cancelled")
+	}
+	if replayed >= 200 {
+		t.Error("replay continued past context cancel — expected early termination")
+	}
+}
+
+func TestMemoryBus_CloseWAL_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	bus := NewMemoryBus()
+	bus.SetPublishPolicy(allowAllPolicy{})
+
+	if err := bus.EnableWAL(dir); err != nil {
+		t.Fatalf("EnableWAL: %v", err)
+	}
+
+	if err := bus.CloseWAL(); err != nil {
+		t.Fatalf("first CloseWAL: %v", err)
+	}
+	// Second close must not panic. Returning an error is acceptable.
+	_ = bus.CloseWAL()
+}
+
+func TestMemoryBus_UpdateMinSubscriberSeq_BeyondLastSeq(t *testing.T) {
+	dir := t.TempDir()
+	bus := NewMemoryBus()
+	bus.SetPublishPolicy(allowAllPolicy{})
+
+	if err := bus.EnableWAL(dir); err != nil {
+		t.Fatalf("EnableWAL: %v", err)
+	}
+	defer bus.CloseWAL()
+
+	for i := 0; i < 3; i++ {
+		bus.wal.Write(makeEvent("x"))
+	}
+
+	// Calling with a seq far beyond LastSeq should be a no-op — no crash, no data loss.
+	bus.UpdateMinSubscriberSeq(999)
+
+	if bus.wal.LastSeq() != 3 {
+		t.Errorf("expected LastSeq=3 unchanged after UpdateMinSubscriberSeq(999), got %d", bus.wal.LastSeq())
+	}
+}
+
 // allowAllPolicy implements contracts.PublishPolicyProvider for tests.
 type allowAllPolicy struct{}
 
