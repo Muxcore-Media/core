@@ -227,7 +227,7 @@ func TestMemoryBus_SubscribeFrom_ReplaysThenLive(t *testing.T) {
 	bus.wal.Flush()
 
 	received := make(chan contracts.Event, 10)
-	err := bus.SubscribeFrom(ctx, "data.event", func(ctx context.Context, e contracts.Event) error {
+	_, err := bus.SubscribeFrom(ctx, "data.event", func(ctx context.Context, e contracts.Event) error {
 		received <- e
 		return nil
 	}, 1)

@@ -95,24 +95,16 @@ cleanup interval are constants (`connPoolIdleTimeout = 5m`,
 
 ## gRPC Rate Limiting
 
-A per-IP token bucket rate limiter is wired as the first gRPC interceptor
-(before auth), protecting all gRPC services.
+The built-in gRPC per-IP rate limiter was removed in the module-extraction
+refactor. The gRPC port is intended for internal sidecar use only — module
+connections are authenticated via TLS and a join token.
 
-| Config | Default | Effect |
-|--------|---------|--------|
-| `MUXCORE_GRPC_RATE_LIMIT` | `1000` | Max requests per minute per client IP |
+**Protect the gRPC port at the network level** (firewall, load balancer ACL)
+rather than relying on application-layer rate limiting.
 
-When a client exceeds the limit, it receives `codes.ResourceExhausted`:
-
-```
-rpc error: code = ResourceExhausted desc = rate limit exceeded: max 1000 requests/minute per IP
-```
-
-The rate limiter applies to both unary and streaming RPCs. The token bucket
-refills continuously at `limit/60` tokens per second (not in bursts).
-
-Idle IP buckets are evicted after 10 minutes of inactivity to prevent
-unbounded memory growth.
+HTTP API rate limiting is still available via a `RateLimiterProvider` module
+(see `pkg/contracts/ratelimit.go`). Core discovers a registered provider at
+startup and wires it into the HTTP middleware chain.
 
 ---
 

@@ -10,6 +10,7 @@ import (
 
 	"log/slog"
 
+	"github.com/Muxcore-Media/core/internal/callerid"
 	"github.com/Muxcore-Media/core/internal/trace"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/google/uuid"
@@ -80,6 +81,7 @@ func NewMemoryBus() *MemoryBus {
 
 // Close cancels all subscriber worker goroutines and prevents new subscriptions.
 // Safe to call multiple times. After Close, Subscribe/SubscribeModule return an error.
+// Outstanding cancel functions become no-ops after Close.
 func (b *MemoryBus) Close() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -156,7 +158,7 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 	if publishPolicy == nil {
 		return fmt.Errorf("publish denied: no publish policy configured — event %q cannot be dispatched. Deploy a module implementing publish.policy", event.Type)
 	}
-	callerID := contracts.CallerIDFromContext(ctx)
+	callerID := callerid.Get(ctx)
 	if rpp, ok := publishPolicy.(contracts.ResourcePublishPolicyProvider); ok {
 		allowed, err := rpp.CanPublishEvent(ctx, callerID, event)
 		if err != nil {
@@ -184,7 +186,16 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 	}
 	auditLogger := b.audit
 	nodeID := b.nodeID
+	wal := b.wal
 	b.mu.RUnlock()
+
+	// Write to WAL before dispatching, so replay gets persisted events.
+	if wal != nil {
+		if _, err := wal.Write(event); err != nil {
+			slog.Error("WAL write failed, event may not be recoverable",
+				"event_type", event.Type, "event_id", event.ID, "error", err)
+		}
+	}
 
 	// Audit the event publication.
 	if auditLogger != nil {
@@ -243,13 +254,14 @@ done:
 // Use "*" to subscribe to all events.
 // The handler is invoked by a dedicated goroutine that drains events from
 // a bounded channel. Slow handlers have events dropped rather than blocking
-// publishers.
-func (b *MemoryBus) Subscribe(ctx context.Context, eventType string, handler contracts.EventHandler) error {
+// publishers. Returns a cancel function that removes the subscription.
+func (b *MemoryBus) Subscribe(ctx context.Context, eventType string, handler contracts.EventHandler) (func(), error) {
 	return b.subscribeInternal(ctx, "", eventType, handler, defaultHandlerTimeout)
 }
 
 // SubscribeModule registers a handler tagged with a module identifier.
-func (b *MemoryBus) SubscribeModule(ctx context.Context, moduleID, eventType string, handler contracts.EventHandler) error {
+// Returns a cancel function that removes this subscription.
+func (b *MemoryBus) SubscribeModule(ctx context.Context, moduleID, eventType string, handler contracts.EventHandler) (func(), error) {
 	b.mu.RLock()
 	timeout := defaultHandlerTimeout
 	if t, ok := b.moduleTimeouts[moduleID]; ok {
@@ -259,13 +271,13 @@ func (b *MemoryBus) SubscribeModule(ctx context.Context, moduleID, eventType str
 	return b.subscribeInternal(ctx, moduleID, eventType, handler, timeout)
 }
 
-func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType string, handler contracts.EventHandler, timeout time.Duration) error {
+func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType string, handler contracts.EventHandler, timeout time.Duration) (func(), error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 
 	select {
 	case <-b.closed:
-		return fmt.Errorf("event bus is closed")
+		b.mu.Unlock()
+		return func() {}, fmt.Errorf("event bus is closed")
 	default:
 	}
 
@@ -304,7 +316,22 @@ func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType str
 	go b.subscriberWorker(s, timeout)
 
 	b.subscribers = append(b.subscribers, s)
-	return nil
+	b.mu.Unlock()
+
+	cancel := func() {
+		b.mu.Lock()
+		filtered := b.subscribers[:0]
+		for _, existing := range b.subscribers {
+			if existing == s {
+				existing.cancel()
+				continue
+			}
+			filtered = append(filtered, existing)
+		}
+		b.subscribers = filtered
+		b.mu.Unlock()
+	}
+	return cancel, nil
 }
 
 // subscriberWorker drains the subscriber's channel and invokes the handler.
@@ -353,45 +380,6 @@ func (b *MemoryBus) subscriberWorker(s *sub, timeout time.Duration) {
 	}
 }
 
-// Unsubscribe removes a handler for the given event type.
-func (b *MemoryBus) Unsubscribe(ctx context.Context, eventType string, handler contracts.EventHandler) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	// Audit the unsubscription if configured.
-	auditLogger := b.audit
-	if auditLogger != nil {
-		go func() {
-			entry := contracts.AuditEntry{
-				ID:        uuid.New().String(),
-				Timestamp: time.Now(),
-				Actor:     "system",
-				Action:    "event.unsubscribe",
-				Resource:  eventType,
-				Details: map[string]string{
-					"handler": fmt.Sprintf("%p", handler),
-				},
-				NodeID: b.nodeID,
-			}
-			if err := auditLogger.Log(context.Background(), entry); err != nil {
-				slog.Error("audit log write failed", "event_type", eventType, "error", err)
-			}
-		}()
-	}
-
-	ptr := fmt.Sprintf("%p", handler)
-	filtered := b.subscribers[:0]
-	for _, s := range b.subscribers {
-		if s.eventType == eventType && fmt.Sprintf("%p", s.handler) == ptr {
-			// Cancel the worker goroutine.
-			s.cancel()
-			continue
-		}
-		filtered = append(filtered, s)
-	}
-	b.subscribers = filtered
-	return nil
-}
 
 // UnsubscribeAll removes all subscriptions tagged with the given module ID.
 func (b *MemoryBus) UnsubscribeAll(ctx context.Context, moduleID string) error {
@@ -499,7 +487,7 @@ func (b *MemoryBus) DroppedEvents() int64 {
 
 // --- Request/reply ---
 
-// Request publishes an event and waits for a reply.
+// Request publishes an event and waits for a reply on ReplyEventType(event.Type).
 func (b *MemoryBus) Request(ctx context.Context, event contracts.Event, timeout time.Duration) (contracts.Event, error) {
 	if event.ID == "" {
 		event.ID = uuid.New().String()
@@ -514,17 +502,17 @@ func (b *MemoryBus) Request(ctx context.Context, event contracts.Event, timeout 
 	}
 
 	ch := make(chan result, 1)
-	replyType := event.Type + ".reply"
+	replyType := contracts.ReplyEventType(event.Type)
 
 	replyHandler := func(ctx context.Context, e contracts.Event) error {
 		ch <- result{event: e}
 		return nil
 	}
-	subErr := b.Subscribe(ctx, replyType, replyHandler)
+	cancel, subErr := b.Subscribe(ctx, replyType, replyHandler)
 	if subErr != nil {
 		return contracts.Event{}, subErr
 	}
-	defer b.Unsubscribe(ctx, replyType, replyHandler)
+	defer cancel()
 
 	if err := b.Publish(ctx, event); err != nil {
 		return contracts.Event{}, err

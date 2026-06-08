@@ -2,7 +2,6 @@ package mock
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -11,98 +10,94 @@ import (
 
 // EventBus is a mock event bus for module testing.
 type EventBus struct {
-	mu        sync.RWMutex
-	Published []contracts.Event
-	Handlers   map[string][]contracts.EventHandler
-	moduleOwned map[string][]int // moduleID -> handler indices into a global ref list
-	handlerRefs []contracts.EventHandler
+	mu            sync.RWMutex
+	Published     []contracts.Event
+	subs          []*mockSub
 	HandlerErrors []error // errors returned by handlers during Publish (cleared on Reset)
+}
+
+type mockSub struct {
+	moduleID  string
+	eventType string
+	handler   contracts.EventHandler
 }
 
 func NewEventBus() *EventBus {
 	return &EventBus{
 		Published: make([]contracts.Event, 0),
-		Handlers:    make(map[string][]contracts.EventHandler),
-		moduleOwned: make(map[string][]int),
-		handlerRefs: make([]contracts.EventHandler, 0),
 	}
 }
 
 func (b *EventBus) Publish(ctx context.Context, event contracts.Event) error {
+	b.mu.RLock()
+	var matching []contracts.EventHandler
+	for _, s := range b.subs {
+		if s.eventType == event.Type || s.eventType == "*" {
+			matching = append(matching, s.handler)
+		}
+	}
+	b.mu.RUnlock()
+
 	b.mu.Lock()
 	b.Published = append(b.Published, event)
-	handlers := b.Handlers[event.Type]
 	b.mu.Unlock()
 
-	for _, h := range handlers {
+	for _, h := range matching {
 		if err := h(ctx, event); err != nil {
+			b.mu.Lock()
 			b.HandlerErrors = append(b.HandlerErrors, err)
+			b.mu.Unlock()
 		}
 	}
 	return nil
 }
 
-func (b *EventBus) Subscribe(ctx context.Context, eventType string, handler contracts.EventHandler) error {
+func (b *EventBus) Subscribe(ctx context.Context, eventType string, handler contracts.EventHandler) (func(), error) {
+	s := &mockSub{eventType: eventType, handler: handler}
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.Handlers[eventType] = append(b.Handlers[eventType], handler)
-	return nil
+	b.subs = append(b.subs, s)
+	b.mu.Unlock()
+
+	return b.cancelFor(s), nil
 }
 
-func (b *EventBus) Unsubscribe(ctx context.Context, eventType string, handler contracts.EventHandler) error {
+func (b *EventBus) SubscribeModule(ctx context.Context, moduleID, eventType string, handler contracts.EventHandler) (func(), error) {
+	s := &mockSub{moduleID: moduleID, eventType: eventType, handler: handler}
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	// Remove only the matching handler by pointer identity, not all handlers for the event type.
-	handlers := b.Handlers[eventType]
-	for i, h := range handlers {
-		// Compare function pointers — Go allows this for functions in the same binary.
-		if fmt.Sprintf("%p", h) == fmt.Sprintf("%p", handler) {
-			b.Handlers[eventType] = append(handlers[:i], handlers[i+1:]...)
-			return nil
+	b.subs = append(b.subs, s)
+	b.mu.Unlock()
+
+	return b.cancelFor(s), nil
+}
+
+// cancelFor returns a cancel func that removes exactly the given subscription.
+func (b *EventBus) cancelFor(target *mockSub) func() {
+	return func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		filtered := b.subs[:0]
+		for _, s := range b.subs {
+			if s != target {
+				filtered = append(filtered, s)
+			}
 		}
+		b.subs = filtered
 	}
-	return nil
-}
-
-func (b *EventBus) SubscribeModule(ctx context.Context, moduleID, eventType string, handler contracts.EventHandler) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	idx := len(b.handlerRefs)
-	b.handlerRefs = append(b.handlerRefs, handler)
-	b.Handlers[eventType] = append(b.Handlers[eventType], handler)
-	b.moduleOwned[moduleID] = append(b.moduleOwned[moduleID], idx)
-	return nil
 }
 
 func (b *EventBus) UnsubscribeAll(ctx context.Context, moduleID string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	if moduleID == "" {
 		return nil
 	}
-	indices := b.moduleOwned[moduleID]
-	if len(indices) == 0 {
-		return nil
-	}
-	// Collect handler identities to remove (using %p since function types
-	// are not comparable and cannot be used as map keys).
-	toRemove := make(map[string]bool)
-	for _, idx := range indices {
-		if idx < len(b.handlerRefs) {
-			toRemove[fmt.Sprintf("%p", b.handlerRefs[idx])] = true
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	filtered := b.subs[:0]
+	for _, s := range b.subs {
+		if s.moduleID != moduleID {
+			filtered = append(filtered, s)
 		}
 	}
-	// Filter all handler maps
-	for eventType, handlers := range b.Handlers {
-		remaining := handlers[:0]
-		for _, h := range handlers {
-			if !toRemove[fmt.Sprintf("%p", h)] {
-				remaining = append(remaining, h)
-			}
-		}
-		b.Handlers[eventType] = remaining
-	}
-	delete(b.moduleOwned, moduleID)
+	b.subs = filtered
 	return nil
 }
 
@@ -112,14 +107,16 @@ func (b *EventBus) Request(ctx context.Context, event contracts.Event, timeout t
 		err   error
 	}
 	ch := make(chan result, 1)
-	replyType := event.Type + ".reply"
 
 	replyHandler := func(ctx context.Context, e contracts.Event) error {
 		ch <- result{event: e}
 		return nil
 	}
-	_ = b.Subscribe(ctx, replyType, replyHandler)
-	defer b.Unsubscribe(ctx, replyType, replyHandler)
+	cancel, err := b.Subscribe(ctx, contracts.ReplyEventType(event.Type), replyHandler)
+	if err != nil {
+		return contracts.Event{}, err
+	}
+	defer cancel()
 
 	if err := b.Publish(ctx, event); err != nil {
 		return contracts.Event{}, err
@@ -144,13 +141,25 @@ func (b *EventBus) PublishedEvents() []contracts.Event {
 	return result
 }
 
-// Reset clears all published events and handlers.
+// HandlerCount returns the number of active subscriptions for the given event type.
+// Useful for test assertions.
+func (b *EventBus) HandlerCount(eventType string) int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	count := 0
+	for _, s := range b.subs {
+		if s.eventType == eventType {
+			count++
+		}
+	}
+	return count
+}
+
+// Reset clears all published events, handlers, and errors.
 func (b *EventBus) Reset() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.Published = nil
-	b.Handlers = make(map[string][]contracts.EventHandler)
-	b.moduleOwned = make(map[string][]int)
-	b.handlerRefs = nil
+	b.subs = nil
 	b.HandlerErrors = nil
 }

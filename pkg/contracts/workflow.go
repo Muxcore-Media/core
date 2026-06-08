@@ -43,11 +43,35 @@ type TapestryRun struct {
 	Meta         map[string]any
 }
 
+// StepHandlerKind identifies how a TapestryStep.Handler is resolved.
+type StepHandlerKind string
+
+const (
+	// StepHandlerModule routes the step to a specific module by ID.
+	// Handler.Ref must be a module ID (e.g. "transcoder-ffmpeg").
+	StepHandlerModule StepHandlerKind = "module"
+
+	// StepHandlerCapability routes the step to any module advertising
+	// the given capability. Handler.Ref must be a capability string
+	// (e.g. "transcoder"). The workflow engine picks an available module.
+	StepHandlerCapability StepHandlerKind = "capability"
+)
+
+// StepHandler specifies which module handles a tapestry step.
+// Exactly one of Kind+Ref must be set.
+type StepHandler struct {
+	// Kind determines how Ref is interpreted.
+	Kind StepHandlerKind
+	// Ref is a module ID (Kind=StepHandlerModule) or capability string
+	// (Kind=StepHandlerCapability).
+	Ref string
+}
+
 // TapestryStep defines one step in a tapestry definition.
 type TapestryStep struct {
 	Name         string
-	Handler      string // module ID or capability to handle this step
-	Retry        int    // max retry attempts (0 = no retry)
+	Handler      StepHandler
+	Retry        int           // max retry attempts (0 = no retry)
 	Timeout      time.Duration
 	DependsOn    []string          // step names that must complete before this one
 	InputMapping map[string]string // maps step output keys to this step's input keys
@@ -65,7 +89,7 @@ type TapestryDefinition struct {
 }
 
 // WorkflowEngine orchestrates multi-step tapestry executions.
-// Discovered via FindByCapability("workflow.engine"). If no module
+// Discovered via FindByCapability(CapabilityWorkflowEngine). If no module
 // implements this contract, individual Scheduler tasks can still run
 // independently — tapestry execution is an optional layer.
 type WorkflowEngine interface {

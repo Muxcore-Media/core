@@ -99,10 +99,6 @@ func (s *Storage) List(ctx context.Context, prefix string) ([]contracts.ObjectIn
 	return results, nil
 }
 
-func (s *Storage) ProviderCount() int {
-	return 1
-}
-
 func (s *Storage) Stream(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error) {
 	data, err := s.Get(ctx, key)
 	if err != nil {

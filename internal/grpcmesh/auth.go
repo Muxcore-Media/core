@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/Muxcore-Media/core/internal/callerid"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 
 	"google.golang.org/grpc"
@@ -14,17 +15,17 @@ import (
 )
 
 // AuthInterceptor provides gRPC unary and stream interceptors that extract
-// caller identity from gRPC metadata and, when an Authorizer and
-// IdentityProvider are both configured, enforce per-method access control.
+// caller identity from gRPC metadata and, when an Authorizer is configured,
+// enforce per-method access control.
 //
 // Behavior:
-//   - Extracts x-caller-id from metadata and propagates it into the context
-//     only AFTER successful identity verification.
-//   - When both IdentityProvider and Authorizer are set: extracts identity,
+//   - When no Authorizer is set: passes all requests through, propagating
+//     x-caller-id from incoming gRPC metadata into the context if present.
+//   - When both Authorizer and IdentityProvider are set: extracts identity,
 //     checks authorization via Authorizer.Can(), and denies with
 //     PermissionDenied if not authorized.
-//   - When EITHER is nil: logs a warning and denies all requests (fail-closed)
-//     rather than silently allowing all traffic.
+//   - When Authorizer is set but IdentityProvider is nil: returns Unavailable
+//     (misconfiguration — both must be provided together for enforcement).
 type AuthInterceptor struct {
 	mu               sync.RWMutex
 	authorizer       contracts.Authorizer
@@ -32,8 +33,8 @@ type AuthInterceptor struct {
 }
 
 // NewAuthInterceptor creates an auth interceptor with no enforcement.
-// Call SetAuthorizer and SetIdentityProvider to enable enforcement.
-// Until both are set, all requests are denied.
+// Call SetAuthorizer and SetIdentityProvider together to enable enforcement.
+// When no Authorizer is configured, all requests pass through.
 func NewAuthInterceptor() *AuthInterceptor {
 	return &AuthInterceptor{}
 }
@@ -53,13 +54,6 @@ func (a *AuthInterceptor) SetIdentityProvider(ip contracts.IdentityProvider) {
 	a.identityProvider = ip
 }
 
-// isReady returns true only when both authorizer and identityProvider are set.
-func (a *AuthInterceptor) isReady() bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.authorizer != nil && a.identityProvider != nil
-}
-
 // extractAndVerify performs identity extraction and authorization.
 // Returns the context with caller ID set on success, or an error on failure.
 func (a *AuthInterceptor) extractAndVerify(ctx context.Context, fullMethod string) (context.Context, error) {
@@ -68,8 +62,20 @@ func (a *AuthInterceptor) extractAndVerify(ctx context.Context, fullMethod strin
 	identityProvider := a.identityProvider
 	a.mu.RUnlock()
 
-	if authorizer == nil || identityProvider == nil {
-		return ctx, status.Error(codes.Unavailable, "authentication not configured")
+	// No authorizer — pass through. Propagate x-caller-id from metadata for
+	// audit/tracing without enforcing any policy.
+	if authorizer == nil {
+		if md, ok := metadata.FromIncomingContext(ctx); ok {
+			if ids := md.Get("x-caller-id"); len(ids) > 0 {
+				ctx = callerid.Set(ctx, ids[0])
+			}
+		}
+		return ctx, nil
+	}
+
+	// Authorizer set but no identity provider — misconfiguration.
+	if identityProvider == nil {
+		return ctx, status.Error(codes.Unavailable, "authentication misconfigured: identity provider required when authorizer is set")
 	}
 
 	identity, err := identityProvider.ExtractIdentity(ctx)
@@ -88,7 +94,7 @@ func (a *AuthInterceptor) extractAndVerify(ctx context.Context, fullMethod strin
 	}
 
 	// Only propagate caller ID after successful identity verification.
-	ctx = contracts.WithCallerID(ctx, identity.ID)
+	ctx = callerid.Set(ctx, identity.ID)
 
 	session := contracts.Session{
 		UserID: identity.ID,

@@ -16,6 +16,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -37,18 +38,19 @@ import (
 // harness wires up the core subsystems in-process for testing.
 // No external processes, no spool, no TLS.
 type harness struct {
-	cfg      *config.Config
-	bus      *events.MemoryBus
-	reg      *registry.Registry
-	store    *storage.Orchestrator
-	modMgr   *module.Manager
-	meshSrv  *grpcmesh.Server
-	grpcSrv  *grpc.Server
-	grpcAddr string
-	audit    *audit.FileLogger
-	cancel   context.CancelFunc
-	ctx      context.Context
-	t        *testing.T
+	cfg        *config.Config
+	bus        *events.MemoryBus
+	reg        *registry.Registry
+	store      *storage.Orchestrator
+	modMgr     *module.Manager
+	meshSrv    *grpcmesh.Server
+	meshClient *grpcmesh.Client
+	grpcSrv    *grpc.Server
+	grpcAddr   string
+	audit      *audit.FileLogger
+	cancel     context.CancelFunc
+	ctx        context.Context
+	t          *testing.T
 }
 
 func newHarness(t *testing.T) *harness {
@@ -80,6 +82,7 @@ func newHarness(t *testing.T) *harness {
 	meshSrv := grpcmesh.NewServer()
 	meshSrv.RegisterWithGRPC(grpcSrv)
 	meshClient := grpcmesh.NewClient(meshSrv)
+	// No call policy set — mesh calls and storage are denied by default.
 
 	storageGrpc := grpcmesh.NewStorageServer(store)
 	storageGrpc.RegisterWithGRPC(grpcSrv)
@@ -87,18 +90,19 @@ func newHarness(t *testing.T) *harness {
 	go grpcSrv.Serve(lis)
 
 	h := &harness{
-		cfg:      cfg,
-		bus:      bus,
-		reg:      reg,
-		store:    store,
-		modMgr:   modMgr,
-		meshSrv:  meshSrv,
-		grpcSrv:  grpcSrv,
-		grpcAddr: lis.Addr().String(),
-		audit:    auditLogger,
-		cancel:   cancel,
-		ctx:      ctx,
-		t:        t,
+		cfg:        cfg,
+		bus:        bus,
+		reg:        reg,
+		store:      store,
+		modMgr:     modMgr,
+		meshSrv:    meshSrv,
+		meshClient: meshClient,
+		grpcSrv:    grpcSrv,
+		grpcAddr:   lis.Addr().String(),
+		audit:      auditLogger,
+		cancel:     cancel,
+		ctx:        ctx,
+		t:          t,
 	}
 	t.Cleanup(h.stop)
 	return h
@@ -173,10 +177,11 @@ func TestIntegration_EventBus_PublishAndSubscribe(t *testing.T) {
 	received := make(chan contracts.Event, 4)
 	ctx := context.Background()
 
-	if err := h.bus.Subscribe(ctx, "test.event", func(ctx context.Context, e contracts.Event) error {
+	_, err := h.bus.Subscribe(ctx, "test.event", func(ctx context.Context, e contracts.Event) error {
 		received <- e
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
@@ -396,6 +401,24 @@ func TestIntegration_Registry_DependencyOrder(t *testing.T) {
 	}
 }
 
+// TestIntegration_MeshClient_DenyByDefault verifies that when no call policy
+// module is registered, Client.Call() denies all inter-module calls. This is
+// the core deny-by-default security invariant for the mesh.
+func TestIntegration_MeshClient_DenyByDefault(t *testing.T) {
+	h := newHarness(t)
+
+	h.meshSrv.RegisterHandler("target-module", echoMeshHandler{})
+
+	// No call policy set in the harness — all calls must be denied.
+	_, err := h.meshClient.Call(context.Background(), "target-module", "Echo", []byte("hello"))
+	if err == nil {
+		t.Fatal("expected call to be denied when no call policy is configured, got nil error")
+	}
+	if !strings.Contains(err.Error(), "no call policy configured") {
+		t.Errorf("expected 'no call policy configured' in error, got: %v", err)
+	}
+}
+
 // --- Stubs ---
 
 type stubModule struct {
@@ -522,4 +545,11 @@ func (m *storageModule) Move(ctx context.Context, src, dst string) error {
 }
 func (m *storageModule) List(ctx context.Context, prefix string) ([]contracts.ObjectInfo, error) {
 	return m.prov.List(ctx, prefix)
+}
+
+// echoMeshHandler implements contracts.MeshHandler by echoing the payload.
+type echoMeshHandler struct{}
+
+func (echoMeshHandler) HandleCall(_ context.Context, _ string, payload []byte) ([]byte, error) {
+	return payload, nil
 }

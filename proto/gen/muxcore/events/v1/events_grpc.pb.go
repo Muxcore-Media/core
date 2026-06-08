@@ -22,6 +22,7 @@ const (
 	EventService_Publish_FullMethodName   = "/muxcore.events.v1.EventService/Publish"
 	EventService_Subscribe_FullMethodName = "/muxcore.events.v1.EventService/Subscribe"
 	EventService_Request_FullMethodName   = "/muxcore.events.v1.EventService/Request"
+	EventService_Replay_FullMethodName    = "/muxcore.events.v1.EventService/Replay"
 )
 
 // EventServiceClient is the client API for EventService service.
@@ -37,6 +38,8 @@ type EventServiceClient interface {
 	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Event], error)
 	// Request sends a request event and waits for a single reply.
 	Request(ctx context.Context, in *RequestEvent, opts ...grpc.CallOption) (*Event, error)
+	// Replay streams historical events from the WAL starting at since_seq.
+	Replay(ctx context.Context, in *ReplayRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Event], error)
 }
 
 type eventServiceClient struct {
@@ -76,6 +79,25 @@ func (c *eventServiceClient) Subscribe(ctx context.Context, in *SubscribeRequest
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type EventService_SubscribeClient = grpc.ServerStreamingClient[Event]
 
+func (c *eventServiceClient) Replay(ctx context.Context, in *ReplayRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Event], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &EventService_ServiceDesc.Streams[1], EventService_Replay_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ReplayRequest, Event]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EventService_ReplayClient = grpc.ServerStreamingClient[Event]
+
 func (c *eventServiceClient) Request(ctx context.Context, in *RequestEvent, opts ...grpc.CallOption) (*Event, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Event)
@@ -99,6 +121,8 @@ type EventServiceServer interface {
 	Subscribe(*SubscribeRequest, grpc.ServerStreamingServer[Event]) error
 	// Request sends a request event and waits for a single reply.
 	Request(context.Context, *RequestEvent) (*Event, error)
+	// Replay streams historical events from the WAL starting at since_seq.
+	Replay(*ReplayRequest, grpc.ServerStreamingServer[Event]) error
 	mustEmbedUnimplementedEventServiceServer()
 }
 
@@ -117,6 +141,9 @@ func (UnimplementedEventServiceServer) Subscribe(*SubscribeRequest, grpc.ServerS
 }
 func (UnimplementedEventServiceServer) Request(context.Context, *RequestEvent) (*Event, error) {
 	return nil, status.Error(codes.Unimplemented, "method Request not implemented")
+}
+func (UnimplementedEventServiceServer) Replay(*ReplayRequest, grpc.ServerStreamingServer[Event]) error {
+	return status.Error(codes.Unimplemented, "method Replay not implemented")
 }
 func (UnimplementedEventServiceServer) mustEmbedUnimplementedEventServiceServer() {}
 func (UnimplementedEventServiceServer) testEmbeddedByValue()                      {}
@@ -168,6 +195,17 @@ func _EventService_Subscribe_Handler(srv interface{}, stream grpc.ServerStream) 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type EventService_SubscribeServer = grpc.ServerStreamingServer[Event]
 
+func _EventService_Replay_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ReplayRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(EventServiceServer).Replay(m, &grpc.GenericServerStream[ReplayRequest, Event]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EventService_ReplayServer = grpc.ServerStreamingServer[Event]
+
 func _EventService_Request_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RequestEvent)
 	if err := dec(in); err != nil {
@@ -206,6 +244,11 @@ var EventService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Subscribe",
 			Handler:       _EventService_Subscribe_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "Replay",
+			Handler:       _EventService_Replay_Handler,
 			ServerStreams: true,
 		},
 	},

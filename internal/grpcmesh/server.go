@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/Muxcore-Media/core/internal/callerid"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	meshv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/mesh/v1"
 	"google.golang.org/grpc"
@@ -289,20 +290,22 @@ func (c *Client) SetNodeID(id string) {
 
 // Call dispatches a call to the target module.
 // Local modules are called in-process. Remote modules go over gRPC.
+// When no call policy is configured, all calls are denied (deny-by-default).
+// Deploy a module implementing "call.policy" to open access selectively.
 func (c *Client) Call(ctx context.Context, targetModule, method string, payload []byte) ([]byte, error) {
-	// Check call policy if configured
 	c.mu.RLock()
 	callPolicy := c.callPolicy
 	c.mu.RUnlock()
-	if callPolicy != nil {
-		callerID := contracts.CallerIDFromContext(ctx)
-		allowed, err := callPolicy.AllowCall(ctx, callerID, targetModule, method)
-		if err != nil {
-			return nil, fmt.Errorf("call policy error: %w", err)
-		}
-		if !allowed {
-			return nil, fmt.Errorf("call denied by policy: caller=%q target=%q method=%q", callerID, targetModule, method)
-		}
+	if callPolicy == nil {
+		return nil, fmt.Errorf("call denied: no call policy configured — deploy a module implementing \"call.policy\" to enable inter-module calls")
+	}
+	callerID := callerid.Get(ctx)
+	allowed, err := callPolicy.AllowCall(ctx, callerID, targetModule, method)
+	if err != nil {
+		return nil, fmt.Errorf("call policy error: %w", err)
+	}
+	if !allowed {
+		return nil, fmt.Errorf("call denied by policy: caller=%q target=%q method=%q", callerID, targetModule, method)
 	}
 
 	// Try local first
@@ -324,7 +327,7 @@ func (c *Client) Call(ctx context.Context, targetModule, method string, payload 
 				if c.transportCreds == nil {
 					return nil, fmt.Errorf("%w: cross-node routing requires TLS — no transport credentials configured", ErrRemoteRoutingUnavailable)
 				}
-				conn, err := grpc.Dial(member.GRPCAddr, grpc.WithTransportCredentials(c.transportCreds))
+				conn, err := grpc.NewClient(member.GRPCAddr, grpc.WithTransportCredentials(c.transportCreds))
 					if err != nil {
 						return nil, fmt.Errorf("%w: failed to dial remote node %q at %s: %w", ErrRemoteRoutingUnavailable, member.ID, member.GRPCAddr, err)
 					}
@@ -332,7 +335,7 @@ func (c *Client) Call(ctx context.Context, targetModule, method string, payload 
 
 					// Propagate caller identity via gRPC metadata if set
 					callCtx := ctx
-					if callerID := contracts.CallerIDFromContext(ctx); callerID != "" {
+					if callerID := callerid.Get(ctx); callerID != "" {
 						callCtx = metadata.NewOutgoingContext(ctx, metadata.Pairs("x-caller-id", callerID))
 					}
 

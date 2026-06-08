@@ -1,5 +1,7 @@
 package contracts
 
+import "context"
+
 // TagModule is a single module entry in a spool tag definition.
 type TagModule struct {
 	Repo     string `json:"repo"`
@@ -19,9 +21,11 @@ type TagDefinition struct {
 // SpoolResolver resolves a tag name into a list of module definitions from
 // a spool URL. Implementations may support different spool formats
 // (GitHub, self-hosted, IPFS, etc.).
-// Discovered via FindByCapability("spool.resolver"). If no resolver is
+//
+// Discovered via FindByCapability(CapabilitySpoolResolver). If no resolver is
 // registered, core falls back to a generic HTTPS JSON fetcher.
 type SpoolResolver interface {
 	// ResolveTag fetches and parses a tag definition from the given spool URL.
-	ResolveTag(spoolURL, tagName string) (*TagDefinition, error)
+	// The context carries deadlines and cancellation for the network request.
+	ResolveTag(ctx context.Context, spoolURL, tagName string) (*TagDefinition, error)
 }

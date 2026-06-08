@@ -30,7 +30,6 @@ type StorageOrchestrator interface {
 	Exists(ctx context.Context, key string) (bool, error)
 	Stat(ctx context.Context, key string) (ObjectInfo, error)
 	List(ctx context.Context, prefix string) ([]ObjectInfo, error)
-	ProviderCount() int
 	// Stream reads a byte range from a storage object. Uses provider-side
 	// streaming when the routed provider implements Streamable; otherwise
 	// falls back to a full Get with client-side slicing.

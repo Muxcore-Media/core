@@ -3,7 +3,6 @@ package contracts
 import (
 	"context"
 	"net/http"
-	"sync"
 )
 
 // ModuleKind is a user-defined string that categorizes a module's role.
@@ -48,6 +47,11 @@ type ModuleInfo struct {
 	// Core rejects modules whose MinCoreVersion is greater than the running
 	// core version or targets a different major version.
 	MinCoreVersion string
+	// HTTPAddr is the address where this module serves HTTP, if any.
+	// Example: ":8085" or "0.0.0.0:9200". Leave empty if the module does not
+	// expose HTTP. Other modules discover this via ModuleEntry.Info.HTTPAddr
+	// after a successful FindByCapability or Resolve call.
+	HTTPAddr string
 }
 
 type Module interface {
@@ -56,12 +60,6 @@ type Module interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
 	Health(ctx context.Context) error
-}
-
-// InfrastructureAware is implemented by modules that need late-bound
-// infrastructure services (Cluster, WorkerPool, AuditLogger).
-type InfrastructureAware interface {
-	SetInfrastructure(cluster Cluster, workerPool WorkerPool, audit AuditLogger)
 }
 
 // Registry provides runtime discovery of registered modules.
@@ -95,51 +93,18 @@ type RouteRegistrar interface {
 
 type ModuleFactory func(deps Fabric) Module
 
-// Fabric provides modules with the core fabric services they need during construction.
-// Domain-specific services (SecretsProvider, DatabaseProvider, etc.) are discovered
-// at runtime via the Registry — they are not pre-wired here.
+// Fabric provides in-process modules with the core fabric services they need
+// during construction. Sidecar modules (the primary model) do not use Fabric —
+// they access the same services via the five gRPC services on the mesh address.
+//
+// Domain-specific services (SecretsProvider, DatabaseProvider, etc.) are
+// discovered at runtime via the Registry — they are not pre-wired here.
 type Fabric struct {
 	Registry   Registry
 	EventBus   EventBus
 	Routes     RouteRegistrar
-	Cluster    Cluster
 	Storage    StorageOrchestrator
 	WorkerPool WorkerPool
 	Audit      AuditLogger
 	Mesh       ModuleMeshClient
-}
-
-// -- Auto-registration (DEPRECATED) --
-//
-// Register and LoadRegistered are legacy compile-time module registration
-// functions. The architecture moved to sidecar-only gRPC registration.
-// These remain exported for compatibility with existing tests and legacy
-// in-process module loading. New code should use the sidecar model instead.
-//
-// Deprecated: Use the gRPC sidecar registration model. These will be removed
-// in a future release once all modules have been migrated to sidecars.
-
-var registeredFactories []ModuleFactory
-var registeredFactoriesMu sync.Mutex
-
-// Deprecated: Use gRPC sidecar registration instead.
-func Register(factory ModuleFactory) {
-	registeredFactoriesMu.Lock()
-	registeredFactories = append(registeredFactories, factory)
-	registeredFactoriesMu.Unlock()
-}
-
-// Deprecated: Use gRPC sidecar registration instead.
-func LoadRegistered(deps Fabric) []Module {
-	registeredFactoriesMu.Lock()
-	factories := make([]ModuleFactory, len(registeredFactories))
-	copy(factories, registeredFactories)
-	registeredFactories = nil
-	registeredFactoriesMu.Unlock()
-
-	modules := make([]Module, 0, len(factories))
-	for _, f := range factories {
-		modules = append(modules, f(deps))
-	}
-	return modules
 }

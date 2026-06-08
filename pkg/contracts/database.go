@@ -5,15 +5,15 @@ import (
 	"errors"
 )
 
-// ErrDatabaseCredentialExposure is a sentinel error that OpenSecure
+// ErrDatabaseCredentialExposure is a sentinel error that DatabaseProvider
 // implementations SHOULD return if they detect that credentials were
-// passed as a raw connection string (e.g., via the deprecated Open method).
-// This enables CI lint rules to detect unsafe database initialization.
-var ErrDatabaseCredentialExposure = errors.New("database: credential passed as raw string — use OpenSecure with DatabaseParams instead")
+// passed as a raw connection string. This enables CI lint rules to detect
+// unsafe database initialization.
+var ErrDatabaseCredentialExposure = errors.New("database: credential passed as raw string — use DatabaseParams instead")
 
 // DatabaseParams separates connection parameters from credentials.
-// Use this struct with OpenSecure instead of passing a raw connection
-// string to Open. This prevents accidental credential exposure in logs,
+// Use this struct with DatabaseProvider.Open instead of passing a raw connection
+// string. This prevents accidental credential exposure in logs,
 // stack traces, and configuration serialization.
 //
 // SECURITY: The Password field is a plain string — implementations
@@ -43,14 +43,16 @@ type DatabaseParams struct {
 
 // DatabaseProvider is implemented by database modules (database-postgres, database-sqlite, etc.)
 // to provide persistent storage for modules. Core defines the contract; modules provide the driver.
+//
+// Discovered via FindByCapability(CapabilityDatabase).
 type DatabaseProvider interface {
-	// Open initializes the database connection from a raw connection string.
+	// Open initializes the database connection using separated connection
+	// parameters. This isolates credentials from connection metadata,
+	// reducing the risk of accidental credential exposure.
 	//
-	// Deprecated: Use OpenSecure with DatabaseParams instead. Raw connection
-	// strings often contain embedded credentials that are easily leaked in
-	// logs and error messages. This method is retained for backward
-	// compatibility with existing modules.
-	Open(ctx context.Context, connString string) error
+	// Implementations SHOULD return ErrDatabaseCredentialExposure if
+	// the caller attempts to embed credentials in Extra.
+	Open(ctx context.Context, params DatabaseParams) error
 
 	// Close gracefully shuts down the database connection.
 	Close(ctx context.Context) error
@@ -78,24 +80,6 @@ type DatabaseProvider interface {
 	// Implementations SHOULD verify migration content against a known
 	// checksum or signature before execution when operating in production.
 	Migrate(ctx context.Context, migrations []Migration) error
-}
-
-// SecureDatabaseProvider is an optional extension that enables credential-safe
-// database initialization via separated DatabaseParams. Implement this alongside
-// DatabaseProvider when your database module supports parameter-based connection.
-//
-// Callers SHOULD type-assert DatabaseProvider to SecureDatabaseProvider and use
-// OpenSecure instead of Open to prevent credential leakage through connection strings.
-type SecureDatabaseProvider interface {
-	DatabaseProvider
-
-	// OpenSecure initializes the database connection using separated
-	// connection parameters. This isolates credentials from connection
-	// metadata, reducing the risk of accidental credential exposure.
-	//
-	// Implementations SHOULD return ErrDatabaseCredentialExposure if
-	// the caller attempts to embed credentials in Extra.
-	OpenSecure(ctx context.Context, params DatabaseParams) error
 }
 
 // Rows is an iterator over query result rows.

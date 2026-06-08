@@ -3,10 +3,12 @@ package grpcmesh
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
 
+	"github.com/Muxcore-Media/core/internal/callerid"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	storagev1 "github.com/Muxcore-Media/core/proto/gen/muxcore/storage/v1"
 	"google.golang.org/grpc"
@@ -33,8 +35,8 @@ func NewStorageServer(store contracts.StorageOrchestrator) *StorageServer {
 }
 
 // SetCallPolicy attaches a call policy provider for capability enforcement.
-// When set, every storage operation checks the caller's capabilities before
-// accessing data. Pass nil to disable (dev/testing only).
+// Without a policy, all storage access is denied. Deploy a module implementing
+// "call.policy" to grant access.
 func (s *StorageServer) SetCallPolicy(cp contracts.CallPolicyProvider) {
 	s.callPolicy = cp
 }
@@ -50,7 +52,7 @@ func (s *StorageServer) checkStorageAccess(ctx context.Context, method string) e
 	if s.callPolicy == nil {
 		return status.Error(codes.PermissionDenied, "storage access denied: no call policy configured")
 	}
-	callerID := contracts.CallerIDFromContext(ctx)
+	callerID := callerid.Get(ctx)
 	allowed, err := s.callPolicy.AllowCall(ctx, callerID, "storage", method)
 	if err != nil {
 		return status.Errorf(codes.Internal, "storage policy error: %v", err)

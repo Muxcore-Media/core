@@ -443,9 +443,6 @@ func (o *Orchestrator) ProviderInfo() []StorageProviderInfo {
 		if _, ok := prov.(contracts.Hardlinkable); ok {
 			info.Capabilities = append(info.Capabilities, "hardlinkable")
 		}
-		if _, ok := prov.(contracts.CacheLayer); ok {
-			info.IsCache = true
-		}
 		infos = append(infos, info)
 	}
 	return infos
@@ -557,15 +554,12 @@ func (o *Orchestrator) WatchModules(ctx context.Context, bus contracts.EventBus)
 		return nil
 	}
 
-	if err := bus.Subscribe(ctx, contracts.EventModuleRegistered, handler); err != nil {
+	cancel, err := bus.Subscribe(ctx, contracts.EventModuleRegistered, handler)
+	if err != nil {
 		slog.Error("WatchModules: subscribe failed", "error", err)
+		return func() {}
 	}
-
-	return func() {
-		if err := bus.Unsubscribe(ctx, contracts.EventModuleRegistered, handler); err != nil {
-			slog.Warn("WatchModules: unsubscribe failed", "error", err)
-		}
-	}
+	return cancel
 }
 
 // isNotFound checks if an error from a storage provider indicates that the

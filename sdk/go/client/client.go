@@ -156,9 +156,11 @@ type EventsClient struct {
 // Publish publishes an event to the core event bus.
 func (e *EventsClient) Publish(ctx context.Context, eventType, source string, payload []byte) error {
 	_, err := e.raw.Publish(ctx, &eventsv1.PublishRequest{
-		EventType: eventType,
-		Source:    source,
-		Payload:   payload,
+		Event: &eventsv1.Event{
+			Type:    eventType,
+			Source:  source,
+			Payload: payload,
+		},
 	})
 	return err
 }
@@ -167,7 +169,7 @@ func (e *EventsClient) Publish(ctx context.Context, eventType, source string, pa
 // Returns a channel of events and a cancel func. Close cancel when done.
 func (e *EventsClient) Subscribe(ctx context.Context, eventType string) (<-chan *eventsv1.Event, context.CancelFunc, error) {
 	subCtx, cancel := context.WithCancel(ctx)
-	stream, err := e.raw.Subscribe(subCtx, &eventsv1.SubscribeRequest{EventType: eventType})
+	stream, err := e.raw.Subscribe(subCtx, &eventsv1.SubscribeRequest{EventTypes: []string{eventType}})
 	if err != nil {
 		cancel()
 		return nil, nil, err
@@ -216,9 +218,9 @@ func (s *StorageClient) Put(ctx context.Context, key string, r io.Reader) error 
 
 	// Send header chunk with metadata.
 	if err := stream.Send(&storagev1.PutRequest{
-		Key:  key,
-		Data: data,
-		Size: int64(len(data)),
+		Key:       key,
+		Chunk:     data,
+		TotalSize: int64(len(data)),
 	}); err != nil {
 		return fmt.Errorf("storage.Put: send: %w", err)
 	}
@@ -247,7 +249,7 @@ func (s *StorageClient) Get(ctx context.Context, key string) (io.ReadCloser, err
 				pw.CloseWithError(err)
 				return
 			}
-			if _, err := pw.Write(chunk.GetData()); err != nil {
+			if _, err := pw.Write(chunk.GetChunk()); err != nil {
 				pw.CloseWithError(err)
 				return
 			}
@@ -263,17 +265,20 @@ func (s *StorageClient) Delete(ctx context.Context, key string) error {
 	return err
 }
 
-// Stat returns metadata for an object.
-func (s *StorageClient) Stat(ctx context.Context, key string) (*storagev1.ObjectInfo, error) {
+// Stat returns metadata for an object. Returns (nil, nil) if the object does not exist.
+func (s *StorageClient) Stat(ctx context.Context, key string) (*storagev1.StatResponse, error) {
 	resp, err := s.raw.Stat(ctx, &storagev1.StatRequest{Key: key})
 	if err != nil {
 		return nil, err
 	}
-	return resp.GetInfo(), nil
+	if !resp.GetFound() {
+		return nil, nil
+	}
+	return resp, nil
 }
 
 // List returns all objects under the given prefix.
-func (s *StorageClient) List(ctx context.Context, prefix string) ([]*storagev1.ObjectInfo, error) {
+func (s *StorageClient) List(ctx context.Context, prefix string) ([]*storagev1.StatResponse, error) {
 	resp, err := s.raw.List(ctx, &storagev1.ListRequest{Prefix: prefix})
 	if err != nil {
 		return nil, err
@@ -281,9 +286,9 @@ func (s *StorageClient) List(ctx context.Context, prefix string) ([]*storagev1.O
 	return resp.GetObjects(), nil
 }
 
-// Capabilities returns the capability strings for the provider handling the given key.
-func (s *StorageClient) Capabilities(ctx context.Context, key string) ([]string, error) {
-	resp, err := s.raw.Capabilities(ctx, &storagev1.CapabilitiesRequest{Key: key})
+// Capabilities returns the capability strings advertised by the storage provider.
+func (s *StorageClient) Capabilities(ctx context.Context) ([]string, error) {
+	resp, err := s.raw.Capabilities(ctx, &storagev1.CapabilitiesRequest{})
 	if err != nil {
 		return nil, err
 	}

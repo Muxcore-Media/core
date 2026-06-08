@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Muxcore-Media/core/internal/callerid"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -64,7 +65,7 @@ func TestAuthInterceptor_CallerIDPropagated(t *testing.T) {
 
 	var capturedCallerID string
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		capturedCallerID = contracts.CallerIDFromContext(ctx)
+		capturedCallerID = callerid.Get(ctx)
 		return nil, nil
 	}
 	_, err := interceptor(ctx, nil, fakeUnaryInfo("/mesh/Call"), handler)

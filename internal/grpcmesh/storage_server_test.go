@@ -133,7 +133,7 @@ func TestStorageServer_Put_Simple(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Put stream: %v", err)
 	}
-	if err := stream.Send(&storagev1.PutRequest{Key: "test/file.txt", Data: []byte("hello world"), Size: 11}); err != nil {
+	if err := stream.Send(&storagev1.PutRequest{Key: "test/file.txt", TotalSize: 11, Chunk: []byte("hello world")}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	resp, err := stream.CloseAndRecv()
@@ -153,7 +153,7 @@ func TestStorageServer_Put_KeyRequired(t *testing.T) {
 	client := startStorageServer(t, orch, allowAllStoragePolicy{})
 
 	stream, _ := client.Put(context.Background())
-	stream.Send(&storagev1.PutRequest{Data: []byte("data")}) // no key
+	stream.Send(&storagev1.PutRequest{Chunk: []byte("data")}) // no key
 	_, err := stream.CloseAndRecv()
 	if err == nil {
 		t.Fatal("expected error for missing key")
@@ -166,13 +166,13 @@ func TestStorageServer_Put_KeyRequired(t *testing.T) {
 
 func TestStorageServer_Put_DeniedByPolicy(t *testing.T) {
 	orch := newStubOrch()
-	client := startStorageServer(t, denyAllStoragePolicy{}, denyAllStoragePolicy{})
+	client := startStorageServer(t, orch, denyAllStoragePolicy{})
 
 	stream, err := client.Put(context.Background())
 	if err != nil {
 		t.Fatalf("Put stream open: %v", err)
 	}
-	stream.Send(&storagev1.PutRequest{Key: "x", Data: []byte("y")})
+	stream.Send(&storagev1.PutRequest{Key: "x", Chunk: []byte("y")})
 	_, err = stream.CloseAndRecv()
 	if err == nil {
 		t.Fatal("expected error when denied by policy")
@@ -203,7 +203,7 @@ func TestStorageServer_Get_Simple(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Recv: %v", err)
 		}
-		data = append(data, chunk.GetData()...)
+		data = append(data, chunk.GetChunk()...)
 	}
 	if string(data) != "content here" {
 		t.Errorf("expected 'content here', got %q", data)
@@ -318,11 +318,8 @@ func TestStorageServer_Stat_Found(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
-	if resp.GetInfo() == nil {
-		t.Fatal("expected info in Stat response")
-	}
-	if resp.GetInfo().GetSize() != 10 {
-		t.Errorf("expected size 10, got %d", resp.GetInfo().GetSize())
+	if resp.Size != 10 {
+		t.Errorf("expected size 10, got %d", resp.Size)
 	}
 }
 
@@ -349,7 +346,7 @@ func TestStorageServer_Capabilities(t *testing.T) {
 	orch := newStubOrch()
 	client := startStorageServer(t, orch, allowAllStoragePolicy{})
 
-	resp, err := client.Capabilities(context.Background(), &storagev1.CapabilitiesRequest{Key: "any"})
+	resp, err := client.Capabilities(context.Background(), &storagev1.CapabilitiesRequest{})
 	if err != nil {
 		t.Fatalf("Capabilities: %v", err)
 	}

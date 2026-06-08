@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"io/fs"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -412,11 +413,6 @@ func (s *registrationServer) Register(ctx context.Context, req *modulev1.Registe
 		return &modulev1.RegisterResponse{MeshAddr: s.mgr.meshAddr, Accepted: false, Error: "module ID is required"}, nil
 	}
 
-	// If the proto field carries min_core_version but info_json doesn't, use the proto value.
-	if info.MinCoreVersion == "" && req.MinCoreVersion != "" {
-		info.MinCoreVersion = req.MinCoreVersion
-	}
-
 	// Create a proxy that satisfies contracts.Module for registry registration.
 	proxy := NewSidecarProxy(info)
 	s.mgr.TrackProxy(info.ID, proxy)
@@ -518,13 +514,13 @@ func slicesContains(slice []string, item string) bool {
 }
 
 func moduleIDFromRepo(repoURL string) string {
-	clean := strings.TrimSuffix(repoURL, ".git")
-	clean = strings.TrimRight(clean, "/")
-	idx := strings.LastIndex(clean, "/")
-	if idx >= 0 {
-		return clean[idx+1:]
+	u, err := url.Parse(strings.TrimSuffix(repoURL, ".git"))
+	if err != nil || u.Path == "" {
+		return ""
 	}
-	return clean
+	// filepath.Base strips all directory components, preventing path traversal
+	// via crafted repo URLs (e.g. "https://host/owner/../escape").
+	return filepath.Base(u.Path)
 }
 
 

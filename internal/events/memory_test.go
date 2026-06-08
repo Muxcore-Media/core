@@ -24,7 +24,7 @@ func TestPublishSubscribe(t *testing.T) {
 	bus.SetPublishPolicy(permissivePolicy{})
 
 	received := make(chan contracts.Event, 1)
-	if err := bus.Subscribe(context.Background(), "test.event",
+	if _, err := bus.Subscribe(context.Background(), "test.event",
 		func(_ context.Context, e contracts.Event) error {
 			received <- e
 			return nil
@@ -52,7 +52,7 @@ func TestPublishSubscribeMultipleEvents(t *testing.T) {
 	bus.SetPublishPolicy(permissivePolicy{})
 
 	received := make(chan struct{}, 3)
-	if err := bus.Subscribe(context.Background(), "test.event",
+	if _, err := bus.Subscribe(context.Background(), "test.event",
 		func(_ context.Context, e contracts.Event) error {
 			received <- struct{}{}
 			return nil
@@ -85,7 +85,7 @@ func TestWildcardSubscribe(t *testing.T) {
 	bus.SetPublishPolicy(permissivePolicy{})
 
 	received := make(chan contracts.Event, 2)
-	if err := bus.Subscribe(context.Background(), "*",
+	if _, err := bus.Subscribe(context.Background(), "*",
 		func(_ context.Context, e contracts.Event) error {
 			received <- e
 			return nil
@@ -170,86 +170,82 @@ func TestWildcardAndSpecificSubscribe(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Unsubscribe
+// Cancel (subscription removal via returned cancel func)
 // ---------------------------------------------------------------------------
 
-func TestUnsubscribe(t *testing.T) {
+func TestCancelSubscription(t *testing.T) {
 	bus := NewMemoryBus()
 	bus.SetPublishPolicy(permissivePolicy{})
 
 	called := false
-	handler := func(_ context.Context, e contracts.Event) error {
-		called = true
-		return nil
-	}
-
-	if err := bus.Subscribe(context.Background(), "test.event", handler); err != nil {
+	cancel, err := bus.Subscribe(context.Background(), "test.event",
+		func(_ context.Context, e contracts.Event) error {
+			called = true
+			return nil
+		},
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bus.Unsubscribe(context.Background(), "test.event", handler); err != nil {
-		t.Fatal(err)
-	}
+	cancel()
 
 	if err := bus.Publish(context.Background(), contracts.Event{Type: "test.event"}); err != nil {
 		t.Fatal(err)
 	}
-
 	// Give any lingering goroutines a chance to run (none should).
 	time.Sleep(10 * time.Millisecond)
-
 	if called {
-		t.Fatal("handler should not have been called after unsubscribe")
+		t.Fatal("handler should not have been called after cancel")
 	}
 }
 
-func TestUnsubscribeNoopForWrongType(t *testing.T) {
+func TestCancelIdempotent(t *testing.T) {
+	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
+
+	cancel, err := bus.Subscribe(context.Background(), "test.event",
+		func(_ context.Context, _ contracts.Event) error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Calling cancel multiple times must not panic.
+	cancel()
+	cancel()
+}
+
+func TestCancelOnlyRemovesTargetSubscription(t *testing.T) {
 	bus := NewMemoryBus()
 	bus.SetPublishPolicy(permissivePolicy{})
 
 	received := make(chan contracts.Event, 1)
-	handler := func(_ context.Context, e contracts.Event) error {
-		received <- e
-		return nil
+	_, err := bus.Subscribe(context.Background(), "test.event",
+		func(_ context.Context, e contracts.Event) error {
+			received <- e
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	bus.Subscribe(context.Background(), "test.event", handler)
-	// Unsubscribe from a different type — handler should remain.
-	bus.Unsubscribe(context.Background(), "other", handler)
+	// Subscribe a second handler and cancel only it.
+	cancel2, err := bus.Subscribe(context.Background(), "test.event",
+		func(_ context.Context, _ contracts.Event) error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel2()
 
-	bus.Publish(context.Background(), contracts.Event{Type: "test.event"})
-
+	if err := bus.Publish(context.Background(), contracts.Event{Type: "test.event"}); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case <-received:
-		// handler was correctly not removed
+		// first handler was correctly not removed
 	case <-time.After(time.Second):
-		t.Fatal("handler was incorrectly removed")
-	}
-}
-
-func TestUnsubscribeNoopForDifferentHandler(t *testing.T) {
-	bus := NewMemoryBus()
-	bus.SetPublishPolicy(permissivePolicy{})
-
-	received := make(chan contracts.Event, 1)
-	handler := func(_ context.Context, e contracts.Event) error {
-		received <- e
-		return nil
-	}
-	otherHandler := func(_ context.Context, e contracts.Event) error {
-		return nil
-	}
-
-	bus.Subscribe(context.Background(), "test.event", handler)
-	// Unsubscribe with a different handler reference — should NOT remove.
-	bus.Unsubscribe(context.Background(), "test.event", otherHandler)
-
-	bus.Publish(context.Background(), contracts.Event{Type: "test.event"})
-
-	select {
-	case <-received:
-		// handler was correctly not removed
-	case <-time.After(time.Second):
-		t.Fatal("handler was incorrectly removed")
+		t.Fatal("first handler was incorrectly removed")
 	}
 }
 
@@ -262,7 +258,7 @@ func TestRequestReply(t *testing.T) {
 	bus.SetPublishPolicy(permissivePolicy{})
 
 	// Handler that responds to "test.req" with a reply event.
-	if err := bus.Subscribe(context.Background(), "test.req",
+	if _, err := bus.Subscribe(context.Background(), "test.req",
 		func(ctx context.Context, e contracts.Event) error {
 			replyPayload, _ := json.Marshal(map[string]string{"result": "ok"})
 			return bus.Publish(ctx, contracts.Event{
@@ -334,7 +330,7 @@ func TestMultipleSubscribers(t *testing.T) {
 
 	for i := 0; i < numHandlers; i++ {
 		id := i
-		if err := bus.Subscribe(context.Background(), "test.event",
+		if _, err := bus.Subscribe(context.Background(), "test.event",
 			func(_ context.Context, e contracts.Event) error {
 				received <- id
 				return nil

@@ -8,20 +8,34 @@ import (
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/events"
-	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
+
+// allowAllPublishPolicy permits all event publication for testing.
+type allowAllPublishPolicy struct{}
+
+func (allowAllPublishPolicy) CanPublish(_ context.Context, _, _ string) (bool, error) { return true, nil }
 
 func startEventServer(t *testing.T) (eventsv1.EventServiceClient, *events.MemoryBus) {
 	t.Helper()
+	return startEventServerWithReplayer(t, nil)
+}
 
-	reg := registry.New()
+func startEventServerWithReplayer(t *testing.T, replayer WALReplayer) (eventsv1.EventServiceClient, *events.MemoryBus) {
+	t.Helper()
+
 	bus := events.NewMemoryBus()
+	bus.SetPublishPolicy(allowAllPublishPolicy{})
 
 	srv := NewEventServer(bus)
+	if replayer != nil {
+		srv.SetWALReplayer(replayer)
+	}
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -200,5 +214,188 @@ func TestEventServer_Publish_SourceNodeOverridden(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Error("timeout waiting for event")
+	}
+}
+
+// --- Replay RPC ---
+
+// stubWALReplayer is a configurable WALReplayer for testing.
+type stubWALReplayer struct {
+	events []contracts.Event
+}
+
+func (r *stubWALReplayer) ReplayFrom(_ context.Context, sinceSeq uint64, fn func(contracts.Event) error) error {
+	for i, e := range r.events {
+		if uint64(i)+1 >= sinceSeq {
+			if err := fn(e); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func TestEventServer_Replay_NoWAL_Unimplemented(t *testing.T) {
+	client, _ := startEventServer(t) // no WAL replayer set
+
+	stream, err := client.Replay(context.Background(), &eventsv1.ReplayRequest{SinceSeq: 0})
+	if err != nil {
+		t.Fatalf("Replay open: %v", err)
+	}
+	_, err = stream.Recv()
+	if err == nil {
+		t.Fatal("expected error when no WAL replayer configured")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.Unimplemented {
+		t.Errorf("expected Unimplemented, got %s: %v", st.Code(), err)
+	}
+}
+
+func TestEventServer_Replay_WithWAL_StreamsEvents(t *testing.T) {
+	replayer := &stubWALReplayer{
+		events: []contracts.Event{
+			{ID: "1", Type: "media.added", Payload: []byte(`"a"`)},
+			{ID: "2", Type: "media.added", Payload: []byte(`"b"`)},
+			{ID: "3", Type: "media.updated", Payload: []byte(`"c"`)},
+		},
+	}
+	client, _ := startEventServerWithReplayer(t, replayer)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := client.Replay(ctx, &eventsv1.ReplayRequest{SinceSeq: 0})
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+
+	var received []*eventsv1.Event
+	for {
+		ev, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Recv: %v", err)
+		}
+		received = append(received, ev)
+	}
+
+	if len(received) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(received))
+	}
+	if received[0].GetId() != "1" || received[2].GetId() != "3" {
+		t.Errorf("unexpected event IDs: %v", received)
+	}
+}
+
+func TestEventServer_Replay_WithWAL_TypeFilter(t *testing.T) {
+	replayer := &stubWALReplayer{
+		events: []contracts.Event{
+			{ID: "1", Type: "media.added"},
+			{ID: "2", Type: "media.updated"},
+			{ID: "3", Type: "media.added"},
+		},
+	}
+	client, _ := startEventServerWithReplayer(t, replayer)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := client.Replay(ctx, &eventsv1.ReplayRequest{
+		SinceSeq:  0,
+		EventType: "media.added",
+	})
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+
+	var received []*eventsv1.Event
+	for {
+		ev, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Recv: %v", err)
+		}
+		received = append(received, ev)
+	}
+
+	if len(received) != 2 {
+		t.Fatalf("expected 2 filtered events, got %d", len(received))
+	}
+	for _, ev := range received {
+		if ev.GetType() != "media.added" {
+			t.Errorf("expected only 'media.added' events, got %q", ev.GetType())
+		}
+	}
+}
+
+// TestEventServer_Replay_RealWAL uses a real MemoryBus with WAL to test the
+// full Publish → WAL persist → Replay RPC path.
+func TestEventServer_Replay_RealWAL(t *testing.T) {
+	dir := t.TempDir()
+	bus := events.NewMemoryBus()
+	bus.SetPublishPolicy(allowAllPublishPolicy{})
+	if err := bus.EnableWAL(dir); err != nil {
+		t.Fatalf("EnableWAL: %v", err)
+	}
+	t.Cleanup(func() { bus.CloseWAL() })
+
+	// Publish a few events so the WAL has content.
+	ctx := context.Background()
+	for i := range 3 {
+		if err := bus.Publish(ctx, contracts.Event{
+			Type:    "wal.test",
+			Payload: []byte{byte(i)},
+		}); err != nil {
+			t.Fatalf("Publish %d: %v", i, err)
+		}
+	}
+
+	srv := NewEventServer(bus)
+	srv.SetWALReplayer(bus)
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	grpcSrv := grpc.NewServer()
+	srv.RegisterWithGRPC(grpcSrv)
+	go grpcSrv.Serve(lis)
+	t.Cleanup(grpcSrv.GracefulStop)
+
+	conn, err := grpc.NewClient(lis.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+
+	client := eventsv1.NewEventServiceClient(conn)
+
+	replayCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	stream, err := client.Replay(replayCtx, &eventsv1.ReplayRequest{SinceSeq: 0})
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+
+	var count int
+	for {
+		_, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Recv: %v", err)
+		}
+		count++
+	}
+
+	if count != 3 {
+		t.Errorf("expected 3 replayed events, got %d", count)
 	}
 }

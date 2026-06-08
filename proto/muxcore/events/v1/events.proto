@@ -13,6 +13,10 @@ service EventService {
   rpc Subscribe(SubscribeRequest) returns (stream Event);
   // Request sends a request event and waits for a single reply.
   rpc Request(RequestEvent) returns (Event);
+  // Replay streams historical events from the WAL starting at since_seq.
+  // Requires MUXCORE_EVENT_JOURNAL_PATH to be set on the server node.
+  // After WAL replay completes, the stream closes (no live tail).
+  rpc Replay(ReplayRequest) returns (stream Event);
 }
 
 message Event {
@@ -40,4 +44,13 @@ message RequestEvent {
   Event event = 1;
   // timeout_ms is the request timeout in milliseconds.
   int32 timeout_ms = 2;
+}
+
+message ReplayRequest {
+  // since_seq is the WAL sequence number to replay from (inclusive).
+  // Pass 0 to replay from the beginning of the available WAL.
+  int64 since_seq = 1;
+  // event_type filters replay to a single event type.
+  // Empty string means replay all event types.
+  string event_type = 2;
 }

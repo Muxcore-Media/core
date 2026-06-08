@@ -29,6 +29,8 @@ type Event struct {
 // where the default was open mode. Deployments that want open mode must
 // register an explicit permissive policy provider.
 //
+// Discovered via FindByCapability(CapabilityPublishPolicy).
+//
 // For resource-level event authorization, implement the optional
 // ResourcePublishPolicyProvider interface. The event bus will type-assert
 // and use the richer interface when available.
@@ -60,21 +62,34 @@ type EventHandler func(ctx context.Context, event Event) error
 // EventBus is the core message bus. All module communication flows through it.
 type EventBus interface {
 	Publish(ctx context.Context, event Event) error
-	Subscribe(ctx context.Context, eventType string, handler EventHandler) error
-	Unsubscribe(ctx context.Context, eventType string, handler EventHandler) error
-	// Request publishes an event and waits for a reply on event.Type + ".reply".
+
+	// Subscribe registers a handler for the given event type.
+	// Use "*" to subscribe to all events.
+	// Returns a cancel function that removes the subscription when called.
+	// The cancel function is safe to call multiple times.
+	Subscribe(ctx context.Context, eventType string, handler EventHandler) (cancel func(), err error)
+
+	// Request publishes an event and waits for a reply on ReplyEventType(event.Type).
 	Request(ctx context.Context, event Event, timeout time.Duration) (Event, error)
 
 	// SubscribeModule registers a handler tagged with a module identifier.
-	// This enables UnsubscribeAll for clean module lifecycle management —
-	// when a module shuts down, all its subscriptions are removed at once.
-	SubscribeModule(ctx context.Context, moduleID, eventType string, handler EventHandler) error
+	// Returns a cancel function that removes this subscription when called.
+	// Use UnsubscribeAll for bulk removal of all subscriptions owned by a module.
+	SubscribeModule(ctx context.Context, moduleID, eventType string, handler EventHandler) (cancel func(), err error)
 
 	// UnsubscribeAll removes all subscriptions tagged with the given module ID.
 	// If moduleID is empty, this is a no-op. Used by module lifecycle management
 	// during shutdown to prevent handlers from receiving events after the
 	// module has stopped.
 	UnsubscribeAll(ctx context.Context, moduleID string) error
+}
+
+// ReplyEventType returns the event type that Request/reply handlers listen on.
+// Responders publish a reply event with this type; Request waits for it.
+//
+//	bus.Subscribe(ctx, contracts.ReplyEventType("media.requested"), handler)
+func ReplyEventType(eventType string) string {
+	return eventType + ".reply"
 }
 
 // Module-lifecycle event types — the only domain event types core knows about.

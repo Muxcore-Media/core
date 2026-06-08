@@ -291,6 +291,60 @@ func (x *RequestEvent) GetTimeoutMs() int32 {
 	return 0
 }
 
+type ReplayRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// since_seq is the WAL sequence number to replay from (inclusive). Pass 0 for the beginning.
+	SinceSeq int64 `protobuf:"varint,1,opt,name=since_seq,json=sinceSeq,proto3" json:"since_seq,omitempty"`
+	// event_type filters replay to a single event type. Empty means all types.
+	EventType     string `protobuf:"bytes,2,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReplayRequest) Reset() {
+	*x = ReplayRequest{}
+	mi := &file_muxcore_events_v1_events_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReplayRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReplayRequest) ProtoMessage() {}
+
+func (x *ReplayRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_events_v1_events_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReplayRequest.ProtoReflect.Descriptor instead.
+func (*ReplayRequest) Descriptor() ([]byte, []int) {
+	return file_muxcore_events_v1_events_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ReplayRequest) GetSinceSeq() int64 {
+	if x != nil {
+		return x.SinceSeq
+	}
+	return 0
+}
+
+func (x *ReplayRequest) GetEventType() string {
+	if x != nil {
+		return x.EventType
+	}
+	return ""
+}
+
 var File_muxcore_events_v1_events_proto protoreflect.FileDescriptor
 
 const file_muxcore_events_v1_events_proto_rawDesc = "" +
@@ -300,28 +354,33 @@ const file_muxcore_events_v1_events_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x16\n" +
 	"\x06source\x18\x03 \x01(\tR\x06source\x12\x1f\n" +
-	"\vsource_node\x18\x04 \x01(\tR\n" +
+	"\x0bsource_node\x18\x04 \x01(\tR\n" +
 	"sourceNode\x12\x18\n" +
-	"\apayload\x18\x05 \x01(\fR\apayload\x12B\n" +
-	"\bmetadata\x18\x06 \x03(\v2&.muxcore.events.v1.Event.MetadataEntryR\bmetadata\x12\x1c\n" +
-	"\ttimestamp\x18\a \x01(\x03R\ttimestamp\x1a;\n" +
+	"\x07payload\x18\x05 \x01(\x0cR\x07payload\x12B\n" +
+	"\x08metadata\x18\x06 \x03(\x0b2&.muxcore.events.v1.Event.MetadataEntryR\x08metadata\x12\x1c\n" +
+	"\ttimestamp\x18\x07 \x01(\x03R\ttimestamp\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"@\n" +
 	"\x0ePublishRequest\x12.\n" +
-	"\x05event\x18\x01 \x01(\v2\x18.muxcore.events.v1.EventR\x05event\"\x11\n" +
+	"\x05event\x18\x01 \x01(\x0b2\x18.muxcore.events.v1.EventR\x05event\"\x11\n" +
 	"\x0fPublishResponse\"3\n" +
 	"\x10SubscribeRequest\x12\x1f\n" +
-	"\vevent_types\x18\x01 \x03(\tR\n" +
+	"\x0bevent_types\x18\x01 \x03(\tR\n" +
 	"eventTypes\"]\n" +
-	"\fRequestEvent\x12.\n" +
-	"\x05event\x18\x01 \x01(\v2\x18.muxcore.events.v1.EventR\x05event\x12\x1d\n" +
+	"\x0cRequestEvent\x12.\n" +
+	"\x05event\x18\x01 \x01(\x0b2\x18.muxcore.events.v1.EventR\x05event\x12\x1d\n" +
 	"\n" +
-	"timeout_ms\x18\x02 \x01(\x05R\ttimeoutMs2\xf4\x01\n" +
-	"\fEventService\x12P\n" +
-	"\aPublish\x12!.muxcore.events.v1.PublishRequest\x1a\".muxcore.events.v1.PublishResponse\x12L\n" +
+	"timeout_ms\x18\x02 \x01(\x05R\ttimeoutMs\"K\n" +
+	"\rReplayRequest\x12\x1b\n" +
+	"\tsince_seq\x18\x01 \x01(\x03R\x08sinceSeq\x12\x1d\n" +
+	"\n" +
+	"event_type\x18\x02 \x01(\tR\teventType2\xbc\x02\n" +
+	"\x0cEventService\x12P\n" +
+	"\x07Publish\x12!.muxcore.events.v1.PublishRequest\x1a\".muxcore.events.v1.PublishResponse\x12L\n" +
 	"\tSubscribe\x12#.muxcore.events.v1.SubscribeRequest\x1a\x18.muxcore.events.v1.Event0\x01\x12D\n" +
-	"\aRequest\x12\x1f.muxcore.events.v1.RequestEvent\x1a\x18.muxcore.events.v1.EventBDZBgithub.com/Muxcore-Media/core/proto/gen/muxcore/events/v1;eventsv1b\x06proto3"
+	"\x07Request\x12\x1f.muxcore.events.v1.RequestEvent\x1a\x18.muxcore.events.v1.Event\x12F\n" +
+	"\x06Replay\x12 .muxcore.events.v1.ReplayRequest\x1a\x18.muxcore.events.v1.Event0\x01BDZBgithub.com/Muxcore-Media/core/proto/gen/muxcore/events/v1;eventsv1b\x06proto3"
 
 var (
 	file_muxcore_events_v1_events_proto_rawDescOnce sync.Once
@@ -335,27 +394,30 @@ func file_muxcore_events_v1_events_proto_rawDescGZIP() []byte {
 	return file_muxcore_events_v1_events_proto_rawDescData
 }
 
-var file_muxcore_events_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_muxcore_events_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_muxcore_events_v1_events_proto_goTypes = []any{
 	(*Event)(nil),            // 0: muxcore.events.v1.Event
 	(*PublishRequest)(nil),   // 1: muxcore.events.v1.PublishRequest
 	(*PublishResponse)(nil),  // 2: muxcore.events.v1.PublishResponse
 	(*SubscribeRequest)(nil), // 3: muxcore.events.v1.SubscribeRequest
 	(*RequestEvent)(nil),     // 4: muxcore.events.v1.RequestEvent
-	nil,                      // 5: muxcore.events.v1.Event.MetadataEntry
+	(*ReplayRequest)(nil),    // 5: muxcore.events.v1.ReplayRequest
+	nil,                      // 6: muxcore.events.v1.Event.MetadataEntry
 }
 var file_muxcore_events_v1_events_proto_depIdxs = []int32{
-	5, // 0: muxcore.events.v1.Event.metadata:type_name -> muxcore.events.v1.Event.MetadataEntry
+	6, // 0: muxcore.events.v1.Event.metadata:type_name -> muxcore.events.v1.Event.MetadataEntry
 	0, // 1: muxcore.events.v1.PublishRequest.event:type_name -> muxcore.events.v1.Event
 	0, // 2: muxcore.events.v1.RequestEvent.event:type_name -> muxcore.events.v1.Event
 	1, // 3: muxcore.events.v1.EventService.Publish:input_type -> muxcore.events.v1.PublishRequest
 	3, // 4: muxcore.events.v1.EventService.Subscribe:input_type -> muxcore.events.v1.SubscribeRequest
 	4, // 5: muxcore.events.v1.EventService.Request:input_type -> muxcore.events.v1.RequestEvent
-	2, // 6: muxcore.events.v1.EventService.Publish:output_type -> muxcore.events.v1.PublishResponse
-	0, // 7: muxcore.events.v1.EventService.Subscribe:output_type -> muxcore.events.v1.Event
-	0, // 8: muxcore.events.v1.EventService.Request:output_type -> muxcore.events.v1.Event
-	6, // [6:9] is the sub-list for method output_type
-	3, // [3:6] is the sub-list for method input_type
+	5, // 6: muxcore.events.v1.EventService.Replay:input_type -> muxcore.events.v1.ReplayRequest
+	2, // 7: muxcore.events.v1.EventService.Publish:output_type -> muxcore.events.v1.PublishResponse
+	0, // 8: muxcore.events.v1.EventService.Subscribe:output_type -> muxcore.events.v1.Event
+	0, // 9: muxcore.events.v1.EventService.Request:output_type -> muxcore.events.v1.Event
+	0, // 10: muxcore.events.v1.EventService.Replay:output_type -> muxcore.events.v1.Event
+	7, // [7:11] is the sub-list for method output_type
+	3, // [3:7] is the sub-list for method input_type
 	3, // [3:3] is the sub-list for extension type_name
 	3, // [3:3] is the sub-list for extension extendee
 	0, // [0:3] is the sub-list for field type_name
@@ -372,7 +434,7 @@ func file_muxcore_events_v1_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_muxcore_events_v1_events_proto_rawDesc), len(file_muxcore_events_v1_events_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

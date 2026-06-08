@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/Muxcore-Media/core/internal/trace"
 	"github.com/Muxcore-Media/core/pkg/contracts"
-	"github.com/google/uuid"
 )
 
 const (
@@ -133,6 +131,9 @@ func (w *WALWriter) Write(event contracts.Event) (uint64, error) {
 		return 0, fmt.Errorf("wal: write entry %d: %w", w.seq, err)
 	}
 	w.currentSize += int64(n)
+	if len(w.segments) > 0 {
+		w.segments[len(w.segments)-1].LastSeq = w.seq
+	}
 
 	// Rotate if segment exceeds the size limit.
 	if w.currentSize >= walSegmentSize {
@@ -197,6 +198,10 @@ func (w *WALWriter) Segments() []WALSegment {
 // the beginning. The callback is called synchronously; it should not block.
 func (w *WALWriter) ReplayFrom(ctx context.Context, sinceSeq uint64, fn func(contracts.Event) error) error {
 	w.mu.Lock()
+	// Flush any buffered writes so the latest events are visible on disk.
+	if err := w.writer.Flush(); err != nil {
+		slog.Warn("wal: flush before replay", "error", err)
+	}
 	segments := make([]WALSegment, len(w.segments))
 	copy(segments, w.segments)
 	w.mu.Unlock()
@@ -471,15 +476,23 @@ func (b *MemoryBus) CloseWAL() error {
 	return w.Close()
 }
 
-// wal field is added to MemoryBus. We need to add it to the struct.
-// This is handled via a struct embedding trick: we define the field here
-// and use build tags... no, that's fragile. Let's just add the field
-// directly to the MemoryBus struct in memory.go.
+// ReplayFrom replays persisted events starting at sinceSeq (inclusive),
+// calling fn for each. Returns an error if no WAL is configured.
+// Satisfies the grpcmesh.WALReplayer interface.
+func (b *MemoryBus) ReplayFrom(ctx context.Context, sinceSeq uint64, fn func(contracts.Event) error) error {
+	b.mu.RLock()
+	w := b.wal
+	b.mu.RUnlock()
+	if w == nil {
+		return fmt.Errorf("WAL not configured: set MUXCORE_EVENT_JOURNAL_PATH to enable event replay")
+	}
+	return w.ReplayFrom(ctx, sinceSeq, fn)
+}
 
 // SubscribeFrom subscribes to events of the given type and replays any
 // events with sequence numbers >= sinceSeq before beginning live dispatch.
 // sinceSeq=0 means "replay all available events."
-func (b *MemoryBus) SubscribeFrom(ctx context.Context, eventType string, handler contracts.EventHandler, sinceSeq uint64) error {
+func (b *MemoryBus) SubscribeFrom(ctx context.Context, eventType string, handler contracts.EventHandler, sinceSeq uint64) (func(), error) {
 	b.mu.RLock()
 	wal := b.wal
 	b.mu.RUnlock()
@@ -512,7 +525,8 @@ func (b *MemoryBus) SubscribeFrom(ctx context.Context, eventType string, handler
 	}
 
 	// Subscribe for live events.
-	return b.Subscribe(ctx, eventType, handler)
+	cancel, err := b.Subscribe(ctx, eventType, handler)
+	return cancel, err
 }
 
 // UpdateMinSubscriberSeq updates the WAL's minimum subscriber sequence

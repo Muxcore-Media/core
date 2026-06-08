@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Muxcore-Media/core/internal/callerid"
 	"github.com/Muxcore-Media/core/internal/registry"
-	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/google/uuid"
 
 	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
@@ -114,7 +114,7 @@ func (s *DiscoveryServer) checkAuth(ctx context.Context) error {
 	if !requireAuth {
 		return nil
 	}
-	callerID := contracts.CallerIDFromContext(ctx)
+	callerID := callerid.Get(ctx)
 	if callerID == "" {
 		return status.Error(codes.Unauthenticated,
 			"discovery: authentication required — set MUXCORE_GRPC_REQUIRE_DISCOVERY_AUTH=false or deploy an auth module")
@@ -164,13 +164,6 @@ func (s *DiscoveryServer) Term() uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.term
-}
-
-// SetRegistry attaches the module registry for discovery queries.
-func (s *DiscoveryServer) SetRegistry(reg *registry.Registry) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.reg = reg
 }
 
 func (s *DiscoveryServer) RegisterWithGRPC(srv *grpc.Server) {
@@ -759,67 +752,3 @@ func (s *DiscoveryServer) Close() {
 	close(s.stopCh)
 }
 
-// --- Registry query methods (for sidecar module discovery) ---
-
-// FindByCapability returns modules that advertise the given capability.
-func (s *DiscoveryServer) FindByCapability(ctx context.Context, req *discoveryv1.FindByCapabilityRequest) (*discoveryv1.FindByCapabilityResponse, error) {
-	if err := s.checkAuth(ctx); err != nil {
-		return nil, err
-	}
-	if s.reg == nil {
-		return &discoveryv1.FindByCapabilityResponse{}, nil
-	}
-	entries := s.reg.FindByCapability(req.GetCapability())
-	modules := make([]*discoveryv1.ModuleInfoProto, 0, len(entries))
-	for _, e := range entries {
-		modules = append(modules, moduleInfoToProto(e.Info))
-	}
-	return &discoveryv1.FindByCapabilityResponse{Modules: modules}, nil
-}
-
-// FindByRole returns modules with the given role.
-func (s *DiscoveryServer) FindByRole(ctx context.Context, req *discoveryv1.FindByRoleRequest) (*discoveryv1.FindByRoleResponse, error) {
-	if err := s.checkAuth(ctx); err != nil {
-		return nil, err
-	}
-	if s.reg == nil {
-		return &discoveryv1.FindByRoleResponse{}, nil
-	}
-	entries := s.reg.FindByRole(req.GetRole())
-	modules := make([]*discoveryv1.ModuleInfoProto, 0, len(entries))
-	for _, e := range entries {
-		modules = append(modules, moduleInfoToProto(e.Info))
-	}
-	return &discoveryv1.FindByRoleResponse{Modules: modules}, nil
-}
-
-// Resolve looks up a single module by ID.
-func (s *DiscoveryServer) Resolve(ctx context.Context, req *discoveryv1.ResolveRequest) (*discoveryv1.ResolveResponse, error) {
-	if err := s.checkAuth(ctx); err != nil {
-		return nil, err
-	}
-	if s.reg == nil {
-		return &discoveryv1.ResolveResponse{Found: false}, nil
-	}
-	entry, err := s.reg.Resolve(req.GetModuleId())
-	if err != nil {
-		return &discoveryv1.ResolveResponse{Found: false}, nil
-	}
-	return &discoveryv1.ResolveResponse{
-		Found:  true,
-		Module: moduleInfoToProto(entry.Info),
-	}, nil
-}
-
-func moduleInfoToProto(info contracts.ModuleInfo) *discoveryv1.ModuleInfoProto {
-	return &discoveryv1.ModuleInfoProto{
-		Id:           info.ID,
-		Name:         info.Name,
-		Version:      info.Version,
-		Roles:        info.Roles,
-		Description:  info.Description,
-		Author:       info.Author,
-		Capabilities: info.Capabilities,
-		DependsOn:    info.DependsOn,
-	}
-}

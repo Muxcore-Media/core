@@ -32,10 +32,12 @@ import (
 	"github.com/Muxcore-Media/core/internal/startup"
 	"github.com/Muxcore-Media/core/internal/storage"
 	"github.com/Muxcore-Media/core/internal/version"
-	"github.com/google/uuid"
+	"github.com/Muxcore-Media/core/pkg/contracts"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/status"
 )
 
 const securityDisclaimer = `╔══════════════════════════════════════════════════════════════╗
@@ -222,10 +224,6 @@ func main() {
 	// and calls will only route to local modules.
 	meshClient.SetTransportCredentials(creds)
 
-	// gRPC connection pool for heartbeat efficiency and cross-node routing.
-	connPool := grpcmesh.NewConnPool() // dial opts set per-use via discovery
-	discoveryGrpc.SetConnPool(connPool)
-
 	reg := registry.New()
 	healthGrpc := grpcmesh.NewHealthServer(reg)
 	healthGrpc.RegisterWithGRPC(grpcSrv)
@@ -235,6 +233,10 @@ func main() {
 	// callers with a verified identity (x-caller-id set by auth interceptor).
 	// Default: open (backward compat). Enable only after deploying an auth module.
 	eventGrpc.SetRequireAuth(os.Getenv("MUXCORE_GRPC_REQUIRE_EVENTS_AUTH") == "true")
+	// Enable WAL-backed Replay RPC only when a journal path is configured.
+	if os.Getenv("MUXCORE_EVENT_JOURNAL_PATH") != "" {
+		eventGrpc.SetWALReplayer(bus)
+	}
 	eventGrpc.RegisterWithGRPC(grpcSrv)
 
 	nodeID := "muxcore-" + cfg.GRPC.Addr
@@ -257,6 +259,24 @@ func main() {
 	discoveryGrpc.SetRequireAuth(os.Getenv("MUXCORE_GRPC_REQUIRE_DISCOVERY_AUTH") == "true")
 	discoveryGrpc.RegisterWithGRPC(grpcSrv)
 
+	// gRPC connection pool for heartbeat efficiency and cross-node routing.
+	connPool := grpcmesh.NewConnPool()
+	discoveryGrpc.SetConnPool(connPool)
+
+
+	store := storage.NewOrchestrator(reg)
+	// Zero means "use default" — SetTimeouts ignores zero values.
+	store.SetTimeouts(storage.StorageTimeouts{
+		Read:   time.Duration(cfg.Storage.ReadTimeoutSeconds) * time.Second,
+		Write:  time.Duration(cfg.Storage.WriteTimeoutSeconds) * time.Second,
+		Delete: time.Duration(cfg.Storage.DeleteTimeoutSeconds) * time.Second,
+	})
+	if err := store.DiscoverStorage(); err != nil {
+		slog.Warn("storage discover", "error", err)
+	}
+	store.DiscoverCache()
+	slog.Info("storage orchestrator ready", "providers", store.ProviderCount())
+	watchCancel := store.WatchModules(ctx, bus)
 
 	srv := api.NewServer(cfg.Server.Addr, cfg.Server.CertFile, cfg.Server.KeyFile)
 
@@ -301,20 +321,6 @@ func main() {
 		slog.Info("debug profiling endpoints enabled", "path", "/debug/pprof/")
 	}
 
-	store := storage.NewOrchestrator(reg)
-	// Zero means "use default" — SetTimeouts ignores zero values.
-	store.SetTimeouts(storage.StorageTimeouts{
-		Read:   time.Duration(cfg.Storage.ReadTimeoutSeconds) * time.Second,
-		Write:  time.Duration(cfg.Storage.WriteTimeoutSeconds) * time.Second,
-		Delete: time.Duration(cfg.Storage.DeleteTimeoutSeconds) * time.Second,
-	})
-	if err := store.DiscoverStorage(); err != nil {
-		slog.Warn("storage discover", "error", err)
-	}
-	store.DiscoverCache()
-	slog.Info("storage orchestrator ready", "providers", store.ProviderCount())
-	watchCancel := store.WatchModules(ctx, bus)
-
 	// Set up default audit logger (no-op when cfg.Audit.Path is empty)
 	auditLogger, err := audit.NewFileLogger(cfg.Audit.Path)
 	if err != nil {
@@ -336,8 +342,8 @@ func main() {
 	storageGrpc.RegisterWithGRPC(grpcSrv)
 
 	// --- Module capability enforcement ---
-	// Discover call policy provider from the registry.
-	// If none is registered, use a deny-by-default fallback (secure default).
+	// Discover call policy provider from the registry. Without one, all
+	// inter-module mesh calls and storage operations are denied by default.
 	if callPolicyEntries := reg.FindByCapability("call.policy"); len(callPolicyEntries) > 0 {
 		if cp, ok := callPolicyEntries[0].Module.(contracts.CallPolicyProvider); ok {
 			meshClient.SetCallPolicy(cp)
@@ -346,9 +352,8 @@ func main() {
 				"module", callPolicyEntries[0].Info.ID)
 		}
 	}
-	// If no module provides a call policy, mesh calls are denied by default.
 	if meshClient.CallPolicy() == nil {
-		slog.Info("no call policy provider registered — inter-module calls denied by default")
+		slog.Warn("no call policy provider registered — all inter-module mesh calls and storage operations are denied until a call.policy module is deployed")
 	}
 
 	// Discover publish policy provider from the registry.
@@ -473,9 +478,9 @@ func main() {
 		for name, err := range coreH.Check(context.Background()) {
 			results["core."+name] = err
 		}
-		for id, entry := range reg.ListAll() {
+		for _, entry := range reg.ListAll() {
 			if entry.State == contracts.ModuleStateDegraded {
-				results[id] = fmt.Errorf("module degraded")
+				results[entry.Info.ID] = fmt.Errorf("module degraded")
 			}
 		}
 		results["_uptime"] = fmt.Errorf("%s", time.Since(startTime).Round(time.Second))
@@ -649,9 +654,8 @@ func main() {
 		slog.Error("module stop", "error", err)
 	}
 
-	// Phase 8: Close connection pool and rate limiter.
+	// Phase 8: Close connection pool.
 	connPool.Close()
-	grpcRateLimiter.Close()
 
 	// Phase 9: Stop discovery eviction loop.
 	discoveryGrpc.Close()

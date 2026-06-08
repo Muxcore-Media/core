@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/Muxcore-Media/core/internal/callerid"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
 	"google.golang.org/grpc"
@@ -12,17 +13,30 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// WALReplayer provides access to WAL event history for the Replay RPC.
+// *events.MemoryBus satisfies this interface when a WAL is configured.
+type WALReplayer interface {
+	ReplayFrom(ctx context.Context, sinceSeq uint64, fn func(contracts.Event) error) error
+}
+
 // EventServer implements the EventService gRPC service.
 // It relays events between nodes when NATS is not in use.
 type EventServer struct {
 	eventsv1.UnimplementedEventServiceServer
 	bus         contracts.EventBus
+	walReplayer WALReplayer
 	requireAuth bool
 }
 
 // NewEventServer creates an event relay gRPC server.
 func NewEventServer(bus contracts.EventBus) *EventServer {
 	return &EventServer{bus: bus}
+}
+
+// SetWALReplayer enables the Replay RPC backed by the given replayer.
+// Call this only when MUXCORE_EVENT_JOURNAL_PATH is set.
+func (s *EventServer) SetWALReplayer(r WALReplayer) {
+	s.walReplayer = r
 }
 
 // SetRequireAuth controls whether Subscribe and Publish require an
@@ -36,7 +50,7 @@ func (s *EventServer) checkAuth(ctx context.Context) error {
 	if !s.requireAuth {
 		return nil
 	}
-	if contracts.CallerIDFromContext(ctx) == "" {
+	if callerid.Get(ctx) == "" {
 		return status.Error(codes.Unauthenticated,
 			"events: authentication required — set MUXCORE_GRPC_REQUIRE_EVENTS_AUTH=false or deploy an auth module")
 	}
@@ -98,20 +112,11 @@ func (s *EventServer) Subscribe(req *eventsv1.SubscribeRequest, stream eventsv1.
 	}
 	ctx := stream.Context()
 
-	// Track all subscriptions so we can clean them up when the stream ends.
-	type subscription struct {
-		eventType string
-		handler   contracts.EventHandler
-	}
-	subs := make([]subscription, 0, len(req.GetEventTypes()))
-
-	// Unsubscribe all tracked subscriptions on stream termination.
-		defer func() {
-		for _, sub := range subs {
-			if err := s.bus.Unsubscribe(context.Background(), sub.eventType, sub.handler); err != nil {
-				slog.Warn("events: unsubscribe failed during stream cleanup",
-					"event_type", sub.eventType, "error", err)
-			}
+	// Collect cancel funcs so all subscriptions are cleaned up when the stream ends.
+	cancels := make([]func(), 0, len(req.GetEventTypes()))
+	defer func() {
+		for _, cancel := range cancels {
+			cancel()
 		}
 	}()
 
@@ -119,20 +124,20 @@ func (s *EventServer) Subscribe(req *eventsv1.SubscribeRequest, stream eventsv1.
 		eventType := eventType // capture
 		handler := func(ctx context.Context, event contracts.Event) error {
 			pb := &eventsv1.Event{
-				Id:          event.ID,
-				Type:        event.Type,
-				Source:      event.Source,
-				Payload:     event.Payload,
-				Metadata:    event.Metadata,
-				Timestamp:   event.Timestamp.Unix(),
+				Id:        event.ID,
+				Type:      event.Type,
+				Source:    event.Source,
+				Payload:   event.Payload,
+				Metadata:  event.Metadata,
+				Timestamp: event.Timestamp.Unix(),
 			}
 			return stream.Send(pb)
 		}
-		// Store before subscribing so the handler reference is captured.
-		subs = append(subs, subscription{eventType: eventType, handler: handler})
-		if err := s.bus.Subscribe(ctx, eventType, handler); err != nil {
+		cancel, err := s.bus.Subscribe(ctx, eventType, handler)
+		if err != nil {
 			return err
 		}
+		cancels = append(cancels, cancel)
 	}
 
 	// Wait until stream is closed
@@ -179,3 +184,33 @@ func (s *EventServer) Request(ctx context.Context, req *eventsv1.RequestEvent) (
 		Timestamp: reply.Timestamp.Unix(),
 	}, nil
 }
+
+// Replay streams historical events from the WAL starting at since_seq.
+// Returns Unimplemented if no WAL replayer is configured on this node.
+func (s *EventServer) Replay(req *eventsv1.ReplayRequest, stream eventsv1.EventService_ReplayServer) error {
+	if err := s.checkAuth(stream.Context()); err != nil {
+		return err
+	}
+	if s.walReplayer == nil {
+		return status.Error(codes.Unimplemented,
+			"WAL replay not available: set MUXCORE_EVENT_JOURNAL_PATH on this node to enable it")
+	}
+
+	sinceSeq := uint64(req.GetSinceSeq())
+	typeFilter := req.GetEventType()
+
+	return s.walReplayer.ReplayFrom(stream.Context(), sinceSeq, func(event contracts.Event) error {
+		if typeFilter != "" && event.Type != typeFilter {
+			return nil
+		}
+		return stream.Send(&eventsv1.Event{
+			Id:        event.ID,
+			Type:      event.Type,
+			Source:    event.Source,
+			Payload:   event.Payload,
+			Metadata:  event.Metadata,
+			Timestamp: event.Timestamp.Unix(),
+		})
+	})
+}
+
