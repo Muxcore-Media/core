@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"sync"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
@@ -31,6 +32,13 @@ func GetSession(r *http.Request) (*contracts.Session, bool) {
 	return session, ok
 }
 
+// authFailureRecord tracks authentication failures per IP for brute-force protection.
+type authFailureRecord struct {
+	count        int
+	blockedUntil time.Time
+	lastActivity time.Time
+}
+
 // recoveryMiddleware catches panics in downstream handlers, logs them, and returns 500.
 func recoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,9 +57,43 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// securityHeadersMiddleware sets standard security headers on all responses.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
+}
+
 // authMiddleware returns a middleware that validates sessions using the provided function.
 // Requests matching a path in publicPaths are always allowed through without authentication.
 func authMiddleware(authFn func(r *http.Request) (*contracts.Session, error), publicPaths map[string]bool) func(http.Handler) http.Handler {
+	// Per-IP auth failure tracking for brute-force protection
+	authFailures := make(map[string]*authFailureRecord)
+	var authFailMu sync.Mutex
+
+	// Background cleanup goroutine to prevent unbounded map growth.
+	// Purges entries with no activity for over 5 minutes.
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			authFailMu.Lock()
+			cutoff := time.Now().Add(-5 * time.Minute)
+			for ip, rec := range authFailures {
+				if rec.lastActivity.Before(cutoff) {
+					delete(authFailures, ip)
+				}
+			}
+			authFailMu.Unlock()
+		}
+	}()
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Skip auth for public paths (e.g. /health).
@@ -62,9 +104,36 @@ func authMiddleware(authFn func(r *http.Request) (*contracts.Session, error), pu
 
 			session, err := authFn(r)
 			if err != nil {
+				slog.Warn("auth failed", "error", err, "path", r.URL.Path, "remote_addr", r.RemoteAddr)
+				// Track failures per IP for brute-force protection
+				ip := extractClientIP(r)
+				authFailMu.Lock()
+				rec, exists := authFailures[ip]
+				now := time.Now()
+				if !exists {
+					rec = &authFailureRecord{}
+					authFailures[ip] = rec
+				}
+				rec.lastActivity = now
+				if now.After(rec.blockedUntil) {
+					rec.count++
+					if rec.count >= 5 {
+						rec.blockedUntil = now.Add(1 * time.Minute)
+						rec.count = 0
+					}
+				}
+				blocked := now.Before(rec.blockedUntil)
+				authFailMu.Unlock()
+				if blocked {
+					writeJSON(w, http.StatusTooManyRequests, map[string]string{
+						"error":   "rate_limited",
+						"message": "too many authentication attempts, try again later",
+					})
+					return
+				}
 				writeJSON(w, http.StatusUnauthorized, map[string]string{
 					"error":   "unauthorized",
-					"message": err.Error(),
+					"message": "authentication failed",
 				})
 				return
 			}

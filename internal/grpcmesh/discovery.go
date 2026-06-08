@@ -7,6 +7,7 @@ import (
 
 	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/codes"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/status"
@@ -21,19 +22,27 @@ type DiscoveryServer struct {
 	leaderID  string
 	clusterID string
 	members  map[string]*discoveryv1.NodeInfo
-	lastSeen map[string]time.Time
-	watchers map[chan *discoveryv1.ClusterEvent]struct{}
+	lastSeen         map[string]time.Time
+	evictionTimeout  time.Duration
+	watchers         map[chan *discoveryv1.ClusterEvent]struct{}
+	stopCh           chan struct{}
+	joinToken        string
 }
 
-func NewDiscoveryServer(nodeID, grpcAddr, httpAddr string) *DiscoveryServer {
-	return &DiscoveryServer{
-		nodeID:   nodeID,
-		grpcAddr: grpcAddr,
-		httpAddr: httpAddr,
-		members:  make(map[string]*discoveryv1.NodeInfo),
-		lastSeen: make(map[string]time.Time),
-		watchers: make(map[chan *discoveryv1.ClusterEvent]struct{}),
+func NewDiscoveryServer(nodeID, grpcAddr, httpAddr, joinToken string) *DiscoveryServer {
+	ds := &DiscoveryServer{
+		nodeID:          nodeID,
+		grpcAddr:        grpcAddr,
+		httpAddr:        httpAddr,
+		members:         make(map[string]*discoveryv1.NodeInfo),
+		lastSeen:        make(map[string]time.Time),
+		evictionTimeout: 30 * time.Second,
+		watchers:        make(map[chan *discoveryv1.ClusterEvent]struct{}),
+		stopCh:          make(chan struct{}),
+		joinToken:       joinToken,
 	}
+	go ds.evictLoop()
+	return ds
 }
 
 func (s *DiscoveryServer) RegisterWithGRPC(srv *grpc.Server) {
@@ -44,6 +53,19 @@ func (s *DiscoveryServer) Join(ctx context.Context, req *discoveryv1.JoinRequest
 	node := req.GetNode()
 	if node == nil || node.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "node ID is required")
+	}
+	if s.joinToken != "" {
+		md, ok := metadata.FromIncomingContext(ctx)
+		token := ""
+		if ok {
+			vals := md.Get("x-cluster-join-token")
+			if len(vals) > 0 {
+				token = vals[0]
+			}
+		}
+		if token != s.joinToken {
+			return nil, status.Error(codes.PermissionDenied, "invalid join token")
+		}
 	}
 	s.mu.Lock()
 	s.members[node.GetId()] = node
@@ -119,12 +141,7 @@ func (s *DiscoveryServer) Heartbeat(ctx context.Context, req *discoveryv1.Heartb
 	s.lastSeen[nodeID] = time.Now()
 
 	if _, exists := s.members[nodeID]; !exists {
-		s.members[nodeID] = &discoveryv1.NodeInfo{
-			Id: nodeID,
-		}
-		if s.leaderID == "" {
-			s.leaderID = nodeID
-		}
+		return nil, status.Error(codes.NotFound, "unknown node ID — join the cluster before sending heartbeats")
 	}
 	leaderID := s.leaderID
 	s.mu.Unlock()
@@ -151,6 +168,10 @@ func (s *DiscoveryServer) Members(ctx context.Context, req *discoveryv1.MembersR
 func (s *DiscoveryServer) Watch(req *discoveryv1.MembersRequest, stream discoveryv1.DiscoveryService_WatchServer) error {
 	ch := make(chan *discoveryv1.ClusterEvent, 16)
 	s.mu.Lock()
+	if len(s.watchers) >= 100 {
+		s.mu.Unlock()
+		return status.Error(codes.ResourceExhausted, "too many watchers")
+	}
 	s.watchers[ch] = struct{}{}
 	s.mu.Unlock()
 	defer func() {
@@ -178,27 +199,56 @@ func (s *DiscoveryServer) LocalNode() *discoveryv1.NodeInfo {
 	}
 }
 
-func (s *DiscoveryServer) IsStale(nodeID string, maxAge time.Duration) bool {
-	s.mu.RLock()
-	last, ok := s.lastSeen[nodeID]
-	s.mu.RUnlock()
-	if !ok {
-		return true
+// evictLoop periodically scans for dead nodes and evicts them.
+func (s *DiscoveryServer) evictLoop() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case <-ticker.C:
+			s.evictDeadNodes()
+		}
 	}
-	return time.Since(last) > maxAge
 }
 
-func (s *DiscoveryServer) CleanupStale(maxAge time.Duration) {
-	cutoff := time.Now().Add(-maxAge)
+// evictDeadNodes removes nodes that haven't sent a heartbeat within the
+// eviction timeout window.  Caller must NOT hold the lock.
+func (s *DiscoveryServer) evictDeadNodes() {
 	s.mu.Lock()
-	for id, last := range s.lastSeen {
-		if last.Before(cutoff) {
-			delete(s.members, id)
-			delete(s.lastSeen, id)
-			if s.leaderID == id {
-				s.leaderID = ""
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	for id, seen := range s.lastSeen {
+		if now.Sub(seen) <= s.evictionTimeout {
+			continue
+		}
+		node, existed := s.members[id]
+		delete(s.members, id)
+		delete(s.lastSeen, id)
+		if s.leaderID == id {
+			s.leaderID = ""
+		}
+		if existed && node != nil {
+			event := &discoveryv1.ClusterEvent{
+				Type:     discoveryv1.ClusterEvent_TYPE_NODE_LEFT,
+				Node:     node,
+				LeaderId: s.leaderID,
+			}
+			for ch := range s.watchers {
+				select {
+				case ch <- event:
+				default:
+				}
 			}
 		}
 	}
-	s.mu.Unlock()
 }
+
+// Close cleanly stops the eviction goroutine.
+func (s *DiscoveryServer) Close() {
+	close(s.stopCh)
+}
+
+

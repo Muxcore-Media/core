@@ -14,6 +14,9 @@ import (
 // This enables progressive download and in-RAM streaming without requiring
 // every provider to implement range requests.
 func (o *Orchestrator) Stream(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error) {
+	if err := validateKey(key); err != nil {
+		return nil, err
+	}
 	prov, err := o.route(key)
 	if err != nil {
 		return nil, err

@@ -7,6 +7,7 @@ import (
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/peer"
 )
 
 // EventServer implements the EventService gRPC service.
@@ -29,6 +30,13 @@ func (s *EventServer) RegisterWithGRPC(srv *grpc.Server) {
 // Publish receives an event from a remote node and publishes it locally.
 func (s *EventServer) Publish(ctx context.Context, req *eventsv1.PublishRequest) (*eventsv1.PublishResponse, error) {
 	pb := req.GetEvent()
+
+	// Override source_node from authenticated peer to prevent source spoofing.
+	if p, ok := peer.FromContext(ctx); ok {
+		if addr := p.Addr.String(); addr != "" {
+			pb.SourceNode = addr
+		}
+	}
 
 	// Preserve proto fields that contracts.Event does not have as top-level fields.
 	metadata := pb.GetMetadata()
@@ -120,7 +128,11 @@ func (s *EventServer) Request(ctx context.Context, req *eventsv1.RequestEvent) (
 		Timestamp: time.Unix(pb.GetTimestamp(), 0),
 	}
 
-	reply, err := s.bus.Request(ctx, event, 30*time.Second)
+	timeout := 30 * time.Second
+	if req.TimeoutMs > 0 {
+		timeout = time.Duration(req.TimeoutMs) * time.Millisecond
+	}
+	reply, err := s.bus.Request(ctx, event, timeout)
 	if err != nil {
 		return nil, err
 	}

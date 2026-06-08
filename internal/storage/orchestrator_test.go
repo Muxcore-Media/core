@@ -315,3 +315,114 @@ func TestOrchestrator_ProviderCount(t *testing.T) {
 		t.Errorf("expected 1, got %d", orch.ProviderCount())
 	}
 }
+
+// streamableMockProvider extends mockProvider with Streamable support.
+type streamableMockProvider struct {
+	*mockProvider
+}
+
+func (s *streamableMockProvider) Stream(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error) {
+	buf, ok := s.data[key]
+	if !ok {
+		return nil, fmt.Errorf("key %q not found", key)
+	}
+	start := offset
+	end := offset + length
+	if start < 0 {
+		start = 0
+	}
+	if end > int64(len(buf)) || length <= 0 {
+		end = int64(len(buf))
+	}
+	if start > int64(len(buf)) {
+		start = int64(len(buf))
+	}
+	return io.NopCloser(bytes.NewReader(buf[start:end])), nil
+}
+
+func TestOrchestrator_Stream(t *testing.T) {
+	reg := newMockRegistry()
+	prov := newMockProvider("local")
+	reg.addProvider(&mockModule{StorageProvider: prov, info: contracts.ModuleInfo{ID: "local"}}, "local")
+
+	orch := NewOrchestrator(reg)
+	orch.DiscoverStorage()
+	ctx := context.Background()
+
+	data := []byte("hello stream world")
+	orch.Put(ctx, "test-key", bytes.NewReader(data), int64(len(data)))
+
+	// Stream should work even without Streamable (fallback path).
+	rc, err := orch.Stream(ctx, "test-key", 6, 6)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer rc.Close()
+	result, _ := io.ReadAll(rc)
+	if string(result) != "stream" {
+		t.Errorf("expected 'stream', got %q", string(result))
+	}
+}
+
+func TestOrchestrator_StreamWithStreamableProvider(t *testing.T) {
+	reg := newMockRegistry()
+	base := newMockProvider("local")
+	prov := &streamableMockProvider{mockProvider: base}
+	reg.addProvider(&mockModule{StorageProvider: prov, info: contracts.ModuleInfo{ID: "local"}}, "local")
+
+	orch := NewOrchestrator(reg)
+	orch.DiscoverStorage()
+	ctx := context.Background()
+
+	data := []byte("hello stream world")
+	orch.Put(ctx, "test-key", bytes.NewReader(data), int64(len(data)))
+
+	rc, err := orch.Stream(ctx, "test-key", 6, 6)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer rc.Close()
+	result, _ := io.ReadAll(rc)
+	if string(result) != "stream" {
+		t.Errorf("expected 'stream', got %q", string(result))
+	}
+}
+
+func TestOrchestrator_StreamOutOfBounds(t *testing.T) {
+	reg := newMockRegistry()
+	prov := newMockProvider("local")
+	reg.addProvider(&mockModule{StorageProvider: prov, info: contracts.ModuleInfo{ID: "local"}}, "local")
+
+	orch := NewOrchestrator(reg)
+	orch.DiscoverStorage()
+	ctx := context.Background()
+
+	data := []byte("hello")
+	orch.Put(ctx, "test-key", bytes.NewReader(data), int64(len(data)))
+
+	// Offset beyond data length should return empty.
+	rc, err := orch.Stream(ctx, "test-key", 100, 10)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer rc.Close()
+	result, _ := io.ReadAll(rc)
+	if len(result) != 0 {
+		t.Errorf("expected empty result, got %q", string(result))
+	}
+}
+
+func TestOrchestrator_StreamMissingKey(t *testing.T) {
+	reg := newMockRegistry()
+	prov := newMockProvider("local")
+	reg.addProvider(&mockModule{StorageProvider: prov, info: contracts.ModuleInfo{ID: "local"}}, "local")
+
+	orch := NewOrchestrator(reg)
+	orch.DiscoverStorage()
+	ctx := context.Background()
+
+	_, err := orch.Stream(ctx, "missing", 0, 10)
+	if err == nil {
+		t.Error("expected error for missing key, got nil")
+	}
+}

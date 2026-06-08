@@ -79,7 +79,7 @@ func TestHTTPMiddleware_GeneratesWhenMissing(t *testing.T) {
 }
 
 func TestHTTPMiddleware_PreservesProvided(t *testing.T) {
-	const providedID = "user-provided-trace-id"
+	const providedID = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := FromContext(r.Context()); got != providedID {
 			t.Errorf("expected %q, got %q", providedID, got)

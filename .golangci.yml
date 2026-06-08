@@ -1,0 +1,26 @@
+# MuxCore golangci-lint configuration
+# Run: golangci-lint run ./internal/... ./pkg/... ./cmd/...
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - misspell
+    - unconvert
+    - prealloc
+  disable-all: false
+
+run:
+  timeout: 2m
+  go: "1.26"
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0

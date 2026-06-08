@@ -2,7 +2,6 @@ package registry
 
 import (
 	"context"
-	"io"
 	"testing"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
@@ -20,46 +19,8 @@ func (m *mockModule) Start(_ context.Context) error  { return nil }
 func (m *mockModule) Stop(_ context.Context) error   { return nil }
 func (m *mockModule) Health(_ context.Context) error { return nil }
 
-type mockStorageProvider struct{ mockModule }
-
-func (m *mockStorageProvider) Put(_ context.Context, _ string, _ io.Reader, _ int64) error {
-	return nil
-}
-func (m *mockStorageProvider) Get(_ context.Context, _ string) (io.ReadCloser, error) {
-	return nil, nil
-}
-func (m *mockStorageProvider) Delete(_ context.Context, _ string) error  { return nil }
-func (m *mockStorageProvider) Move(_ context.Context, _, _ string) error { return nil }
-func (m *mockStorageProvider) Exists(_ context.Context, _ string) (bool, error) {
-	return false, nil
-}
-func (m *mockStorageProvider) Stat(_ context.Context, _ string) (contracts.ObjectInfo, error) {
-	return contracts.ObjectInfo{}, nil
-}
-func (m *mockStorageProvider) List(_ context.Context, _ string) ([]contracts.ObjectInfo, error) {
-	return nil, nil
-}
-
-type mockAuthProvider struct{ mockModule }
-
-func (m *mockAuthProvider) Authenticate(_ context.Context, _ contracts.Credentials) (contracts.Session, error) {
-	return contracts.Session{}, nil
-}
-func (m *mockAuthProvider) Validate(_ context.Context, _ string) (contracts.Session, error) {
-	return contracts.Session{}, nil
-}
-func (m *mockAuthProvider) Revoke(_ context.Context, _ string) error { return nil }
-
-type mockScheduler struct{ mockModule }
-
-func (m *mockScheduler) Schedule(_ context.Context, _ contracts.SchedulerTask) (string, error) {
-	return "", nil
-}
-func (m *mockScheduler) Cancel(_ context.Context, _ string) error { return nil }
-func (m *mockScheduler) Status(_ context.Context, _ string) (contracts.SchedulerTaskStatus, error) {
-	return "", nil
-}
-
+//nolint:unused // used via interface type assertions in test tables
+//nolint:unused // used via interface type assertions in test tables
 // ---------- Register tests ----------
 
 func TestRegister(t *testing.T) {

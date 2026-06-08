@@ -3,8 +3,11 @@ package grpcmesh
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"io"
 	"fmt"
+	"os"
 	"sync"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
@@ -12,6 +15,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -77,9 +82,43 @@ func (s *Server) Call(ctx context.Context, req *meshv1.CallRequest) (*meshv1.Cal
 	return &meshv1.CallResponse{Payload: result}, nil
 }
 
-// StreamCall handles bidirectional streaming.
+// StreamCall handles bidirectional streaming of module calls.
+// Each incoming CallRequest is dispatched to the target module's handler,
+// and the result is streamed back as a CallResponse. This allows long-running
+// or multi-message interactions over a single gRPC stream.
 func (s *Server) StreamCall(stream meshv1.ModuleMesh_StreamCallServer) error {
-	return status.Error(codes.Unimplemented, "StreamCall not yet implemented")
+	for {
+		req, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+
+		target := req.GetTargetModule()
+		method := req.GetMethod()
+
+		s.mu.RLock()
+		handler, ok := s.handlers[target]
+		s.mu.RUnlock()
+
+		if !ok {
+			return status.Errorf(codes.NotFound, "module %q not found on this node", target)
+		}
+
+		result, err := handler.HandleCall(stream.Context(), method, req.GetPayload())
+		if err != nil {
+			if sendErr := stream.Send(&meshv1.CallResponse{Error: err.Error()}); sendErr != nil {
+				return sendErr
+			}
+			continue
+		}
+
+		if sendErr := stream.Send(&meshv1.CallResponse{Payload: result}); sendErr != nil {
+			return sendErr
+		}
+	}
 }
 
 // localCall routes a call to a local handler directly — no network.
@@ -102,7 +141,8 @@ func (s *Server) localCall(ctx context.Context, targetModule, method string, pay
 type Client struct {
 	server  *Server
 	mu      sync.RWMutex
-	cluster contracts.Cluster // optional; when set, cross-node routing becomes available
+	cluster    contracts.Cluster            // optional; when set, cross-node routing becomes available
+	callPolicy contracts.CallPolicyProvider // optional; when set, call access control is enforced
 }
 
 // NewClient creates a mesh client backed by the given server.
@@ -119,9 +159,32 @@ func (c *Client) SetCluster(cluster contracts.Cluster) {
 	c.cluster = cluster
 }
 
+// SetCallPolicy attaches a call policy module for inter-module access control.
+// When set, every Call() checks with the policy provider before dispatching.
+func (c *Client) SetCallPolicy(policy contracts.CallPolicyProvider) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.callPolicy = policy
+}
+
 // Call dispatches a call to the target module.
 // Local modules are called in-process. Remote modules go over gRPC.
 func (c *Client) Call(ctx context.Context, targetModule, method string, payload []byte) ([]byte, error) {
+	// Check call policy if configured
+	c.mu.RLock()
+	callPolicy := c.callPolicy
+	c.mu.RUnlock()
+	if callPolicy != nil {
+		callerID := contracts.CallerIDFromContext(ctx)
+		allowed, err := callPolicy.AllowCall(ctx, callerID, targetModule, method)
+		if err != nil {
+			return nil, fmt.Errorf("call policy error: %w", err)
+		}
+		if !allowed {
+			return nil, fmt.Errorf("call denied by policy: caller=%q target=%q method=%q", callerID, targetModule, method)
+		}
+	}
+
 	// Try local first
 	if result, err := c.server.localCall(ctx, targetModule, method, payload); err == nil {
 		return result, nil
@@ -136,7 +199,35 @@ func (c *Client) Call(ctx context.Context, targetModule, method string, payload 
 		for _, member := range cluster.Members() {
 			for _, modID := range member.ModuleIDs {
 				if modID == targetModule {
-					return nil, fmt.Errorf("%w: module %q is available on node %q but cross-node gRPC routing is not yet implemented", ErrRemoteRoutingUnavailable, targetModule, member.ID)
+					// Build gRPC connection to the remote node
+					conn, err := grpc.Dial(member.GRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+					if err != nil {
+						return nil, fmt.Errorf("%w: failed to dial remote node %q at %s: %w", ErrRemoteRoutingUnavailable, member.ID, member.GRPCAddr, err)
+					}
+					defer conn.Close()
+
+					// Propagate caller identity via gRPC metadata if set
+					callCtx := ctx
+					if callerID := contracts.CallerIDFromContext(ctx); callerID != "" {
+						callCtx = metadata.NewOutgoingContext(ctx, metadata.Pairs("x-caller-id", callerID))
+					}
+
+					// Build and send the remote call request
+					client := meshv1.NewModuleMeshClient(conn)
+					req := &meshv1.CallRequest{
+						TargetModule: targetModule,
+						Method:       method,
+						Payload:      payload,
+					}
+
+					resp, err := client.Call(callCtx, req)
+					if err != nil {
+						return nil, fmt.Errorf("%w: remote call to node %q failed: %w", ErrRemoteRoutingUnavailable, member.ID, err)
+					}
+					if resp.Error != "" {
+						return nil, fmt.Errorf("remote call error from module %q on node %q: %s", targetModule, member.ID, resp.Error)
+					}
+					return resp.Payload, nil
 				}
 			}
 		}
@@ -161,9 +252,9 @@ func (c *Client) RegisterHandler(moduleID string, handler contracts.MeshHandler)
 //	MUXCORE_GRPC_TLS_CERT  — path to TLS certificate PEM file
 //	MUXCORE_GRPC_TLS_KEY   — path to TLS private key PEM file
 //	MUXCORE_GRPC_MTLS_ENABLED — if "true" or "1", enable mutual TLS
-func GRPCTransportCredentials(certFile, keyFile string, mtlsEnabled bool) (credentials.TransportCredentials, error) {
+func GRPCTransportCredentials(certFile, keyFile, caCertFile string, mtlsEnabled bool) (credentials.TransportCredentials, error) {
 	if certFile == "" && keyFile == "" {
-		return nil, nil
+		return nil, fmt.Errorf("TLS is required for gRPC — set MUXCORE_GRPC_TLS_CERT and MUXCORE_GRPC_TLS_KEY to enable encryption")
 	}
 
 	// At least one of cert/key was specified; require both.
@@ -185,10 +276,19 @@ func GRPCTransportCredentials(certFile, keyFile string, mtlsEnabled bool) (crede
 	}
 
 	if mtlsEnabled {
+		if caCertFile == "" {
+			return nil, fmt.Errorf("mTLS is enabled but no CA certificate file was provided — set MUXCORE_GRPC_MTLS_CA")
+		}
+		caCert, err := os.ReadFile(caCertFile)
+		if err != nil {
+			return nil, fmt.Errorf("read mTLS CA cert: %w", err)
+		}
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to parse CA certificate from %q", caCertFile)
+		}
 		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
-		// In a full mTLS deployment the caller should populate ClientCAs
-		// via an additional config field; for now this at least enforces
-		// that clients present *some* certificate.
+		tlsCfg.ClientCAs = caCertPool
 	}
 
 	return credentials.NewTLS(tlsCfg), nil

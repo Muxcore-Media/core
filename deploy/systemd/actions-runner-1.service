@@ -1,15 +1,26 @@
 [Unit]
-Description=GitHub Actions Runner (Claude-LXC-1)
+Description=GitHub Actions Runner (MuxCore agents-core-1)
 After=network.target
 
 [Service]
 Type=simple
-User=claude
-WorkingDirectory=/home/claude/actions-runner
-ExecStart=/home/claude/actions-runner/run.sh
+User=actions
+WorkingDirectory=/opt/actions-runner
+ExecStart=/opt/actions-runner/runsvc.sh
 Restart=always
 RestartSec=10
-Environment="PATH=/usr/local/go/bin:/home/claude/go/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PATH=/usr/local/go/bin:/opt/actions-runner/go/bin:/usr/local/bin:/usr/bin:/bin"
+
+# Security hardening
+PrivateTmp=true
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/actions-runner
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+
 
 [Install]
 WantedBy=multi-user.target

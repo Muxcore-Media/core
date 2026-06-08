@@ -38,5 +38,5 @@ type AuditLogger interface {
 	Query(ctx context.Context, filter AuditFilter) ([]AuditEntry, error)
 
 	// Export writes all entries in the given format (json, csv).
-	Export(ctx context.Context, format string) (io.Reader, error)
+	Export(ctx context.Context, format string) (io.ReadCloser, error)
 }

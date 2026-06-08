@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 )
@@ -23,7 +24,9 @@ type GRPCConfig struct {
 	CertFile    string   `json:"cert_file"`    // path to TLS certificate file
 	KeyFile     string   `json:"key_file"`     // path to TLS key file
 	MTLSEnabled bool     `json:"mtls_enabled"` // require mutual TLS
+	CACertFile  string   `json:"ca_cert_file"`  // path to CA cert for mTLS client verification
 	SeedNodes   []string `json:"seed_nodes"`   // comma-separated host:port of existing cluster nodes to join
+	JoinToken   string   `json:"join_token"`    // pre-shared token required to join the cluster
 }
 
 // ServerConfig holds HTTP server settings.
@@ -31,6 +34,8 @@ type ServerConfig struct {
 	Addr         string `json:"addr"`          // listen address, e.g. ":8080"
 	ReadTimeout  int    `json:"read_timeout"`  // seconds
 	WriteTimeout int    `json:"write_timeout"` // seconds
+	CertFile     string `json:"cert_file"`     // path to TLS certificate PEM
+	KeyFile      string `json:"key_file"`      // path to TLS private key PEM
 }
 
 // LogConfig controls structured logging output.
@@ -98,6 +103,12 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("MUXCORE_ADDR"); v != "" {
 		cfg.Server.Addr = v
 	}
+	if v := os.Getenv("MUXCORE_TLS_CERT"); v != "" {
+		cfg.Server.CertFile = v
+	}
+	if v := os.Getenv("MUXCORE_TLS_KEY"); v != "" {
+		cfg.Server.KeyFile = v
+	}
 	if v := os.Getenv("MUXCORE_LOG_LEVEL"); v != "" {
 		cfg.Log.Level = v
 	}
@@ -122,16 +133,29 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("MUXCORE_GRPC_TLS_KEY"); v != "" {
 		cfg.GRPC.KeyFile = v
 	}
+	if v := os.Getenv("MUXCORE_GRPC_MTLS_CA"); v != "" {
+		cfg.GRPC.CACertFile = v
+	}
 	if v := os.Getenv("MUXCORE_GRPC_MTLS_ENABLED"); v != "" {
 		cfg.GRPC.MTLSEnabled = strings.ToLower(v) == "true" || v == "1"
+	}
+	if v := os.Getenv("MUXCORE_CLUSTER_JOIN_TOKEN"); v != "" {
+		cfg.GRPC.JoinToken = v
 	}
 	if v := os.Getenv("MUXCORE_GRPC_SEED_NODES"); v != "" {
 		seeds := strings.Split(v, ",")
 		for _, s := range seeds {
 			s = strings.TrimSpace(s)
-			if s != "" {
-				cfg.GRPC.SeedNodes = append(cfg.GRPC.SeedNodes, s)
+			if s == "" {
+				continue
 			}
+			// Basic host:port validation — must contain exactly one colon
+			parts := strings.Split(s, ":")
+			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+				slog.Warn("skipping invalid seed node address", "address", s)
+				continue
+			}
+			cfg.GRPC.SeedNodes = append(cfg.GRPC.SeedNodes, s)
 		}
 	}
 	// Normalize case-sensitive fields so consumers don't need to handle

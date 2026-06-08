@@ -10,7 +10,7 @@ import (
 // Core has no opinion about what kinds exist — modules and consumers define them.
 // Common conventions (defined in contract repos, not here): "auth", "downloader",
 // "indexer", "media_manager", "playback", "storage", "workflow", "transcoder", etc.
-type ModuleKind = string
+type ModuleKind string
 
 // ContractDeclaration describes a typed contract that a module implements.
 // Modules declare these in their Info() so consumers can verify compatibility
@@ -42,6 +42,7 @@ type ModuleInfo struct {
 	Author       string
 	Capabilities []string              // granular capability strings for routing/discovery
 	Contracts    []ContractDeclaration // typed contracts this module implements
+	DependsOn    []string              // module IDs this module requires to be initialized first
 }
 
 type Module interface {

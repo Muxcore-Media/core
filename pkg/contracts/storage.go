@@ -25,6 +25,14 @@ type StorageOrchestrator interface {
 	Stat(ctx context.Context, key string) (ObjectInfo, error)
 	List(ctx context.Context, prefix string) ([]ObjectInfo, error)
 	ProviderCount() int
+	// Stream reads a byte range from a storage object. Uses provider-side
+	// streaming when the routed provider implements Streamable; otherwise
+	// falls back to a full Get with client-side slicing.
+	Stream(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error)
+	// CapabilityCheck returns which capability interfaces the routed provider
+	// supports for the given key (streamable, seekable, watchable, etc.).
+	// Modules use this to negotiate behavior at runtime.
+	CapabilityCheck(ctx context.Context, key string) ([]string, error)
 }
 
 // Core blob storage interface — all storage providers implement this.

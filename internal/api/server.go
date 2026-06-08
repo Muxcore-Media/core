@@ -23,9 +23,11 @@ type Server struct {
 	auditLogger      contracts.AuditLogger
 	routePermissions map[string]RoutePermission
 	publicPaths      map[string]bool
+	certFile         string
+	keyFile          string
 }
 
-func NewServer(addr string) *Server {
+func NewServer(addr, certFile, keyFile string) *Server {
 	mux := http.NewServeMux()
 	s := &Server{
 		mux:              mux,
@@ -42,11 +44,20 @@ func NewServer(addr string) *Server {
 		IdleTimeout:  60 * time.Second,
 	}
 	s.rebuildChain()
+	s.certFile = certFile
+	s.keyFile = keyFile
+	if certFile != "" && keyFile != "" {
+		slog.Info("API server TLS enabled", "cert", certFile, "key", keyFile)
+	}
 	return s
 }
 
 func (s *Server) Start() error {
 	slog.Info("API server listening", "addr", s.http.Addr)
+	if s.certFile != "" && s.keyFile != "" {
+		return s.http.ListenAndServeTLS(s.certFile, s.keyFile)
+	}
+	slog.Warn("API server starting without TLS")
 	return s.http.ListenAndServe()
 }
 
@@ -111,6 +122,7 @@ func (s *Server) AddPublicPath(path string) {
 // rebuildChain constructs the middleware chain.
 func (s *Server) rebuildChain() {
 	var h http.Handler = s.mux
+	h = securityHeadersMiddleware(h)
 	h = recoveryMiddleware(h)
 	if s.rateLimiter != nil && s.rateLimiter.Enabled() {
 		h = rateLimitMiddleware(s.rateLimiter, s.publicPaths)(h)
@@ -207,7 +219,7 @@ func rateLimitMiddleware(limiter contracts.RateLimiterProvider, publicPaths map[
 				return
 			}
 			ip := extractClientIP(r)
-			if !limiter.Allow(ip) {
+			if !limiter.Allow(r.Context(), ip) {
 				w.Header().Set("Retry-After", "60")
 				writeJSON(w, http.StatusTooManyRequests, map[string]string{
 					"error":   "rate_limited",

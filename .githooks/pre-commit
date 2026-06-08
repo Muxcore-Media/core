@@ -16,7 +16,13 @@ gofmt -w -s $changed
 git add $changed
 
 echo "==> Vet..."
-go vet ./internal/... ./pkg/... ./cmd/... 2>&1 || true
+go vet ./internal/... ./pkg/... ./cmd/... 2>&1
+VET_EXIT=$?
+if [ $VET_EXIT -ne 0 ]; then
+    echo ""
+    echo "WARNING: go vet found issues. Commit will proceed, but fix them soon."
+    echo "To bypass: git commit --no-verify"
+fi
 
 echo "==> Secrets scan (gitleaks)..."
 gitleaks protect --staged --no-banner --redact 2>&1 || {

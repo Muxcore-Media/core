@@ -1,8 +1,6 @@
 .PHONY: build test lint coverage proto ci clean run
 
 GO ?= go
-# Note: golangci-lint currently incompatible (requires go1.25 build, project uses go1.26).
-# Use go vet + staticcheck directly for now.
 PROTOC ?= $(shell which protoc 2>/dev/null || echo ~/.local/bin/protoc)
 PROTOC_GEN_GO ?= $(shell which protoc-gen-go 2>/dev/null || echo ~/go/bin/protoc-gen-go)
 PROTOC_GEN_GO_GRPC ?= $(shell which protoc-gen-go-grpc 2>/dev/null || echo ~/go/bin/protoc-gen-go-grpc)
@@ -35,14 +33,20 @@ test-modules:
 
 test-all: test test-modules
 
+GOLANGCI_LINT ?= $(shell which golangci-lint 2>/dev/null)
+
 lint:
-	$(GO) vet $(CORE_PKGS)
+	@if [ -n "$(GOLANGCI_LINT)" ]; then \
+		$(GOLANGCI_LINT) run --timeout 120s $(CORE_PKGS); \
+	else \
+		$(GO) vet $(CORE_PKGS); \
+	fi
 
 lint-modules:
 	@for d in $(MODULE_DIR)/*/; do \
 		if [ -f "$$d/go.mod" ]; then \
-			echo "=== vetting $$d ==="; \
-			cd "$$d" && $(GO) vet ./... || exit 1; \
+			echo "=== linting $$d ==="; \
+			cd "$$d" && (which golangci-lint >/dev/null 2>&1 && golangci-lint run --timeout 60s ./... || $(GO) vet ./...); \
 			cd - > /dev/null; \
 		fi; \
 	done

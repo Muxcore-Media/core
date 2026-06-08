@@ -32,11 +32,27 @@ func WithTraceID(ctx context.Context, id string) context.Context {
 func HTTPMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		traceID := r.Header.Get("X-Trace-Id")
-		if traceID == "" {
+		if traceID == "" || len(traceID) > 64 || !isValidTraceID(traceID) {
 			traceID = uuid.New().String()
 		}
 		w.Header().Set("X-Trace-Id", traceID)
 		ctx := WithTraceID(r.Context(), traceID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// isValidTraceID checks if the string looks like a valid trace identifier.
+// Accepts UUIDs and hex strings up to 64 characters.
+func isValidTraceID(s string) bool {
+	// Try parsing as UUID first
+	if _, err := uuid.Parse(s); err == nil {
+		return true
+	}
+	// Also accept hex strings (common in distributed tracing)
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || c == '-') {
+			return false
+		}
+	}
+	return len(s) > 0
 }

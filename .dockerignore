@@ -17,3 +17,13 @@ SECURITY.md
 buf.yaml
 coverage.*
 vendor/
+# Credential and secret files
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.crt
+credentials.*
+secrets/
+*.secret

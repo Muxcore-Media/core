@@ -1,5 +1,5 @@
 [Unit]
-Description=GitHub Actions Runner (MuxCore agents-core-2)
+Description=GitHub Actions Runner (MuxCore agents-core-3)
 After=network.target
 
 [Service]
@@ -20,7 +20,6 @@ ReadWritePaths=/opt/actions-runner
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 MemoryDenyWriteExecute=yes
 CapabilityBoundingSet=
-
 
 [Install]
 WantedBy=multi-user.target

@@ -1,9 +1,11 @@
 # Security Policy
 
-## Supported Versions
+## Status
 
-MuxCore is pre-1.0. Security patches are applied to `main` and backported only as
-needed. Once 1.0 ships, a formal version support matrix will be published.
+MuxCore is **pre-1.0 alpha software**. The security features described below are
+a mix of implemented, in-progress, and planned. This document distinguishes them clearly.
+
+## Supported Versions
 
 | Version | Supported          |
 | ------- | ------------------ |
@@ -12,90 +14,74 @@ needed. Once 1.0 ships, a formal version support matrix will be published.
 
 ## Reporting a Vulnerability
 
-**Do not open a public issue.** Disclose security vulnerabilities privately via
-GitHub's built-in vulnerability reporting:
+**Do not open a public issue.** Report via GitHub Security Advisories:
+https://github.com/Muxcore-Media/core/security/advisories
 
-1. Go to the [Security Advisories](https://github.com/Muxcore-Media/core/security/advisories) tab
-2. Click **New draft security advisory**
-3. Fill in the affected versions, severity, and a clear description with reproduction steps
-
-You will receive an acknowledgement within **72 hours**. After triage, we will
-keep you informed of progress and coordinate a disclosure timeline. We aim to
-release a patch within **7 days** for critical issues and **30 days** for
-moderate ones — but complex issues may take longer. If the vulnerability is
-declined, we will explain why.
-
-### What to Include
-
-- Affected component (core fabric, event bus, module contracts, API server, a specific module)
-- Steps to reproduce, ideally as a minimal Go test case or `curl` one-liner
-- Impact (data exposure, privilege escalation, denial of service, remote code execution)
-- Whether you plan to disclose publicly and your preferred timeline
+Acknowledgment within **72 hours**. Target patch: **7 days** critical, **30 days** moderate.
 
 ## Scope
 
-### In Scope
+### Implemented
 
-- **Core fabric** — event bus, module registry, lifecycle manager, scheduler, API server (`/health`), config system
-- **Module contracts** — any interface in `pkg/contracts/` that could enable privilege escalation between modules
-- **Authentication / authorization** — OIDC flow, RBAC enforcement, capability checks
-- **Module sandboxing** — gVisor boundary escapes (when implemented)
-- **gRPC mesh** — mTLS bypass, message injection (when implemented)
-- **Default preset modules** — `admin-ui`, `api-rest`, `scheduler-cron` (when built with `-tags default`)
-- **Docker image** — container escapes, misconfigurations in the published image
+- **HTTP API**: Pluggable auth middleware (bearer token), rate limiting, audit logging, security headers (X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy)
+- **gRPC mesh**: TLS encryption (required in production), mTLS with CA verification (when configured)
+- **Cluster discovery**: Join token authentication via gRPC metadata
+- **Storage**: Key sanitization (path traversal prevention), max object size enforcement (100MB)
+- **Event bus**: Per-handler timeouts (30s), structured logging, source node validation
+- **Config**: Environment variable overrides with validation, seed node address validation
+- **Docker**: Non-root user, credential file exclusion from builds, HEALTHCHECK; read-only root filesystem and capability dropping applied via docker-compose.yml
+- **CI/CD**: Read-only GITHUB_TOKEN, actions by version tag (not commit SHA), govulncheck (floating @latest), fuzz testing
 
-### Out of Scope
+### In Progress
 
-- Issues in third-party modules not published under the `Muxcore-Media` GitHub organization
-- Issues in infrastructure not controlled by MuxCore (user's reverse proxy, firewall, host OS)
-- DoS via resource exhaustion on an unauthenticated endpoint (these are tracked as availability improvements, not security advisories)
-- Social engineering, phishing, or physical attacks
-- Vulnerabilities in dependencies that have no patch available upstream
+- **RBAC enforcement**: Authorizer interface exists; enforcement at API level only (not gRPC or event bus)
+- **Cluster join authentication**: Token required; mTLS CA verification available; cross-node routing not yet implemented
+- **Auth failure rate limiting**: Per-IP brute-force protection with fixed 1-minute backoff after 5 failures
 
-## Disclosure Policy
+### Planned (Not Yet Implemented)
 
-1. Reporter submits a private report
-2. MuxCore maintainers triage within 72 hours and assign a severity
-3. A fix is developed in a private fork; the reporter is credited (with permission) in the advisory
-4. A GitHub Security Advisory is published in coordination with the fix release
-5. A CVE may be requested for critical vulnerabilities
-
-We follow **coordinated disclosure**. Please give us a reasonable window to patch
-before going public. We consider 30 days reasonable by default, and will
-negotiate a shorter window for actively-exploited issues.
+- **Module capability enforcement**: Capabilities are declared but not runtime-enforced. Capability checks in event dispatch, mesh routing, and storage access are planned.
+- **Module sandboxing** (gVisor): Not implemented — modules run in-process with no isolation.
+- **OIDC / SSO**: No implementation exists yet.
+- **Event authorization**: No per-event-type access control.
+- **gRPC interceptors**: Auth, rate limiting, and logging not yet wired as gRPC interceptors.
 
 ## Security Model
 
-MuxCore's security boundary is **between modules, not inside them**. Core provides
-the fabric — event bus, registry, lifecycle — and each module runs with the
-capabilities it declared. A module that declares only `downloader.torrent` should
-not be able to read the filesystem or call the notification system. The attack
-surface that matters:
+MuxCore's intended security boundary is **between modules, not inside them**.
+Core provides the fabric — event bus, registry, lifecycle — and each module should
+run with the capabilities it declared. A module that declares only
+`downloader.torrent` should not be able to read the filesystem or call the
+notification system.
 
-- **Module → Core**: can a module escape its declared capabilities?
-- **Module → Module**: can a module intercept or forge events bound for another?
-- **Network → API**: can an unauthenticated caller reach an admin endpoint?
-- **Event bus**: can an event payload trigger unexpected behavior in a listener?
+**Current state (2026-05-26)**: Module capabilities are self-declared and not
+enforced at runtime. The boundaries described above are the design target, not
+the current reality. Capability enforcement is planned for a future release.
 
-When reporting, frame issues against these boundaries. A bug in a module's
-business logic that stays within its own capabilities is a regular bug, not a
-security vulnerability.
+When reporting vulnerabilities, frame issues against both the intended and
+actual boundaries. A bug in a module's business logic that stays within its
+own capabilities is a regular bug, not a security vulnerability.
+
+## Disclosure Policy
+
+1. Reporter submits private report
+2. Maintainers triage within 72 hours, assign severity
+3. Fix developed in private fork; reporter credited (with permission)
+4. GitHub Security Advisory published with fix release
+5. CVE requested for critical vulnerabilities
+
+We follow **coordinated disclosure**. Default window: 30 days before public disclosure.
 
 ## Safe Harbor
 
-We will not pursue legal action or file takedown requests against security
-researchers who:
-
-- Test against their own MuxCore instance or an instance they have explicit permission to test
+We will not pursue legal action against researchers who:
+- Test against their own MuxCore instance
 - Avoid accessing or modifying data that does not belong to them
 - Make a good-faith effort to avoid degradation of service during testing
 - Follow this policy's reporting and disclosure process
 
 ## Recognition
 
-Researchers who report valid vulnerabilities will be credited in the advisory
-and listed here (with permission).
-
 | Name | Issue | Date |
 | ---- | ----- | ---- |
-| —    | —     | —    |
+| ---  | ---   | ---  |

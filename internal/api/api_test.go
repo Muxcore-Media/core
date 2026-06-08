@@ -13,7 +13,7 @@ import (
 )
 
 func TestNewServer(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	if srv.mux == nil {
 		t.Fatal("expected mux to be initialized")
 	}
@@ -23,7 +23,7 @@ func TestNewServer(t *testing.T) {
 }
 
 func TestHealthEndpoint_Simple(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
@@ -36,7 +36,7 @@ func TestHealthEndpoint_Simple(t *testing.T) {
 }
 
 func TestHealthEndpoint_MethodNotAllowed(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	req := httptest.NewRequest(http.MethodPost, "/health", nil)
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
@@ -46,7 +46,7 @@ func TestHealthEndpoint_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHealthEndpoint_WithHealthChecker(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	srv.SetHealthChecker(func() map[string]error {
 		return map[string]error{"module-a": nil, "module-b": nil}
 	})
@@ -62,7 +62,7 @@ func TestHealthEndpoint_WithHealthChecker(t *testing.T) {
 }
 
 func TestHealthEndpoint_Degraded(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	srv.SetHealthChecker(func() map[string]error {
 		return map[string]error{"module-a": nil, "module-b": fmt.Errorf("connection refused")}
 	})
@@ -75,7 +75,7 @@ func TestHealthEndpoint_Degraded(t *testing.T) {
 }
 
 func TestHealthEndpoint_HXRequest(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	req.Header.Set("HX-Request", "true")
 	rec := httptest.NewRecorder()
@@ -86,7 +86,7 @@ func TestHealthEndpoint_HXRequest(t *testing.T) {
 }
 
 func TestAuthMiddleware_AllowsHealth(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	srv.SetAuthFunc(func(r *http.Request) (*contracts.Session, error) {
 		return nil, errors.New("should not be called")
 	})
@@ -99,7 +99,7 @@ func TestAuthMiddleware_AllowsHealth(t *testing.T) {
 }
 
 func TestAuthMiddleware_BlocksUnauthenticated(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	srv.SetAuthFunc(func(r *http.Request) (*contracts.Session, error) {
 		return nil, errors.New("invalid token")
 	})
@@ -115,7 +115,7 @@ func TestAuthMiddleware_BlocksUnauthenticated(t *testing.T) {
 }
 
 func TestAuthMiddleware_AllowsAuthenticated(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	expectedSession := &contracts.Session{UserID: "user-1", Username: "test"}
 	srv.SetAuthFunc(func(r *http.Request) (*contracts.Session, error) {
 		return expectedSession, nil
@@ -137,7 +137,7 @@ func TestAuthMiddleware_AllowsAuthenticated(t *testing.T) {
 }
 
 func TestAuthMiddleware_NoAuthFunc(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	srv.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -150,7 +150,7 @@ func TestAuthMiddleware_NoAuthFunc(t *testing.T) {
 }
 
 func TestRateLimiter_AllowsUnderLimit(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	srv.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -178,7 +178,7 @@ func TestRateLimiter_Disabled(t *testing.T) {
 }
 
 func TestRecoveryMiddleware_CatchesPanic(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	srv.HandleFunc("/panic", func(w http.ResponseWriter, r *http.Request) {
 		panic("test panic")
 	})
@@ -191,7 +191,7 @@ func TestRecoveryMiddleware_CatchesPanic(t *testing.T) {
 }
 
 func TestHandle_RegistersRoute(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	srv.Handle("/custom", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 	}))
@@ -204,7 +204,7 @@ func TestHandle_RegistersRoute(t *testing.T) {
 }
 
 func TestHandleFunc_RegistersRoute(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	srv.HandleFunc("/fn", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 	})
@@ -217,7 +217,7 @@ func TestHandleFunc_RegistersRoute(t *testing.T) {
 }
 
 func TestServerStartShutdown(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	errCh := make(chan error, 1)
@@ -248,7 +248,7 @@ func TestGetSession_Empty(t *testing.T) {
 }
 
 func TestGetSession_AfterAuth(t *testing.T) {
-	srv := NewServer(":0")
+	srv := NewServer(":0", "", "")
 	srv.SetAuthFunc(func(r *http.Request) (*contracts.Session, error) {
 		return &contracts.Session{UserID: "auth-user"}, nil
 	})

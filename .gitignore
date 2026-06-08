@@ -31,3 +31,4 @@ Thumbs.db
 .env.local
 *.local.yaml
 .gstack/
+/muxcored

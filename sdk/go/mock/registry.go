@@ -45,7 +45,7 @@ func (r *Registry) FindByRole(role string) []contracts.ModuleEntry {
 	var result []contracts.ModuleEntry
 	for _, e := range r.modules {
 		for _, k := range e.Info.Roles {
-			if k == kind {
+			if k == role {
 				result = append(result, contracts.ModuleEntry{
 					Info: e.Info, Module: e.Module,
 				})

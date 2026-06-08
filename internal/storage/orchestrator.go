@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -11,6 +12,10 @@ import (
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 )
+
+// MaxObjectSize is the maximum size of a single object that can be stored.
+// Objects larger than this are rejected to prevent memory exhaustion.
+const MaxObjectSize = 100 * 1024 * 1024 // 100 MB
 
 // Orchestrator routes storage operations to registered providers based on
 // capability negotiation and user-defined policies.
@@ -92,6 +97,27 @@ func (o *Orchestrator) SetCache(c contracts.CacheLayer) {
 	o.mu.Unlock()
 }
 
+// validateKey checks that a storage key does not contain path traversal sequences
+// or other unsafe patterns. Returns an error if the key is invalid.
+func validateKey(key string) error {
+	if key == "" {
+		return fmt.Errorf("storage key must not be empty")
+	}
+	if strings.Contains(key, "..") {
+		return fmt.Errorf("storage key must not contain '..'")
+	}
+	if strings.HasPrefix(key, "/") {
+		return fmt.Errorf("storage key must not start with '/': %q", key)
+	}
+	if strings.ContainsRune(key, '\x00') {
+		return fmt.Errorf("storage key must not contain null bytes")
+	}
+	if len(key) > 1024 {
+		return fmt.Errorf("storage key too long (%d bytes)", len(key))
+	}
+	return nil
+}
+
 func (o *Orchestrator) route(key string) (contracts.StorageProvider, error) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
@@ -116,15 +142,30 @@ func (o *Orchestrator) route(key string) (contracts.StorageProvider, error) {
 }
 
 func (o *Orchestrator) Put(ctx context.Context, key string, data io.Reader, size int64) error {
+	if err := validateKey(key); err != nil {
+		return err
+	}
+	if size > MaxObjectSize {
+		return fmt.Errorf("object size %d exceeds maximum %d", size, MaxObjectSize)
+	}
+
+	// If size is unknown (e.g., -1 or 0 for streaming), use a LimitReader.
+	reader := data
+	if size <= 0 || size > MaxObjectSize {
+		reader = io.LimitReader(data, MaxObjectSize+1)
+	}
+
 	prov, err := o.route(key)
 	if err != nil {
 		return err
 	}
 
-	// Read data into buffer for write-through cache.
-	buf, err := io.ReadAll(data)
+	buf, err := io.ReadAll(reader)
 	if err != nil {
 		return err
+	}
+	if int64(len(buf)) > MaxObjectSize {
+		return fmt.Errorf("object exceeds maximum size %d", MaxObjectSize)
 	}
 
 	if err := prov.Put(ctx, key, bytes.NewReader(buf), size); err != nil {
@@ -132,6 +173,7 @@ func (o *Orchestrator) Put(ctx context.Context, key string, data io.Reader, size
 	}
 
 	// Write-through: update cache after successful Put.
+	// Cache races with SetCache/DiscoverCache are acceptable — eventually consistent.
 	o.mu.RLock()
 	cache := o.cache
 	o.mu.RUnlock()
@@ -143,6 +185,9 @@ func (o *Orchestrator) Put(ctx context.Context, key string, data io.Reader, size
 }
 
 func (o *Orchestrator) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	if err := validateKey(key); err != nil {
+		return nil, err
+	}
 	o.mu.RLock()
 	cache := o.cache
 	o.mu.RUnlock()
@@ -160,6 +205,9 @@ func (o *Orchestrator) Get(ctx context.Context, key string) (io.ReadCloser, erro
 }
 
 func (o *Orchestrator) Delete(ctx context.Context, key string) error {
+	if err := validateKey(key); err != nil {
+		return err
+	}
 	prov, err := o.route(key)
 	if err != nil {
 		return err
@@ -181,6 +229,9 @@ func (o *Orchestrator) Delete(ctx context.Context, key string) error {
 }
 
 func (o *Orchestrator) Exists(ctx context.Context, key string) (bool, error) {
+	if err := validateKey(key); err != nil {
+		return false, err
+	}
 	prov, err := o.route(key)
 	if err != nil {
 		return false, err
@@ -189,6 +240,9 @@ func (o *Orchestrator) Exists(ctx context.Context, key string) (bool, error) {
 }
 
 func (o *Orchestrator) Stat(ctx context.Context, key string) (contracts.ObjectInfo, error) {
+	if err := validateKey(key); err != nil {
+		return contracts.ObjectInfo{}, err
+	}
 	prov, err := o.route(key)
 	if err != nil {
 		return contracts.ObjectInfo{}, err
@@ -197,6 +251,12 @@ func (o *Orchestrator) Stat(ctx context.Context, key string) (contracts.ObjectIn
 }
 
 func (o *Orchestrator) Move(ctx context.Context, src, dst string) error {
+	if err := validateKey(src); err != nil {
+		return err
+	}
+	if err := validateKey(dst); err != nil {
+		return err
+	}
 	prov, err := o.route(src)
 	if err != nil {
 		return err
@@ -205,6 +265,9 @@ func (o *Orchestrator) Move(ctx context.Context, src, dst string) error {
 }
 
 func (o *Orchestrator) List(ctx context.Context, prefix string) ([]contracts.ObjectInfo, error) {
+	if err := validateKey(prefix); err != nil {
+		return nil, err
+	}
 	prov, err := o.route(prefix)
 	if err != nil {
 		return nil, err
@@ -219,6 +282,9 @@ func (o *Orchestrator) ProviderCount() int {
 }
 
 func (o *Orchestrator) CapabilityCheck(ctx context.Context, key string) ([]string, error) {
+	if err := validateKey(key); err != nil {
+		return nil, err
+	}
 	prov, err := o.route(key)
 	if err != nil {
 		return nil, err
@@ -240,4 +306,48 @@ func (o *Orchestrator) CapabilityCheck(ctx context.Context, key string) ([]strin
 		caps = append(caps, "hardlinkable")
 	}
 	return caps, nil
+}
+// WatchModules subscribes to module.registered events and automatically
+// re-discovers storage providers and cache layers when new modules appear.
+// Call this after bootstrap to enable dynamic provider registration.
+// The returned cancel function stops watching.
+func (o *Orchestrator) WatchModules(bus contracts.EventBus) (cancel func()) {
+	if bus == nil {
+		return func() {}
+	}
+
+	handler := func(ctx context.Context, event contracts.Event) error {
+		var payload contracts.ModuleRegisteredPayload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return nil // skip malformed events
+		}
+
+		// Look up the newly registered module
+		entry, err := o.registry.Resolve(payload.ModuleID)
+		if err != nil {
+			return nil // module may have unregistered already
+		}
+
+		// Check if it's a storage provider
+		if provider, ok := entry.Module.(contracts.StorageProvider); ok {
+			o.mu.Lock()
+			o.providers[payload.ModuleID] = provider
+			o.mu.Unlock()
+		}
+
+		// Check if it implements CacheLayer
+		if cache, ok := entry.Module.(contracts.CacheLayer); ok {
+			o.mu.Lock()
+			o.cache = cache
+			o.mu.Unlock()
+		}
+
+		return nil
+	}
+
+	_ = bus.Subscribe(context.Background(), contracts.EventModuleRegistered, handler)
+
+	return func() {
+		_ = bus.Unsubscribe(context.Background(), contracts.EventModuleRegistered, handler)
+	}
 }

@@ -26,7 +26,7 @@ func (m *testModule) Health(ctx context.Context) error         { return nil }
 
 func TestManagerLifecycle(t *testing.T) {
 	reg := registry.New()
-	mgr := module.NewManager(reg)
+	mgr := module.NewManager(reg, nil)
 
 	bus := events.NewMemoryBus()
 	_ = bus
@@ -90,7 +90,7 @@ func TestManagerLifecycle(t *testing.T) {
 
 func TestDependencyOrder(t *testing.T) {
 	reg := registry.New()
-	mgr := module.NewManager(reg)
+	mgr := module.NewManager(reg, nil)
 
 	makeMod := func(id string) *testModule {
 		return &testModule{
@@ -121,7 +121,7 @@ func TestDependencyOrder(t *testing.T) {
 
 func TestCircularDependency(t *testing.T) {
 	reg := registry.New()
-	mgr := module.NewManager(reg)
+	mgr := module.NewManager(reg, nil)
 
 	makeMod := func(id string) *testModule {
 		return &testModule{

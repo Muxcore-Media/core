@@ -19,6 +19,10 @@ type CacheProvider interface {
 	Exists(ctx context.Context, key string) (bool, error)
 	// Incr atomically increments an integer key by delta and returns the new value.
 	Incr(ctx context.Context, key string, delta int64) (int64, error)
+	// CompareAndSwap atomically replaces oldValue with newValue at key.
+	// Returns true if the swap succeeded (key held oldValue), false otherwise.
+	// A nil oldValue matches a non-existent key.
+	CompareAndSwap(ctx context.Context, key string, oldValue, newValue []byte) (bool, error)
 	// Lock acquires a distributed lock on a key. Returns a Lock handle.
 	// If the key is already locked, returns an error immediately (non-blocking).
 	Lock(ctx context.Context, key string, ttl time.Duration) (LockHandle, error)

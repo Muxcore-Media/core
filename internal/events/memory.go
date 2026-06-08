@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"log"
+	"log/slog"
 
 	"github.com/Muxcore-Media/core/internal/trace"
 	"github.com/Muxcore-Media/core/pkg/contracts"
@@ -59,12 +59,13 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 			go func(h contracts.EventHandler) {
 				b.sem <- struct{}{}
 				defer func() { <-b.sem }()
-				handlerCtx := ctx
+				handlerCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				defer cancel()
 				if event.TraceID != "" {
 					handlerCtx = trace.WithTraceID(handlerCtx, event.TraceID)
 				}
 				if err := h(handlerCtx, event); err != nil {
-					log.Printf("event handler error: type=%s id=%s: %v", event.Type, event.ID, err)
+					slog.Error("event handler error", "type", event.Type, "id", event.ID, "error", err)
 				}
 			}(s.handler)
 		}

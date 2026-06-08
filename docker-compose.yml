@@ -7,6 +7,7 @@ services:
       MUXCORE_ADDR: ":8080"
     restart: unless-stopped
     healthcheck:
+      # NOTE: requires curl in the image (added via Dockerfile fix)
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/health || exit 1"]
       interval: 30s
       timeout: 5s
@@ -25,6 +26,10 @@ services:
           size: 64M
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     read_only: true
 volumes:
   muxcore_data:

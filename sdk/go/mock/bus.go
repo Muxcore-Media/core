@@ -49,8 +49,32 @@ func (b *EventBus) Unsubscribe(ctx context.Context, eventType string, handler co
 }
 
 func (b *EventBus) Request(ctx context.Context, event contracts.Event, timeout time.Duration) (contracts.Event, error) {
-	_ = b.Publish(ctx, event)
-	return contracts.Event{}, nil
+	type result struct {
+		event contracts.Event
+		err   error
+	}
+	ch := make(chan result, 1)
+	replyType := event.Type + ".reply"
+
+	replyHandler := func(ctx context.Context, e contracts.Event) error {
+		ch <- result{event: e}
+		return nil
+	}
+	_ = b.Subscribe(ctx, replyType, replyHandler)
+	defer b.Unsubscribe(ctx, replyType, replyHandler)
+
+	if err := b.Publish(ctx, event); err != nil {
+		return contracts.Event{}, err
+	}
+
+	select {
+	case r := <-ch:
+		return r.event, r.err
+	case <-ctx.Done():
+		return contracts.Event{}, ctx.Err()
+	case <-time.After(timeout):
+		return contracts.Event{}, context.DeadlineExceeded
+	}
 }
 
 // PublishedEvents returns all events published since creation or last reset.

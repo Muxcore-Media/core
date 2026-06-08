@@ -77,8 +77,12 @@ func (s *HealthServer) checkNode() *healthv1.HealthCheckResponse {
 
 // Watch streams health status changes for a set of modules.
 func (s *HealthServer) Watch(req *healthv1.HealthWatchRequest, stream healthv1.HealthService_WatchServer) error {
-	// Streaming health watch: poll every 30s and push changes.
-	ticker := time.NewTicker(30 * time.Second)
+	// Streaming health watch: use client-requested interval or default to 30s.
+	interval := req.GetIntervalSeconds()
+	if interval < 1 {
+		interval = 30
+	}
+	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
 
 	for {

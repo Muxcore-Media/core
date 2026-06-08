@@ -2,6 +2,7 @@ package module
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -12,18 +13,35 @@ import (
 
 type Manager struct {
 	registry *registry.Registry
+	bus      contracts.EventBus
 }
 
-func NewManager(reg *registry.Registry) *Manager {
-	return &Manager{registry: reg}
+func NewManager(reg *registry.Registry, bus contracts.EventBus) *Manager {
+	return &Manager{registry: reg, bus: bus}
 }
 
 func (m *Manager) Register(mod contracts.Module, deps []string) error {
-	return m.registry.Register(mod, deps)
+	info := mod.Info()
+	if err := m.registry.Register(mod, deps); err != nil {
+		return err
+	}
+
+	m.publishModuleRegistered(info)
+	return nil
 }
 
 func (m *Manager) Unregister(id string) error {
-	return m.registry.Unregister(id)
+	entry, err := m.registry.Get(id)
+	if err != nil {
+		return err
+	}
+
+	if err := m.registry.Unregister(id); err != nil {
+		return err
+	}
+
+	m.publishModuleUnregistered(entry.Info)
+	return nil
 }
 
 func (m *Manager) InitAll(ctx context.Context) error {
@@ -38,6 +56,7 @@ func (m *Manager) InitAll(ctx context.Context) error {
 		if _, err := m.registry.ResolveDeps(entry.Info.ID); err != nil {
 			slog.Warn("unresolved dependencies, skipping module", "id", entry.Info.ID, "error", err)
 			m.registry.SetState(entry.Info.ID, contracts.ModuleStateDegraded)
+			m.publishModuleDegraded(entry.Info, err)
 			continue
 		}
 		slog.Info("initializing module", "id", entry.Info.ID, "version", entry.Info.Version)
@@ -60,6 +79,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		if _, err := m.registry.ResolveDeps(entry.Info.ID); err != nil {
 			slog.Warn("unresolved dependencies, skipping module", "id", entry.Info.ID, "error", err)
 			m.registry.SetState(entry.Info.ID, contracts.ModuleStateDegraded)
+			m.publishModuleDegraded(entry.Info, err)
 			continue
 		}
 		slog.Info("starting module", "id", entry.Info.ID)
@@ -99,6 +119,9 @@ func (m *Manager) HealthCheck(ctx context.Context) map[string]error {
 		err := entry.Module.Health(ctx)
 		m.registry.SetHealth(entry.Info.ID, err)
 		results[entry.Info.ID] = err
+		if err != nil {
+			m.publishModuleDegraded(entry.Info, err)
+		}
 	}
 	return results
 }
@@ -167,4 +190,52 @@ func (m *Manager) startupOrder(entries []*registry.Entry) ([]*registry.Entry, er
 	}
 
 	return order, nil
+}
+
+// publishModuleRegistered publishes a module.registered event on the event bus.
+// If no bus is configured, the event is silently dropped.
+func (m *Manager) publishModuleRegistered(info contracts.ModuleInfo) {
+	if m.bus == nil {
+		return
+	}
+	payload, _ := json.Marshal(contracts.ModuleRegisteredPayload{
+		ModuleID: info.ID,
+		Version:  info.Version,
+	})
+	_ = m.bus.Publish(context.Background(), contracts.Event{
+		Type:    contracts.EventModuleRegistered,
+		Source:  info.ID,
+		Payload: payload,
+	})
+}
+
+// publishModuleUnregistered publishes a module.unregistered event on the event bus.
+func (m *Manager) publishModuleUnregistered(info contracts.ModuleInfo) {
+	if m.bus == nil {
+		return
+	}
+	payload, _ := json.Marshal(contracts.ModuleUnregisteredPayload{
+		ModuleID: info.ID,
+	})
+	_ = m.bus.Publish(context.Background(), contracts.Event{
+		Type:    contracts.EventModuleUnregistered,
+		Source:  info.ID,
+		Payload: payload,
+	})
+}
+
+// publishModuleDegraded publishes a module.degraded event on the event bus.
+func (m *Manager) publishModuleDegraded(info contracts.ModuleInfo, err error) {
+	if m.bus == nil {
+		return
+	}
+	payload, _ := json.Marshal(contracts.ModuleDegradedPayload{
+		ModuleID: info.ID,
+		Error:    err.Error(),
+	})
+	_ = m.bus.Publish(context.Background(), contracts.Event{
+		Type:    contracts.EventModuleDegraded,
+		Source:  info.ID,
+		Payload: payload,
+	})
 }

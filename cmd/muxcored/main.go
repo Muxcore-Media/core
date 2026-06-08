@@ -22,7 +22,7 @@ import (
 	"github.com/Muxcore-Media/core/internal/storage"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 func main() {
@@ -59,6 +59,7 @@ func main() {
 	creds, err := grpcmesh.GRPCTransportCredentials(
 		cfg.GRPC.CertFile,
 		cfg.GRPC.KeyFile,
+		cfg.GRPC.CACertFile,
 		cfg.GRPC.MTLSEnabled,
 	)
 	if err != nil {
@@ -90,11 +91,12 @@ func main() {
 		"muxcore-"+cfg.GRPC.Addr,
 		cfg.GRPC.Addr,
 		cfg.Server.Addr,
+		cfg.GRPC.JoinToken,
 	)
 	discoveryGrpc.RegisterWithGRPC(grpcSrv)
-	mgr := module.NewManager(reg)
+	mgr := module.NewManager(reg, bus)
 
-	srv := api.NewServer(cfg.Server.Addr)
+	srv := api.NewServer(cfg.Server.Addr, cfg.Server.CertFile, cfg.Server.KeyFile)
 
 	store := storage.NewOrchestrator(reg)
 	if err := store.DiscoverStorage(); err != nil {
@@ -102,12 +104,15 @@ func main() {
 	}
 	store.DiscoverCache()
 	slog.Info("storage orchestrator ready", "providers", store.ProviderCount())
+	watchCancel := store.WatchModules(bus)
 
 	deps := contracts.Fabric{
 		Registry: reg,
 		EventBus: bus,
 		Routes:   srv,
 		Cluster:  nil,
+		WorkerPool: nil,
+		Audit:      nil,
 		Storage:  store,
 		Mesh:     meshClient,
 	}
@@ -119,6 +124,8 @@ func main() {
 	var wp contracts.WorkerPool
 	var al contracts.AuditLogger
 	var rl contracts.RateLimiterProvider
+	var authz contracts.Authorizer
+	var cp contracts.CallPolicyProvider
 	var hm contracts.HealthMonitor
 	for _, mod := range modules {
 		if c, ok := mod.(contracts.Cluster); ok {
@@ -133,6 +140,12 @@ func main() {
 		if r, ok := mod.(contracts.RateLimiterProvider); ok {
 			rl = r
 		}
+		if cpp, ok := mod.(contracts.CallPolicyProvider); ok {
+			cp = cpp
+		}
+		if az, ok := mod.(contracts.Authorizer); ok {
+			authz = az
+		}
 		if h, ok := mod.(contracts.HealthMonitor); ok {
 			hm = h
 		}
@@ -140,6 +153,11 @@ func main() {
 	deps.Cluster = cl
 	deps.WorkerPool = wp
 	deps.Audit = al
+	meshClient.SetCluster(cl)
+	if cp != nil {
+		meshClient.SetCallPolicy(cp)
+		slog.Info("call policy enabled")
+	}
 
 	// Re-inject discovered infrastructure deps into modules that need them.
 	// Modules implementing InfrastructureAware receive the actual
@@ -156,10 +174,23 @@ func main() {
 		slog.Info("rate limiter enabled", "module", "ratelimit-tokenbucket")
 	}
 
+	// Wire audit logger into API server
+	if al != nil {
+		srv.SetAuditLogger(al)
+		slog.Info("audit logger enabled")
+	}
+
+	// Wire authorizer into API server
+	if authz != nil {
+		srv.SetAuthorizer(authz)
+		slog.Info("authorizer enabled")
+	}
+
 	for _, mod := range modules {
 		if err := mgr.Register(mod, nil); err != nil {
 			slog.Error("register module", "id", mod.Info().ID, "error", err)
-			os.Exit(1)
+			cancel()
+			return
 		}
 	}
 
@@ -191,15 +222,15 @@ func main() {
 
 	go func() {
 		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
-			slog.Error("api server", "error", err)
-			os.Exit(1)
+			slog.Error("api server fatal", "error", err)
+			cancel()
 		}
 	}()
 
 	grpcLis, err := net.Listen("tcp", cfg.GRPC.Addr)
 	if err != nil {
 		slog.Error("grpc listen", "error", err)
-		os.Exit(1)
+		cancel()
 	}
 	go func() {
 		slog.Info("gRPC mesh listening", "addr", cfg.GRPC.Addr)
@@ -217,11 +248,7 @@ func main() {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				var dialOpts []grpc.DialOption
-				if creds != nil {
-					dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
-				} else {
-					dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-				}
+				dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
 				conn, err := grpc.NewClient(seedAddr, dialOpts...)
 				if err != nil {
 					slog.Warn("auto-join: dial seed node", "seed", seedAddr, "error", err)
@@ -229,7 +256,9 @@ func main() {
 				}
 				defer conn.Close()
 				client := discoveryv1.NewDiscoveryServiceClient(conn)
-				resp, err := client.Join(ctx, &discoveryv1.JoinRequest{Node: localNode})
+				md := metadata.New(map[string]string{"x-cluster-join-token": cfg.GRPC.JoinToken})
+				joinCtx := metadata.NewOutgoingContext(ctx, md)
+				resp, err := client.Join(joinCtx, &discoveryv1.JoinRequest{Node: localNode})
 				if err != nil {
 					slog.Warn("auto-join: join request failed", "seed", seedAddr, "error", err)
 					return
@@ -247,18 +276,18 @@ func main() {
 	if cl != nil {
 		if err := cl.Start(ctx); err != nil {
 			slog.Error("cluster start", "error", err)
-			os.Exit(1)
+			cancel()
 		}
 		slog.Info("cluster started", "node_id", cl.LocalNode().ID)
 	}
 
 	if err := mgr.InitAll(ctx); err != nil {
 		slog.Error("init modules", "error", err)
-		os.Exit(1)
+		cancel()
 	}
 	if err := mgr.StartAll(ctx); err != nil {
 		slog.Error("start modules", "error", err)
-		os.Exit(1)
+		cancel()
 	}
 
 	// Start health monitor if available
@@ -273,6 +302,7 @@ func main() {
 	slog.Info("MuxCore running", "addr", cfg.Server.Addr)
 
 	<-ctx.Done()
+	watchCancel()
 	slog.Info("shutting down...")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)

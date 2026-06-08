@@ -1,6 +1,9 @@
 package contracts
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Scheduler is implemented by scheduler modules (scheduler-cron, etc.)
 // to provide task scheduling. Core defines the contract; modules provide the driver.
@@ -18,7 +21,7 @@ type SchedulerTask struct {
 	Name     string
 	CronExpr string
 	Payload  []byte
-	Timeout  int
+	Timeout  time.Duration
 	Meta    map[string]any
 }
 
