@@ -89,12 +89,12 @@ func newMockRegistry() *mockRegistry {
 
 func (r *mockRegistry) addProvider(prov contracts.StorageProvider, id string) {
 	r.providers[id] = contracts.ModuleEntry{
-		Info:   contracts.ModuleInfo{ID: id, Kinds: []contracts.ModuleKind{contracts.ModuleKindStorage}},
+		Info:   contracts.ModuleInfo{ID: id, Roles: []string{"storage"}},
 		Module: prov.(contracts.Module),
 	}
 }
 
-func (r *mockRegistry) FindByKind(kind contracts.ModuleKind) []contracts.ModuleEntry {
+func (r *mockRegistry) FindByRole(role string) []contracts.ModuleEntry {
 	var result []contracts.ModuleEntry
 	for _, e := range r.providers {
 		result = append(result, e)
@@ -117,18 +117,13 @@ func (r *mockRegistry) ListAll() []contracts.ModuleEntry {
 	}
 	return result
 }
-func (r *mockRegistry) RegisterMediaSchema(schema contracts.MediaTypeSchema) error { return nil }
-func (r *mockRegistry) MediaSchema(mt contracts.MediaType) (contracts.MediaTypeSchema, bool) {
-	return contracts.MediaTypeSchema{}, false
-}
-func (r *mockRegistry) MediaSchemas() []contracts.MediaTypeSchema { return nil }
 
 type mockModule struct {
 	contracts.StorageProvider
 	info contracts.ModuleInfo
 }
 
-func (m *mockModule) Info() contracts.ModuleInfo   { return m.info }
+func (m *mockModule) Info() contracts.ModuleInfo    { return m.info }
 func (m *mockModule) Init(ctx context.Context) error  { return nil }
 func (m *mockModule) Start(ctx context.Context) error { return nil }
 func (m *mockModule) Stop(ctx context.Context) error  { return nil }
@@ -287,10 +282,6 @@ func TestOrchestrator_PolicyRouting(t *testing.T) {
 
 func TestOrchestrator_CacheHit(t *testing.T) {
 	t.Skip("Cache is now provided by cache-memory module; tested via module integration")
-}
-
-func TestOrchestrator_CacheMiss(t *testing.T) {
-	t.Skip("Cache is now provided by cache-memory module; cache integration tested via module integration tests")
 }
 
 func TestOrchestrator_CapabilityCheck(t *testing.T) {

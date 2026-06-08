@@ -8,6 +8,7 @@ import (
 	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"github.com/google/uuid"
 	"google.golang.org/grpc/status"
 )
 
@@ -17,7 +18,10 @@ type DiscoveryServer struct {
 	nodeID   string
 	grpcAddr string
 	httpAddr string
+	leaderID  string
+	clusterID string
 	members  map[string]*discoveryv1.NodeInfo
+	lastSeen map[string]time.Time
 	watchers map[chan *discoveryv1.ClusterEvent]struct{}
 }
 
@@ -27,6 +31,7 @@ func NewDiscoveryServer(nodeID, grpcAddr, httpAddr string) *DiscoveryServer {
 		grpcAddr: grpcAddr,
 		httpAddr: httpAddr,
 		members:  make(map[string]*discoveryv1.NodeInfo),
+		lastSeen: make(map[string]time.Time),
 		watchers: make(map[chan *discoveryv1.ClusterEvent]struct{}),
 	}
 }
@@ -42,9 +47,18 @@ func (s *DiscoveryServer) Join(ctx context.Context, req *discoveryv1.JoinRequest
 	}
 	s.mu.Lock()
 	s.members[node.GetId()] = node
+	s.lastSeen[node.GetId()] = time.Now()
+	if s.leaderID == "" {
+		s.leaderID = node.GetId()
+	}
+	// Generate cluster ID if this is the first node joining
+	if s.clusterID == "" {
+		s.clusterID = uuid.New().String()
+	}
 	event := &discoveryv1.ClusterEvent{
-		Type: discoveryv1.ClusterEvent_TYPE_NODE_JOINED,
-		Node: node,
+		Type:     discoveryv1.ClusterEvent_TYPE_NODE_JOINED,
+		Node:     node,
+		LeaderId: s.leaderID,
 	}
 	for ch := range s.watchers {
 		select {
@@ -52,14 +66,21 @@ func (s *DiscoveryServer) Join(ctx context.Context, req *discoveryv1.JoinRequest
 		default:
 		}
 	}
+	leaderID := s.leaderID
 	s.mu.Unlock()
+
 	s.mu.RLock()
 	memberList := make([]*discoveryv1.NodeInfo, 0, len(s.members))
 	for _, m := range s.members {
 		memberList = append(memberList, m)
 	}
 	s.mu.RUnlock()
-	return &discoveryv1.JoinResponse{Members: memberList}, nil
+
+	return &discoveryv1.JoinResponse{
+		Members:   memberList,
+		LeaderId:  leaderID,
+		ClusterId: s.clusterID,
+	}, nil
 }
 
 func (s *DiscoveryServer) Leave(ctx context.Context, req *discoveryv1.LeaveRequest) (*discoveryv1.LeaveResponse, error) {
@@ -67,10 +88,15 @@ func (s *DiscoveryServer) Leave(ctx context.Context, req *discoveryv1.LeaveReque
 	s.mu.Lock()
 	node, existed := s.members[nodeID]
 	delete(s.members, nodeID)
+	delete(s.lastSeen, nodeID)
+	if s.leaderID == nodeID {
+		s.leaderID = ""
+	}
 	if existed && node != nil {
 		event := &discoveryv1.ClusterEvent{
-			Type: discoveryv1.ClusterEvent_TYPE_NODE_LEFT,
-			Node: node,
+			Type:     discoveryv1.ClusterEvent_TYPE_NODE_LEFT,
+			Node:     node,
+			LeaderId: s.leaderID,
 		}
 		for ch := range s.watchers {
 			select {
@@ -84,8 +110,28 @@ func (s *DiscoveryServer) Leave(ctx context.Context, req *discoveryv1.LeaveReque
 }
 
 func (s *DiscoveryServer) Heartbeat(ctx context.Context, req *discoveryv1.HeartbeatRequest) (*discoveryv1.HeartbeatResponse, error) {
-	// Heartbeat received; node is alive.
-	return &discoveryv1.HeartbeatResponse{}, nil
+	nodeID := req.GetNodeId()
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "node ID is required")
+	}
+
+	s.mu.Lock()
+	s.lastSeen[nodeID] = time.Now()
+
+	if _, exists := s.members[nodeID]; !exists {
+		s.members[nodeID] = &discoveryv1.NodeInfo{
+			Id: nodeID,
+		}
+		if s.leaderID == "" {
+			s.leaderID = nodeID
+		}
+	}
+	leaderID := s.leaderID
+	s.mu.Unlock()
+
+	return &discoveryv1.HeartbeatResponse{
+		LeaderId: leaderID,
+	}, nil
 }
 
 func (s *DiscoveryServer) Members(ctx context.Context, req *discoveryv1.MembersRequest) (*discoveryv1.MembersResponse, error) {
@@ -94,8 +140,12 @@ func (s *DiscoveryServer) Members(ctx context.Context, req *discoveryv1.MembersR
 	for _, m := range s.members {
 		memberList = append(memberList, m)
 	}
+	leaderID := s.leaderID
 	s.mu.RUnlock()
-	return &discoveryv1.MembersResponse{Members: memberList}, nil
+	return &discoveryv1.MembersResponse{
+		Members:  memberList,
+		LeaderId: leaderID,
+	}, nil
 }
 
 func (s *DiscoveryServer) Watch(req *discoveryv1.MembersRequest, stream discoveryv1.DiscoveryService_WatchServer) error {
@@ -128,6 +178,27 @@ func (s *DiscoveryServer) LocalNode() *discoveryv1.NodeInfo {
 	}
 }
 
+func (s *DiscoveryServer) IsStale(nodeID string, maxAge time.Duration) bool {
+	s.mu.RLock()
+	last, ok := s.lastSeen[nodeID]
+	s.mu.RUnlock()
+	if !ok {
+		return true
+	}
+	return time.Since(last) > maxAge
+}
+
 func (s *DiscoveryServer) CleanupStale(maxAge time.Duration) {
-	_ = maxAge
+	cutoff := time.Now().Add(-maxAge)
+	s.mu.Lock()
+	for id, last := range s.lastSeen {
+		if last.Before(cutoff) {
+			delete(s.members, id)
+			delete(s.lastSeen, id)
+			if s.leaderID == id {
+				s.leaderID = ""
+			}
+		}
+	}
+	s.mu.Unlock()
 }

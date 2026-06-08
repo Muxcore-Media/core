@@ -2,27 +2,33 @@ package contracts
 
 import "context"
 
+// Scheduler is implemented by scheduler modules (scheduler-cron, etc.)
+// to provide task scheduling. Core defines the contract; modules provide the driver.
 type Scheduler interface {
-	Schedule(ctx context.Context, task Task) (string, error)
+	Schedule(ctx context.Context, task SchedulerTask) (string, error)
 	Cancel(ctx context.Context, taskID string) error
-	Status(ctx context.Context, taskID string) (TaskStatus, error)
+	Status(ctx context.Context, taskID string) (SchedulerTaskStatus, error)
 }
 
-type Task struct {
+// SchedulerTask is a unit of scheduled work.
+// Payload carries the task data. Meta carries scheduler-specific
+// or task-type-specific context that the scheduler module can interpret.
+type SchedulerTask struct {
 	ID       string
 	Name     string
 	CronExpr string
-	Handler  string
 	Payload  []byte
 	Timeout  int
+	Meta    map[string]any
 }
 
-type TaskStatus string
+// SchedulerTaskStatus represents the lifecycle of a scheduled task.
+type SchedulerTaskStatus string
 
 const (
-	TaskScheduled TaskStatus = "scheduled"
-	TaskRunning   TaskStatus = "running"
-	TaskCompleted TaskStatus = "completed"
-	TaskFailed    TaskStatus = "failed"
-	TaskCancelled TaskStatus = "cancelled"
+	SchedulerTaskScheduled SchedulerTaskStatus = "scheduled"
+	SchedulerTaskRunning   SchedulerTaskStatus = "running"
+	SchedulerTaskCompleted SchedulerTaskStatus = "completed"
+	SchedulerTaskFailed    SchedulerTaskStatus = "failed"
+	SchedulerTaskCancelled SchedulerTaskStatus = "cancelled"
 )

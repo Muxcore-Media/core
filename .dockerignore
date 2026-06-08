@@ -7,3 +7,13 @@ deploy
 docker-compose.yml
 Dockerfile
 .dockerignore
+*_test.go
+.github/
+.githooks/
+sdk/
+Makefile
+scripts/
+SECURITY.md
+buf.yaml
+coverage.*
+vendor/

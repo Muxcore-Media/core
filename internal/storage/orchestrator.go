@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sort"
 	"sync"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
@@ -15,7 +16,7 @@ import (
 // capability negotiation and user-defined policies.
 type Orchestrator struct {
 	mu        sync.RWMutex
-	registry  contracts.ServiceRegistry
+	registry  contracts.Registry
 	providers map[string]contracts.StorageProvider
 	policies  []RoutingPolicy
 	cache     contracts.CacheLayer
@@ -30,7 +31,7 @@ type RoutingPolicy struct {
 
 // NewOrchestrator creates an Orchestrator that uses the given registry for
 // provider discovery.
-func NewOrchestrator(reg contracts.ServiceRegistry) *Orchestrator {
+func NewOrchestrator(reg contracts.Registry) *Orchestrator {
 	return &Orchestrator{
 		registry:  reg,
 		providers: make(map[string]contracts.StorageProvider),
@@ -39,7 +40,7 @@ func NewOrchestrator(reg contracts.ServiceRegistry) *Orchestrator {
 
 // DiscoverStorage finds all registered storage modules and adds them to the pool.
 func (o *Orchestrator) DiscoverStorage() error {
-	entries := o.registry.FindByKind(contracts.ModuleKindStorage)
+	entries := o.registry.FindByRole("storage")
 	for _, entry := range entries {
 		provider, ok := entry.Module.(contracts.StorageProvider)
 		if !ok {
@@ -66,7 +67,7 @@ func (o *Orchestrator) DiscoverCache() {
 		}
 	}
 	// Also check storage modules that implement CacheLayer
-	entries = o.registry.FindByKind(contracts.ModuleKindStorage)
+	entries = o.registry.FindByRole("storage")
 	for _, entry := range entries {
 		if cache, ok := entry.Module.(contracts.CacheLayer); ok {
 			o.mu.Lock()
@@ -102,8 +103,14 @@ func (o *Orchestrator) route(key string) (contracts.StorageProvider, error) {
 			}
 		}
 	}
-	for _, prov := range o.providers {
-		return prov, nil
+	// Sort provider IDs for deterministic fallback selection
+	ids := make([]string, 0, len(o.providers))
+	for id := range o.providers {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	if len(ids) > 0 {
+		return o.providers[ids[0]], nil
 	}
 	return nil, fmt.Errorf("no storage provider available for key %q", key)
 }
@@ -113,7 +120,26 @@ func (o *Orchestrator) Put(ctx context.Context, key string, data io.Reader, size
 	if err != nil {
 		return err
 	}
-	return prov.Put(ctx, key, data, size)
+
+	// Read data into buffer for write-through cache.
+	buf, err := io.ReadAll(data)
+	if err != nil {
+		return err
+	}
+
+	if err := prov.Put(ctx, key, bytes.NewReader(buf), size); err != nil {
+		return err
+	}
+
+	// Write-through: update cache after successful Put.
+	o.mu.RLock()
+	cache := o.cache
+	o.mu.RUnlock()
+	if cache != nil {
+		_ = cache.Set(ctx, key, buf)
+	}
+
+	return nil
 }
 
 func (o *Orchestrator) Get(ctx context.Context, key string) (io.ReadCloser, error) {
@@ -138,7 +164,20 @@ func (o *Orchestrator) Delete(ctx context.Context, key string) error {
 	if err != nil {
 		return err
 	}
-	return prov.Delete(ctx, key)
+
+	if err := prov.Delete(ctx, key); err != nil {
+		return err
+	}
+
+	// Invalidate cache entry after successful Delete.
+	o.mu.RLock()
+	cache := o.cache
+	o.mu.RUnlock()
+	if cache != nil {
+		_ = cache.Invalidate(ctx, key)
+	}
+
+	return nil
 }
 
 func (o *Orchestrator) Exists(ctx context.Context, key string) (bool, error) {

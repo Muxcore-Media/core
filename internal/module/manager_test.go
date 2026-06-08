@@ -36,7 +36,7 @@ func TestManagerLifecycle(t *testing.T) {
 			ID:      "test-module",
 			Name:    "Test Module",
 			Version: "1.0.0",
-			Kinds:   []contracts.ModuleKind{contracts.ModuleKindProvider},
+			Roles:   []string{"provider"},
 		},
 	}
 
@@ -98,7 +98,7 @@ func TestDependencyOrder(t *testing.T) {
 				ID:      id,
 				Name:    id,
 				Version: "1.0.0",
-				Kinds:   []contracts.ModuleKind{contracts.ModuleKindProvider},
+				Roles:   []string{"provider"},
 			},
 		}
 	}
@@ -129,7 +129,7 @@ func TestCircularDependency(t *testing.T) {
 				ID:      id,
 				Name:    id,
 				Version: "1.0.0",
-				Kinds:   []contracts.ModuleKind{contracts.ModuleKindProvider},
+				Roles:   []string{"provider"},
 			},
 		}
 	}

@@ -3,19 +3,21 @@ package registry
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"sync"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 )
 
+// Registry is the core module registry. It stores modules indexed by ID,
+// maintains a capability index for fast lookup, and provides the
+// contracts.Registry interface for module discovery.
 type Registry struct {
-	mu          sync.RWMutex
-	modules     map[string]*Entry
-	capIndex    map[string]map[string]bool // capability -> moduleID -> true
-	schemaIndex map[contracts.MediaType]contracts.MediaTypeSchema
+	mu       sync.RWMutex
+	modules  map[string]*Entry
+	capIndex map[string]map[string]bool // capability -> moduleID -> true
 }
 
+// Entry holds a registered module and its metadata.
 type Entry struct {
 	Module contracts.Module
 	Info   contracts.ModuleInfo
@@ -24,27 +26,18 @@ type Entry struct {
 	Deps   []string
 }
 
+// New creates an empty Registry.
 func New() *Registry {
 	return &Registry{
-		modules:     make(map[string]*Entry),
-		capIndex:    make(map[string]map[string]bool),
-		schemaIndex: make(map[contracts.MediaType]contracts.MediaTypeSchema),
+		modules:  make(map[string]*Entry),
+		capIndex: make(map[string]map[string]bool),
 	}
 }
 
-// kindInterfaceMap maps each ModuleKind to the required contract interface.
-// Kinds not in this map have no required interface and skip validation.
-var kindInterfaceMap = map[contracts.ModuleKind]any{
-	contracts.ModuleKindAuth:         (*contracts.AuthProvider)(nil),
-	contracts.ModuleKindDownloader:   (*contracts.Downloader)(nil),
-	contracts.ModuleKindIndexer:      (*contracts.Indexer)(nil),
-	contracts.ModuleKindPlayback:     (*contracts.Playback)(nil),
-	contracts.ModuleKindMediaManager: (*contracts.MediaLibrary)(nil),
-	contracts.ModuleKindWorkflow:     (*contracts.WorkflowEngine)(nil),
-	contracts.ModuleKindStorage:      (*contracts.StorageProvider)(nil),
-	contracts.ModuleKindScheduler:    (*contracts.Scheduler)(nil),
-}
-
+// Register adds a module to the registry. Returns an error if the module ID
+// is empty, the module name is empty, or the ID is already registered.
+// Core performs no interface validation — that responsibility belongs to
+// consumer modules, contract repos, and the marketplace compatibility checker.
 func (r *Registry) Register(module contracts.Module, deps []string) error {
 	info := module.Info()
 	if info.ID == "" {
@@ -52,17 +45,6 @@ func (r *Registry) Register(module contracts.Module, deps []string) error {
 	}
 	if info.Name == "" {
 		return fmt.Errorf("module name is required")
-	}
-
-	// Validate that for each declared kind, the module implements the required interface.
-	for _, kind := range info.Kinds {
-		if iface, ok := kindInterfaceMap[kind]; ok {
-			// iface is a nil pointer to an interface type; dereference to get the interface type
-			ifaceType := reflect.TypeOf(iface).Elem()
-			if !reflect.TypeOf(module).Implements(ifaceType) {
-				return fmt.Errorf("module %q claims kind %q but does not implement the required interface", info.ID, kind)
-			}
-		}
 	}
 
 	r.mu.Lock()
@@ -90,6 +72,7 @@ func (r *Registry) Register(module contracts.Module, deps []string) error {
 	return nil
 }
 
+// Unregister removes a module and cleans up its capability index entries.
 func (r *Registry) Unregister(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -135,14 +118,14 @@ func (r *Registry) List() []*Entry {
 	return entries
 }
 
-func (r *Registry) ListByKind(kind contracts.ModuleKind) []*Entry {
+func (r *Registry) ListByRole(role string) []*Entry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	var entries []*Entry
 	for _, e := range r.modules {
-		for _, k := range e.Info.Kinds {
-			if k == kind {
+		for _, k := range e.Info.Roles {
+			if k == role {
 				entries = append(entries, e)
 				break
 			}
@@ -167,8 +150,8 @@ func (r *Registry) ListByCapability(cap string) []*Entry {
 	return nil
 }
 
-func (r *Registry) Discover(ctx context.Context, kind contracts.ModuleKind) []contracts.ModuleInfo {
-	entries := r.ListByKind(kind)
+func (r *Registry) Discover(ctx context.Context, role string) []contracts.ModuleInfo {
+	entries := r.ListByRole(role)
 	infos := make([]contracts.ModuleInfo, len(entries))
 	for i, e := range entries {
 		infos[i] = e.Info
@@ -252,9 +235,8 @@ func (r *Registry) Count() int {
 	return len(r.modules)
 }
 
-// FindByKind returns module entries for the given kind, implementing contracts.ServiceRegistry.
-func (r *Registry) FindByKind(kind contracts.ModuleKind) []contracts.ModuleEntry {
-	entries := r.ListByKind(kind)
+func (r *Registry) FindByRole(role string) []contracts.ModuleEntry {
+	entries := r.ListByRole(role)
 	result := make([]contracts.ModuleEntry, len(entries))
 	for i, e := range entries {
 		result[i] = contracts.ModuleEntry{Info: e.Info, State: e.State, Module: e.Module}
@@ -262,7 +244,6 @@ func (r *Registry) FindByKind(kind contracts.ModuleKind) []contracts.ModuleEntry
 	return result
 }
 
-// FindByCapability returns module entries that declare the given capability, implementing contracts.ServiceRegistry.
 func (r *Registry) FindByCapability(cap string) []contracts.ModuleEntry {
 	entries := r.ListByCapability(cap)
 	result := make([]contracts.ModuleEntry, len(entries))
@@ -272,7 +253,6 @@ func (r *Registry) FindByCapability(cap string) []contracts.ModuleEntry {
 	return result
 }
 
-// SupportsCapability checks whether a specific module supports the given capability, implementing contracts.ServiceRegistry.
 func (r *Registry) SupportsCapability(moduleID, cap string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -283,40 +263,6 @@ func (r *Registry) SupportsCapability(moduleID, cap string) bool {
 	return false
 }
 
-// RegisterMediaSchema registers a metadata schema for a media type, implementing contracts.ServiceRegistry.
-func (r *Registry) RegisterMediaSchema(schema contracts.MediaTypeSchema) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if _, exists := r.schemaIndex[schema.MediaType]; exists {
-		return fmt.Errorf("schema already registered for media type %q", schema.MediaType)
-	}
-	r.schemaIndex[schema.MediaType] = schema
-	return nil
-}
-
-// MediaSchema returns the schema for a media type, implementing contracts.ServiceRegistry.
-func (r *Registry) MediaSchema(mediaType contracts.MediaType) (contracts.MediaTypeSchema, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	schema, ok := r.schemaIndex[mediaType]
-	return schema, ok
-}
-
-// MediaSchemas returns all registered media type schemas, implementing contracts.ServiceRegistry.
-func (r *Registry) MediaSchemas() []contracts.MediaTypeSchema {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	schemas := make([]contracts.MediaTypeSchema, 0, len(r.schemaIndex))
-	for _, s := range r.schemaIndex {
-		schemas = append(schemas, s)
-	}
-	return schemas
-}
-
-// Resolve returns a module entry by ID, implementing contracts.ServiceRegistry.
 func (r *Registry) Resolve(id string) (contracts.ModuleEntry, error) {
 	entry, err := r.Get(id)
 	if err != nil {
@@ -325,7 +271,6 @@ func (r *Registry) Resolve(id string) (contracts.ModuleEntry, error) {
 	return contracts.ModuleEntry{Info: entry.Info, State: entry.State, Module: entry.Module}, nil
 }
 
-// ListAll returns every registered module, implementing contracts.ServiceRegistry.
 func (r *Registry) ListAll() []contracts.ModuleEntry {
 	entries := r.List()
 	result := make([]contracts.ModuleEntry, len(entries))

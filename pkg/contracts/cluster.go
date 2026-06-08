@@ -25,6 +25,12 @@ type Cluster interface {
 
 	// Health checks whether the cluster is operational.
 	Health(ctx context.Context) error
+
+	// FindNodesByLabel returns all nodes with the given label value.
+	FindNodesByLabel(label, value string) []NodeInfo
+
+	// FindNodesByModule returns all nodes running the given module.
+	FindNodesByModule(moduleID string) []NodeInfo
 }
 
 // NodeInfo describes a node in the cluster.

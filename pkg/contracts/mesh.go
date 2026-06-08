@@ -19,7 +19,7 @@ type MeshHandler interface {
 
 // ModuleMeshClient is the interface modules use to call other modules.
 // It abstracts whether the target is local (in-process) or remote (gRPC network call).
-// Modules receive this via ModuleDeps.Mesh.
+// Modules receive this via Fabric.Mesh.
 type ModuleMeshClient interface {
 	// Call invokes a method on the target module. If the target is registered
 	// locally, the call is dispatched in-process with zero network overhead.

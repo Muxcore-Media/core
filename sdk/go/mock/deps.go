@@ -6,11 +6,11 @@ import (
 	"github.com/Muxcore-Media/core/pkg/contracts"
 )
 
-// NewDeps creates a ModuleDeps with mock bus and registry for testing.
-func NewDeps() contracts.ModuleDeps {
+// NewDeps creates a Fabric with mock bus and registry for testing.
+func NewDeps() contracts.Fabric {
 	bus := NewEventBus()
 	reg := NewRegistry()
-	return contracts.ModuleDeps{
+	return contracts.Fabric{
 		Registry: reg,
 		EventBus: bus,
 		Routes:   &NoopRouteRegistrar{},

@@ -11,7 +11,6 @@ import (
 type Registry struct {
 	mu      sync.RWMutex
 	modules map[string]*mockEntry
-	schemas map[contracts.MediaType]contracts.MediaTypeSchema
 }
 
 type mockEntry struct {
@@ -19,10 +18,10 @@ type mockEntry struct {
 	Module contracts.Module
 }
 
+// NewRegistry creates an empty mock registry.
 func NewRegistry() *Registry {
 	return &Registry{
 		modules: make(map[string]*mockEntry),
-		schemas: make(map[contracts.MediaType]contracts.MediaTypeSchema),
 	}
 }
 
@@ -39,12 +38,13 @@ func (r *Registry) RegisterModule(module contracts.Module) error {
 	return nil
 }
 
-func (r *Registry) FindByKind(kind contracts.ModuleKind) []contracts.ModuleEntry {
+// FindByRole returns module entries matching the given role string.
+func (r *Registry) FindByRole(role string) []contracts.ModuleEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var result []contracts.ModuleEntry
 	for _, e := range r.modules {
-		for _, k := range e.Info.Kinds {
+		for _, k := range e.Info.Roles {
 			if k == kind {
 				result = append(result, contracts.ModuleEntry{
 					Info: e.Info, Module: e.Module,
@@ -56,6 +56,7 @@ func (r *Registry) FindByKind(kind contracts.ModuleKind) []contracts.ModuleEntry
 	return result
 }
 
+// FindByCapability returns module entries that declare the given capability.
 func (r *Registry) FindByCapability(cap string) []contracts.ModuleEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -73,6 +74,7 @@ func (r *Registry) FindByCapability(cap string) []contracts.ModuleEntry {
 	return result
 }
 
+// SupportsCapability checks whether a module supports the given capability.
 func (r *Registry) SupportsCapability(moduleID, cap string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -88,6 +90,7 @@ func (r *Registry) SupportsCapability(moduleID, cap string) bool {
 	return false
 }
 
+// Resolve returns a module entry by ID.
 func (r *Registry) Resolve(id string) (contracts.ModuleEntry, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -98,6 +101,7 @@ func (r *Registry) Resolve(id string) (contracts.ModuleEntry, error) {
 	return contracts.ModuleEntry{Info: e.Info, Module: e.Module}, nil
 }
 
+// ListAll returns every registered module.
 func (r *Registry) ListAll() []contracts.ModuleEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -106,33 +110,6 @@ func (r *Registry) ListAll() []contracts.ModuleEntry {
 		result = append(result, contracts.ModuleEntry{
 			Info: e.Info, Module: e.Module,
 		})
-	}
-	return result
-}
-
-func (r *Registry) RegisterMediaSchema(schema contracts.MediaTypeSchema) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, exists := r.schemas[schema.MediaType]; exists {
-		return fmt.Errorf("schema already registered for %q", schema.MediaType)
-	}
-	r.schemas[schema.MediaType] = schema
-	return nil
-}
-
-func (r *Registry) MediaSchema(mt contracts.MediaType) (contracts.MediaTypeSchema, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	s, ok := r.schemas[mt]
-	return s, ok
-}
-
-func (r *Registry) MediaSchemas() []contracts.MediaTypeSchema {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	var result []contracts.MediaTypeSchema
-	for _, s := range r.schemas {
-		result = append(result, s)
 	}
 	return result
 }

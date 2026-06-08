@@ -9,6 +9,6 @@ func Register(factory contracts.ModuleFactory) {
 }
 
 // LoadRegistered delegates to contracts.LoadRegistered.
-func LoadRegistered(deps contracts.ModuleDeps) []contracts.Module {
+func LoadRegistered(deps contracts.Fabric) []contracts.Module {
 	return contracts.LoadRegistered(deps)
 }

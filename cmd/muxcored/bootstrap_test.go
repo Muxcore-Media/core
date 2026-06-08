@@ -37,7 +37,7 @@ func TestBootstrapFullStack(t *testing.T) {
 	store.DiscoverStorage()
 	// Cache is now module-discovered
 
-	deps := contracts.ModuleDeps{
+	deps := contracts.Fabric{
 		Registry: reg,
 		EventBus: bus,
 		Routes:   srv,
@@ -76,7 +76,7 @@ func TestBootstrapFullStack(t *testing.T) {
 	}
 	t.Logf("registered %d modules", reg.Count())
 
-	authModules := reg.FindByKind(contracts.ModuleKindAuth)
+	authModules := reg.FindByRole("auth")
 	if len(authModules) > 0 {
 		provider, _ := authModules[0].Module.(contracts.AuthProvider)
 		srv.SetAuthFunc(func(r *http.Request) (*contracts.Session, error) {

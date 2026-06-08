@@ -15,12 +15,14 @@ import (
 	"github.com/Muxcore-Media/core/internal/config"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
+	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
 	"github.com/Muxcore-Media/core/internal/module"
 	_ "github.com/Muxcore-Media/core/internal/presets"
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/storage"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -52,7 +54,28 @@ func main() {
 
 	meshSrv := grpcmesh.NewServer()
 	meshClient := grpcmesh.NewClient(meshSrv)
-	grpcSrv := grpc.NewServer()
+
+	// Build gRPC server options with optional TLS credentials.
+	creds, err := grpcmesh.GRPCTransportCredentials(
+		cfg.GRPC.CertFile,
+		cfg.GRPC.KeyFile,
+		cfg.GRPC.MTLSEnabled,
+	)
+	if err != nil {
+		slog.Error("grpc tls", "error", err)
+		os.Exit(1)
+	}
+	var grpcOpts []grpc.ServerOption
+	if creds != nil {
+		grpcOpts = append(grpcOpts, grpc.Creds(creds))
+		slog.Info("gRPC TLS enabled",
+			"cert", cfg.GRPC.CertFile,
+			"mtls", cfg.GRPC.MTLSEnabled,
+		)
+	} else {
+		slog.Warn("gRPC TLS is disabled — all inter-node communication is plaintext. Set MUXCORE_GRPC_TLS_CERT and MUXCORE_GRPC_TLS_KEY to enable encryption.")
+	}
+	grpcSrv := grpc.NewServer(grpcOpts...)
 	meshSrv.RegisterWithGRPC(grpcSrv)
 
 
@@ -80,7 +103,7 @@ func main() {
 	store.DiscoverCache()
 	slog.Info("storage orchestrator ready", "providers", store.ProviderCount())
 
-	deps := contracts.ModuleDeps{
+	deps := contracts.Fabric{
 		Registry: reg,
 		EventBus: bus,
 		Routes:   srv,
@@ -118,6 +141,15 @@ func main() {
 	deps.WorkerPool = wp
 	deps.Audit = al
 
+	// Re-inject discovered infrastructure deps into modules that need them.
+	// Modules implementing InfrastructureAware receive the actual
+	// Cluster, WorkerPool, and AuditLogger after they have been discovered.
+	for _, mod := range modules {
+		if aware, ok := mod.(contracts.InfrastructureAware); ok {
+			aware.SetInfrastructure(deps.Cluster, deps.WorkerPool, deps.Audit)
+		}
+	}
+
 	// Wire rate limiter into API server
 	if rl != nil {
 		srv.SetRateLimiter(rl)
@@ -134,7 +166,7 @@ func main() {
 	slog.Info("module registry ready", "count", reg.Count())
 
 	// Wire auth
-	authModules := reg.FindByKind(contracts.ModuleKindAuth)
+	authModules := reg.FindByRole("auth")
 	if len(authModules) > 0 {
 		if provider, ok := authModules[0].Module.(contracts.AuthProvider); ok {
 			srv.SetAuthFunc(func(r *http.Request) (*contracts.Session, error) {
@@ -175,6 +207,42 @@ func main() {
 			slog.Error("grpc server", "error", err)
 		}
 	}()
+
+	// Auto-join seed nodes if configured.
+	if len(cfg.GRPC.SeedNodes) > 0 {
+		slog.Info("auto-joining seed nodes", "seeds", cfg.GRPC.SeedNodes)
+		localNode := discoveryGrpc.LocalNode()
+		for _, seed := range cfg.GRPC.SeedNodes {
+			go func(seedAddr string) {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				var dialOpts []grpc.DialOption
+				if creds != nil {
+					dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
+				} else {
+					dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+				}
+				conn, err := grpc.NewClient(seedAddr, dialOpts...)
+				if err != nil {
+					slog.Warn("auto-join: dial seed node", "seed", seedAddr, "error", err)
+					return
+				}
+				defer conn.Close()
+				client := discoveryv1.NewDiscoveryServiceClient(conn)
+				resp, err := client.Join(ctx, &discoveryv1.JoinRequest{Node: localNode})
+				if err != nil {
+					slog.Warn("auto-join: join request failed", "seed", seedAddr, "error", err)
+					return
+				}
+				slog.Info("auto-join: joined cluster via seed node",
+					"seed", seedAddr,
+					"cluster_id", resp.ClusterId,
+					"leader_id", resp.LeaderId,
+					"members", len(resp.Members),
+				)
+			}(seed)
+		}
+	}
 
 	if cl != nil {
 		if err := cl.Start(ctx); err != nil {

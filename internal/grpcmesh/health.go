@@ -2,6 +2,7 @@ package grpcmesh
 
 import (
 	"context"
+	"time"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	healthv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/health/v1"
@@ -12,11 +13,11 @@ import (
 // It exposes module and node health over gRPC, using the core registry.
 type HealthServer struct {
 	healthv1.UnimplementedHealthServiceServer
-	reg contracts.ServiceRegistry
+	reg contracts.Registry
 }
 
 // NewHealthServer creates a health gRPC server.
-func NewHealthServer(reg contracts.ServiceRegistry) *HealthServer {
+func NewHealthServer(reg contracts.Registry) *HealthServer {
 	return &HealthServer{reg: reg}
 }
 
@@ -77,12 +78,14 @@ func (s *HealthServer) checkNode() *healthv1.HealthCheckResponse {
 // Watch streams health status changes for a set of modules.
 func (s *HealthServer) Watch(req *healthv1.HealthWatchRequest, stream healthv1.HealthService_WatchServer) error {
 	// Streaming health watch: poll every 30s and push changes.
-	// Full implementation waits on events; for now, poll and push.
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-stream.Context().Done():
 			return nil
-		default:
+		case <-ticker.C:
 		}
 
 		for _, moduleID := range req.GetModuleIds() {
@@ -94,12 +97,6 @@ func (s *HealthServer) Watch(req *healthv1.HealthWatchRequest, stream healthv1.H
 		// Also send node-level health
 		if err := stream.Send(s.checkNode()); err != nil {
 			return err
-		}
-
-		// Wait before next poll (simple polling; event-driven watch planned)
-		select {
-		case <-stream.Context().Done():
-			return nil
 		}
 	}
 }

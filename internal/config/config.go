@@ -19,7 +19,11 @@ type Config struct {
 
 // GRPCConfig holds gRPC server settings.
 type GRPCConfig struct {
-	Addr string `json:"addr"` // listen address, e.g. ":9090"
+	Addr        string   `json:"addr"`         // listen address, e.g. ":9090"
+	CertFile    string   `json:"cert_file"`    // path to TLS certificate file
+	KeyFile     string   `json:"key_file"`     // path to TLS key file
+	MTLSEnabled bool     `json:"mtls_enabled"` // require mutual TLS
+	SeedNodes   []string `json:"seed_nodes"`   // comma-separated host:port of existing cluster nodes to join
 }
 
 // ServerConfig holds HTTP server settings.
@@ -111,6 +115,24 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("MUXCORE_CACHE_URL"); v != "" {
 		cfg.Cache.URL = v
+	}
+	if v := os.Getenv("MUXCORE_GRPC_TLS_CERT"); v != "" {
+		cfg.GRPC.CertFile = v
+	}
+	if v := os.Getenv("MUXCORE_GRPC_TLS_KEY"); v != "" {
+		cfg.GRPC.KeyFile = v
+	}
+	if v := os.Getenv("MUXCORE_GRPC_MTLS_ENABLED"); v != "" {
+		cfg.GRPC.MTLSEnabled = strings.ToLower(v) == "true" || v == "1"
+	}
+	if v := os.Getenv("MUXCORE_GRPC_SEED_NODES"); v != "" {
+		seeds := strings.Split(v, ",")
+		for _, s := range seeds {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				cfg.GRPC.SeedNodes = append(cfg.GRPC.SeedNodes, s)
+			}
+		}
 	}
 	// Normalize case-sensitive fields so consumers don't need to handle
 	// mixed case from env vars or config files.

@@ -11,7 +11,7 @@ type HealthMonitor interface {
 	// StartMonitoring begins periodic health checking. The monitor calls Health()
 	// on every registered module at the configured interval and publishes
 	// events on the bus for any degraded modules.
-	StartMonitoring(ctx context.Context, reg ServiceRegistry, bus EventBus) error
+	StartMonitoring(ctx context.Context, reg Registry, bus EventBus) error
 
 	// Stop gracefully stops the health monitor.
 	Stop(ctx context.Context) error

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/trace"
@@ -12,16 +14,24 @@ import (
 )
 
 type Server struct {
-	http          *http.Server
-	mux           *http.ServeMux
-	healthChecker func() map[string]error
-	AuthFunc      func(r *http.Request) (*contracts.Session, error)
-	rateLimiter   contracts.RateLimiterProvider
+	http             *http.Server
+	mux              *http.ServeMux
+	healthChecker    func() map[string]error
+	AuthFunc         func(r *http.Request) (*contracts.Session, error)
+	rateLimiter      contracts.RateLimiterProvider
+	authorizer       contracts.Authorizer
+	auditLogger      contracts.AuditLogger
+	routePermissions map[string]RoutePermission
+	publicPaths      map[string]bool
 }
 
 func NewServer(addr string) *Server {
 	mux := http.NewServeMux()
-	s := &Server{mux: mux}
+	s := &Server{
+		mux:              mux,
+		publicPaths:      map[string]bool{"/health": true},
+		routePermissions: make(map[string]RoutePermission),
+	}
 
 	mux.HandleFunc("/health", s.handleHealth)
 
@@ -71,15 +81,48 @@ func (s *Server) SetRateLimiter(rl contracts.RateLimiterProvider) {
 	s.rebuildChain()
 }
 
+// SetAuthorizer sets the authorizer for permission checks in the middleware chain.
+func (s *Server) SetAuthorizer(a contracts.Authorizer) {
+	s.authorizer = a
+	s.rebuildChain()
+}
+// SetAuditLogger sets the audit logger for recording authenticated requests.
+func (s *Server) SetAuditLogger(a contracts.AuditLogger) {
+	s.auditLogger = a
+	s.rebuildChain()
+}
+
+// RouteRequire registers a permission requirement for a specific route.
+// The route must match an HTTP path pattern registered with Handle/HandleFunc.
+// The authorizer's Can() method will be called with the given action and resource
+// after authentication for all requests to this route.
+func (s *Server) RouteRequire(pattern, action, resource string) {
+	s.routePermissions[pattern] = RoutePermission{Action: action, Resource: resource}
+	s.rebuildChain()
+}
+
+// AddPublicPath adds a path that should skip authentication entirely.
+// Requests to public paths are not required to carry a valid session.
+func (s *Server) AddPublicPath(path string) {
+	s.publicPaths[path] = true
+	s.rebuildChain()
+}
+
 // rebuildChain constructs the middleware chain.
 func (s *Server) rebuildChain() {
 	var h http.Handler = s.mux
 	h = recoveryMiddleware(h)
 	if s.rateLimiter != nil && s.rateLimiter.Enabled() {
-		h = rateLimitMiddleware(s.rateLimiter)(h)
+		h = rateLimitMiddleware(s.rateLimiter, s.publicPaths)(h)
 	}
 	if s.AuthFunc != nil {
-		h = authMiddleware(s.AuthFunc)(h)
+		h = authMiddleware(s.AuthFunc, s.publicPaths)(h)
+	}
+	if s.authorizer != nil {
+		h = authzMiddleware(s.authorizer, s.routePermissions)(h)
+	}
+	if s.auditLogger != nil {
+		h = auditMiddleware(s.auditLogger, s.publicPaths)(h)
 	}
 	h = withLogging(h)
 	h = trace.HTTPMiddleware(h)
@@ -156,10 +199,10 @@ func withLogging(next http.Handler) http.Handler {
 	})
 }
 
-func rateLimitMiddleware(limiter contracts.RateLimiterProvider) func(http.Handler) http.Handler {
+func rateLimitMiddleware(limiter contracts.RateLimiterProvider, publicPaths map[string]bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/health" {
+			if publicPaths[r.URL.Path] {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -178,17 +221,39 @@ func rateLimitMiddleware(limiter contracts.RateLimiterProvider) func(http.Handle
 }
 
 func extractClientIP(r *http.Request) string {
+	// Only trust the rightmost IP in X-Forwarded-For (the immediate upstream proxy).
+	// Validate it with net.ParseIP to prevent IP spoofing for rate limit bypass.
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return xff
-	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
-	host := r.RemoteAddr
-	for i := len(host) - 1; i >= 0; i-- {
-		if host[i] == 58 {
-			return host[:i]
+		if ip := parseRightmostXFF(xff); ip != "" {
+			return ip
 		}
 	}
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		if ip := net.ParseIP(xri); ip != nil {
+			return ip.String()
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
 	return host
+}
+
+// parseRightmostXFF extracts and validates the rightmost IP from an
+// X-Forwarded-For header value. Returns the IP string, or "" if invalid.
+func parseRightmostXFF(xff string) string {
+	// Split on commas; the rightmost entry is the immediate upstream proxy.
+	parts := strings.Split(xff, ",")
+	if len(parts) == 0 {
+		return ""
+	}
+	rightmost := strings.TrimSpace(parts[len(parts)-1])
+	if rightmost == "" {
+		return ""
+	}
+	if ip := net.ParseIP(rightmost); ip != nil {
+		return ip.String()
+	}
+	return ""
 }
