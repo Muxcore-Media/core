@@ -16,6 +16,8 @@
 > stable and may change or break without notice. Do not run it on production
 > data or in environments where data loss, downtime, or unexpected behavior
 > is unacceptable.
+>
+> *Rome wasn't built in a day, and neither will MuxCore.*
 
 **A distributed fabric for media orchestration. Core is the loom. Everything else is a thread you weave in.**
 
