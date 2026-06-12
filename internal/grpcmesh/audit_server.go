@@ -84,7 +84,7 @@ func (s *AuditServer) Export(req *auditv1.AuditExportRequest, stream auditv1.Aud
 	if err != nil {
 		return status.Errorf(codes.Unavailable, "audit export: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	buf := make([]byte, 64*1024) // 64KB chunks
 	seq := int32(0)

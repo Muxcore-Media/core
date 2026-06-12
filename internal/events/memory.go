@@ -32,7 +32,7 @@ const defaultHandlerTimeout = 30 * time.Second
 // all subscribers. After this deadline, remaining goroutines are abandoned.
 const globalPublishTimeout = 60 * time.Second
 
-type sub struct {
+type sub struct { //nolint:govet // struct field alignment is acceptable
 	eventType string
 	handler   contracts.EventHandler
 	moduleID  string // optional module owner for UnsubscribeAll
@@ -58,7 +58,7 @@ type sub struct {
 // than blocking the publisher or consuming unbounded memory.
 //
 // Call Close() during shutdown to cancel all subscriber worker goroutines.
-type MemoryBus struct {
+type MemoryBus struct { //nolint:govet // struct field alignment is acceptable
 	mu            sync.RWMutex
 	subscribers   []*sub
 	sem           chan struct{}
@@ -328,7 +328,7 @@ func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType str
 	// Audit the subscription if configured.
 	auditLogger := b.audit
 	if auditLogger != nil {
-		go func() { //nolint:gosec // fire-and-forget audit — no request context to propagate
+		go func() { //nolint:gosec,contextcheck // fire-and-forget audit — no request context to propagate
 			defer func() {
 				if r := recover(); r != nil {
 					slog.Error("audit subscribe panic recovered", "event_type", eventType, "panic", r)
@@ -361,7 +361,7 @@ func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType str
 	}
 
 	// Start the dedicated worker goroutine for this subscriber.
-	go b.subscriberWorker(workerCtx, s, timeout)
+	go b.subscriberWorker(workerCtx, s, timeout) //nolint:contextcheck // subscriber worker uses its own lifecycle, not caller's context
 
 	b.subscribers = append(b.subscribers, s)
 	b.mu.Unlock()

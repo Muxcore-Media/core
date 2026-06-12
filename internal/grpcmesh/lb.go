@@ -45,7 +45,7 @@ func NewRandomStrategy() *RandomStrategy {
 		seed = 42 // fallback; should never happen on a healthy system
 	}
 	return &RandomStrategy{
-		r: rand.New(rand.NewSource(seed)),
+		r: rand.New(rand.NewSource(seed)), //nolint:gosec // non-crypto use for load balancing randomization
 	}
 }
 

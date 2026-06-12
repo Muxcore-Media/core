@@ -39,7 +39,7 @@ func (o *Orchestrator) Stream(ctx context.Context, key string, offset, length in
 	if rc == nil {
 		return nil, fmt.Errorf("stream fallback: provider returned nil reader without error")
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	// Read the content into memory capped at MaxObjectSize. The context
 	// deadline is enforced by tctx which controls the Get call above.

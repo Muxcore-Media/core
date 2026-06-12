@@ -17,8 +17,8 @@ import (
 
 const (
 	defaultCleanupInterval = 5 * time.Minute
-	defaultFilePerm        = 0600
-	defaultDirPerm         = 0700
+	defaultFilePerm        = 0o600
+	defaultDirPerm         = 0o700
 )
 
 type entry struct {

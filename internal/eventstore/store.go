@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	defaultFilePerm = 0600
-	defaultDirPerm  = 0700
+	defaultFilePerm = 0o600
+	defaultDirPerm  = 0o700
 	subscribePoll   = 500 * time.Millisecond
 	seqBits         = 20
 )
@@ -201,7 +201,7 @@ func (s *Store) removeFile(ss *streamState, seq int64) {
 	if ss.dir == "" {
 		return
 	}
-	os.Remove(filepath.Join(ss.dir, seqFilename(seq)))
+	_ = os.Remove(filepath.Join(ss.dir, seqFilename(seq)))
 }
 
 // Read implements contracts.EventStore.

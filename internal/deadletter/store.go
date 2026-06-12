@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	defaultFilePerm = 0600
-	defaultDirPerm  = 0700
+	defaultFilePerm = 0o600
+	defaultDirPerm  = 0o700
 	maxFileEntries  = 10000
 )
 

@@ -371,7 +371,7 @@ func (m *Manager) resolveWithInstance(repoURL, version, instanceID string, confi
 	moduleID := ModuleIDFromRepoWithInstance(repoURL, instanceID)
 
 	cachedPath := filepath.Join(m.cacheDir, moduleID, version, "muxcore-module")
-	if _, err := os.Stat(cachedPath); err == nil {
+	if _, err2 := os.Stat(cachedPath); err2 == nil {
 		slog.Info("module found in cache", "id", moduleID, "version", version)
 		return &ModuleBinary{ID: moduleID, Version: version, Path: cachedPath, Repo: repoURL, InstanceID: instanceID}, nil
 	}
@@ -379,21 +379,21 @@ func (m *Manager) resolveWithInstance(repoURL, version, instanceID string, confi
 	slog.Info("module not in cache, building from source", "id", moduleID, "repo", repoURL)
 
 	buildDir := filepath.Join(os.TempDir(), "muxcore-build", moduleID)
-	if err := os.RemoveAll(buildDir); err != nil {
-		return nil, fmt.Errorf("clean build dir: %w", err)
+	if err2 := os.RemoveAll(buildDir); err2 != nil {
+		return nil, fmt.Errorf("clean build dir: %w", err2)
 	}
 
 	cloneCmd := exec.Command("git", "clone", "--depth", "1", "--branch", version, repoURL, buildDir) //nolint:gosec,noctx // repoURL/version from config; intended to build arbitrary modules
-	if out, err := cloneCmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("clone %s@%s: %w\n%s", repoURL, version, err, out)
+	if out, err2 := cloneCmd.CombinedOutput(); err2 != nil {
+		return nil, fmt.Errorf("clone %s@%s: %w\n%s", repoURL, version, err2, out)
 	}
 
 	// Run contract reconciliation if the module declares non-canonical contracts.
 	// Reads muxcore.json for a "contracts" field, checks structural compatibility
 	// against canonical Muxcore-Media contract repos, and applies go.mod replace
 	// directives to normalize imports. No-op for modules using canonical contracts.
-	if err := m.reconcileContracts(buildDir); err != nil {
-		return nil, fmt.Errorf("contract reconciliation for %s: %w", moduleID, err)
+	if err2 := m.reconcileContracts(buildDir); err2 != nil {
+		return nil, fmt.Errorf("contract reconciliation for %s: %w", moduleID, err2)
 	}
 
 	// Pre-build source scan: detect dangerous patterns before compilation.
@@ -421,7 +421,7 @@ func (m *Manager) resolveWithInstance(repoURL, version, instanceID string, confi
 	}
 
 	cacheBinDir := filepath.Join(m.cacheDir, moduleID, version)
-	if err := os.MkdirAll(cacheBinDir, 0700); err != nil {
+	if err := os.MkdirAll(cacheBinDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create cache dir: %w", err)
 	}
 	cacheBinPath := filepath.Join(cacheBinDir, "muxcore-module")
@@ -429,7 +429,7 @@ func (m *Manager) resolveWithInstance(repoURL, version, instanceID string, confi
 		data, readErr := os.ReadFile(binPath) //nolint:gosec // binPath is internally constructed
 		if readErr != nil {
 			slog.Warn("failed to read built module binary for cache", "id", moduleID, "error", readErr)
-		} else if err := os.WriteFile(cacheBinPath, data, 0600); err != nil { //nolint:gosec // cacheBinPath is internally constructed
+		} else if err := os.WriteFile(cacheBinPath, data, 0o600); err != nil { //nolint:gosec // cacheBinPath is internally constructed
 			slog.Warn("failed to cache module binary", "id", moduleID, "error", err)
 		}
 	}
@@ -635,7 +635,7 @@ func (m *Manager) watchProcess(ctx context.Context, cmd *exec.Cmd, bin *ModuleBi
 		}
 	}()
 	certDir := filepath.Join(os.TempDir(), "muxcore-certs", bin.ID)
-	defer os.RemoveAll(certDir)
+	defer func() { _ = os.RemoveAll(certDir) }()
 
 	// Build base command args reused across restarts. TLS cert files persist
 	// until the defer cleanup above runs (on final exit, not per-restart).
@@ -1130,12 +1130,12 @@ func scanNonGoFile(path string, d fs.DirEntry, buildDir string, policy ScanPolic
 // pattern names. Which patterns are rejected (error) vs warned depends on
 // the given ScanPolicy. DefaultScanPolicy rejects unsafe, cgo, and
 // Go generate directives (secure by default).
-func scanModuleSource(buildDir string, policy ScanPolicy) ([]string, error) {
+func scanModuleSource(buildDir string, policy ScanPolicy) ([]string, error) { //nolint:gocyclo // source scanning has many unavoidable pattern checks
 	var found []string
 
 	walkErr := filepath.WalkDir(buildDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip unreadable files
+			return nil //nolint:nilerr // WalkDir callback returns nil to skip unreadable and continue
 		}
 		if d.IsDir() {
 			return nil
@@ -1155,7 +1155,7 @@ func scanModuleSource(buildDir string, policy ScanPolicy) ([]string, error) {
 		fset := token.NewFileSet()
 		f, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
 		if parseErr != nil {
-			return nil // skip files that don't parse (generated stubs, etc.)
+			return nil //nolint:nilerr // WalkDir callback returns nil to skip unparseable and continue
 		}
 
 		if policy.RejectUnsafe || policy.RejectCGO {
@@ -1283,7 +1283,7 @@ var validInstanceID = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 // Used for sanitization: strips dangerous characters from instance IDs.
 var invalidInstanceIDChars = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 
-func ModuleIDFromRepoWithInstance(repoURL string, instanceID string) string {
+func ModuleIDFromRepoWithInstance(repoURL, instanceID string) string {
 	u, err := url.Parse(strings.TrimSuffix(repoURL, ".git"))
 	if err != nil || u.Path == "" {
 		return ""

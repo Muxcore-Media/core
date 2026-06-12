@@ -85,12 +85,12 @@ func (s *EventServer) Publish(ctx context.Context, req *eventsv1.PublishRequest)
 	}
 
 	// Preserve proto fields that contracts.Event does not have as top-level fields.
-	metadata := pb.GetMetadata()
-	if metadata == nil {
-		metadata = make(map[string]string)
+	md := pb.GetMetadata()
+	if md == nil {
+		md = make(map[string]string)
 	}
 	if sourceNode := pb.GetSourceNode(); sourceNode != "" {
-		metadata["source_node"] = sourceNode
+		md["source_node"] = sourceNode
 	}
 
 	event := contracts.Event{
@@ -98,7 +98,7 @@ func (s *EventServer) Publish(ctx context.Context, req *eventsv1.PublishRequest)
 		Type:      pb.GetType(),
 		Source:    pb.GetSource(),
 		Payload:   pb.GetPayload(),
-		Metadata:  metadata,
+		Metadata:  md,
 		Timestamp: time.Unix(pb.GetTimestamp(), 0),
 	}
 
@@ -189,12 +189,12 @@ func (s *EventServer) Subscribe(req *eventsv1.SubscribeRequest, stream eventsv1.
 func (s *EventServer) Request(ctx context.Context, req *eventsv1.RequestEvent) (*eventsv1.Event, error) {
 	pb := req.GetEvent()
 
-	metadata := pb.GetMetadata()
-	if metadata == nil {
-		metadata = make(map[string]string)
+	md := pb.GetMetadata()
+	if md == nil {
+		md = make(map[string]string)
 	}
 	if sourceNode := pb.GetSourceNode(); sourceNode != "" {
-		metadata["source_node"] = sourceNode
+		md["source_node"] = sourceNode
 	}
 
 	event := contracts.Event{
@@ -202,7 +202,7 @@ func (s *EventServer) Request(ctx context.Context, req *eventsv1.RequestEvent) (
 		Type:      pb.GetType(),
 		Source:    pb.GetSource(),
 		Payload:   pb.GetPayload(),
-		Metadata:  metadata,
+		Metadata:  md,
 		Timestamp: time.Unix(pb.GetTimestamp(), 0),
 	}
 

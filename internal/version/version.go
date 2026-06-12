@@ -51,7 +51,7 @@ func CheckModule(moduleID, minCoreVersion string) error {
 	core, err := parseSemVer(coreVer)
 	if err != nil {
 		// Can't parse core version — allow (shouldn't happen with linker-set versions).
-		return nil
+		return nil //nolint:nilerr // version parse failure is not fatal, return nil (no error)
 	}
 
 	mod, err := parseSemVer(minCoreVersion)

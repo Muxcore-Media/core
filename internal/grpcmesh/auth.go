@@ -20,7 +20,7 @@ import (
 // authFailureRecord tracks gRPC authentication failures per caller identity
 // for brute-force protection, analogous to the HTTP auth failure tracking.
 // Uses cumulative counts with exponential backoff.
-type grpcAuthFailureRecord struct {
+type grpcAuthFailureRecord struct { //nolint:govet // struct field alignment is acceptable
 	count         int
 	totalFailures int
 	blockedUntil  time.Time

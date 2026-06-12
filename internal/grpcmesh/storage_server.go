@@ -110,7 +110,7 @@ func (s *StorageServer) Put(stream storagev1.StorageService_PutServer) error {
 				errCh <- err
 			}
 		}()
-		defer pw.Close()
+		defer func() { _ = pw.Close() }()
 		// Write first chunk
 		chunk := firstReq.Chunk
 		if len(chunk) > maxChunkSize {
@@ -152,7 +152,7 @@ func (s *StorageServer) Put(stream storagev1.StorageService_PutServer) error {
 
 	// Store via orchestrator.
 	storeErr := s.store.Put(stream.Context(), key, pr, totalSize)
-	pr.Close()
+	_ = pr.Close()
 	if storeErr != nil {
 		return status.Errorf(codes.Internal, "store put: %v", storeErr)
 	}
@@ -199,7 +199,7 @@ func (s *StorageServer) Get(req *storagev1.GetRequest, stream storagev1.StorageS
 	}
 	defer func() {
 		if reader != nil {
-			reader.Close()
+			_ = reader.Close()
 		}
 	}()
 
@@ -314,7 +314,7 @@ func (s *StorageServer) Capabilities(ctx context.Context, req *storagev1.Capabil
 	caps, err := s.store.CapabilityCheck(ctx, "")
 	if err != nil {
 		// If CapabilityCheck fails, return empty capabilities.
-		return &storagev1.CapabilitiesResponse{}, nil
+		return &storagev1.CapabilitiesResponse{}, nil //nolint:nilerr // capability check failure is not fatal, return empty set
 	}
 	if caps == nil {
 		caps = []string{}

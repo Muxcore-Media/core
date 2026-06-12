@@ -354,7 +354,7 @@ func RunConfigReloadLoop(ctx context.Context, sighupCh <-chan os.Signal, configP
 				"changes": changes,
 			})
 			eventCtx := callerid.Set(ctx, "system:muxcored")
-			bus.Publish(eventCtx, contracts.Event{
+			_ = bus.Publish(eventCtx, contracts.Event{
 				Type:    contracts.EventConfigReloaded,
 				Source:  "muxcored",
 				Payload: payload,
@@ -378,7 +378,7 @@ func RunClusterEventListener(ctx context.Context, cluster contracts.Cluster, nod
 		for {
 			select {
 			case <-ctx.Done():
-				workerPool.Shutdown(context.Background())
+				_ = workerPool.Shutdown(context.Background())
 				return
 			case evt, ok := <-cluster.Events():
 				if !ok {
@@ -463,8 +463,8 @@ func InitHealthProbes(ctx context.Context, bus *events.MemoryBus, discoveryGrpc 
 			if err != nil {
 				return errors.New("audit log directory not writable")
 			}
-			f.Close()
-			os.Remove(f.Name())
+			_ = f.Close()
+			_ = os.Remove(f.Name())
 		}
 		return nil
 	})
@@ -486,7 +486,7 @@ func InitHealthProbes(ctx context.Context, bus *events.MemoryBus, discoveryGrpc 
 }
 
 // LoadAndSpawnModules fetches a tag from the spool and spawns all modules.
-func LoadAndSpawnModules(ctx context.Context, tagName string, spoolURL string, modMgr *modulemgr.Manager, peerAddrs []string) error {
+func LoadAndSpawnModules(ctx context.Context, tagName, spoolURL string, modMgr *modulemgr.Manager, peerAddrs []string) error {
 	if tagName == "" {
 		return nil
 	}
@@ -583,7 +583,7 @@ func AutoJoinSeedNodes(ctx context.Context, cfg *config.Config, creds credential
 				slog.Warn("auto-join: dial seed node", "seed", seedAddr, "error", err)
 				return
 			}
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			client := discoveryv1.NewDiscoveryServiceClient(conn)
 			resp, err := client.Join(joinCtx, &discoveryv1.JoinRequest{Node: localNode})
 			if err != nil {

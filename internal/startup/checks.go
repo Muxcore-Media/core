@@ -110,18 +110,18 @@ func checkModuleCache(_ *config.Config) Result {
 	}
 	cacheDir := filepath.Join(home, ".muxcore", "modules")
 
-	if err := os.MkdirAll(cacheDir, 0700); err != nil {
-		r.Fatal = fmt.Errorf("module cache directory %q is not writable: %w", cacheDir, err)
+	if err2 := os.MkdirAll(cacheDir, 0o700); err2 != nil {
+		r.Fatal = fmt.Errorf("module cache directory %q is not writable: %w", cacheDir, err2)
 		return r
 	}
 
-	f, err := os.CreateTemp(cacheDir, ".startup-check-*")
-	if err != nil {
-		r.Fatal = fmt.Errorf("cannot write to module cache directory %q: %w", cacheDir, err)
+	f, err2 := os.CreateTemp(cacheDir, ".startup-check-*")
+	if err2 != nil {
+		r.Fatal = fmt.Errorf("cannot write to module cache directory %q: %w", cacheDir, err2)
 		return r
 	}
-	f.Close()
-	os.Remove(f.Name())
+	_ = f.Close()
+	_ = os.Remove(f.Name())
 
 	return r
 }
@@ -136,7 +136,7 @@ func checkAuditLogDir(cfg *config.Config) Result {
 
 	dir := filepath.Dir(cfg.Audit.Path)
 
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		r.Fatal = fmt.Errorf("audit log directory %q is not writable: %w", dir, err)
 		return r
 	}
@@ -146,8 +146,8 @@ func checkAuditLogDir(cfg *config.Config) Result {
 		r.Fatal = fmt.Errorf("cannot write to audit log directory %q: %w", dir, err)
 		return r
 	}
-	f.Close()
-	os.Remove(f.Name())
+	_ = f.Close()
+	_ = os.Remove(f.Name())
 
 	return r
 }
@@ -192,7 +192,7 @@ func checkConfigFilePerms(cfg *config.Config, configPath string) Result {
 	}
 
 	// Check for world-readable or group-readable permissions (mode & 0077).
-	if info.Mode().Perm()&0077 != 0 {
+	if info.Mode().Perm()&0o077 != 0 {
 		r.Warning = fmt.Sprintf("config file %q has overly permissive permissions %o — recommend 0600 or 0640",
 			configPath, info.Mode().Perm())
 	}
@@ -222,7 +222,7 @@ func checkTLSCredsPerms(cfg *config.Config) Result {
 		}
 		// TLS private keys should be owner-only (0600 or less).
 		// Anything readable by group or others is a security risk.
-		if info.Mode().Perm()&0077 != 0 {
+		if info.Mode().Perm()&0o077 != 0 {
 			r.Warning = fmt.Sprintf("TLS key file %q has mode %o — private keys should be 0600 or 0400",
 				kf.path, info.Mode().Perm())
 		}

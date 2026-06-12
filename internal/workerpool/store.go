@@ -31,7 +31,7 @@ type FileStore struct {
 // NewFileStore creates a FileStore rooted at dir. The directory is created
 // if it does not exist. Returns an error if the directory cannot be created.
 func NewFileStore(dir string) (*FileStore, error) {
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("workerpool: create task store dir %q: %w", dir, err)
 	}
 	return &FileStore{dir: dir}, nil
@@ -48,7 +48,7 @@ func (f *FileStore) Save(_ context.Context, task *contracts.WorkerTask) error {
 	if err != nil {
 		return fmt.Errorf("workerpool: marshal task %q: %w", task.ID, err)
 	}
-	if err := os.WriteFile(path, data, 0600); err != nil { //nolint:gosec // task data directory owned by core
+	if err := os.WriteFile(path, data, 0o600); err != nil { //nolint:gosec // task data directory owned by core
 		return fmt.Errorf("workerpool: write task %q: %w", task.ID, err)
 	}
 	return nil

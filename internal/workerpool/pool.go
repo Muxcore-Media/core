@@ -28,7 +28,7 @@ const (
 // Pool implements contracts.WorkerPool with in-memory storage.
 // It is safe for concurrent use and can be optionally backed by a
 // storage provider for persistence across restarts.
-type Pool struct {
+type Pool struct { //nolint:govet // struct field alignment is acceptable
 	mu               sync.RWMutex
 	tasks            map[string]*contracts.WorkerTask
 	nodeID           string
@@ -202,8 +202,8 @@ func (p *Pool) reapStaleTasks(ctx context.Context) {
 		task.Status = contracts.WorkerTaskStatusFailed
 		task.Error = "heartbeat timeout"
 		task.CompletedAt = time.Now()
-		ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
-		p.persistTask(ctx, task)
+		persistCtx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+		p.persistTask(persistCtx, task) //nolint:contextcheck // background persist — don't inherit request context
 		cancel()
 		reaped++
 	}
@@ -231,8 +231,8 @@ func (p *Pool) FailNodeTasks(ctx context.Context, nodeID string) int {
 			task.Status = contracts.WorkerTaskStatusFailed
 			task.Error = fmt.Sprintf("node %q left the cluster", nodeID)
 			task.CompletedAt = time.Now()
-			ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
-			p.persistTask(ctx, task)
+			persistCtx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+			p.persistTask(persistCtx, task) //nolint:contextcheck // background persist — don't inherit request context
 			cancel()
 			count++
 		}

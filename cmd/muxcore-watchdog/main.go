@@ -68,7 +68,7 @@ func main() {
 	}
 }
 
-type watchdog struct {
+type watchdog struct { //nolint:govet // struct field alignment is acceptable for this type
 	modulePath     string
 	moduleID       string
 	addrs          []string
@@ -152,9 +152,9 @@ func (w *watchdog) killModule() {
 		return
 	}
 	slog.Info("watchdog: stopping module", "module", w.moduleID, "pid", cmd.Process.Pid)
-	cmd.Process.Signal(os.Interrupt)
+	_ = cmd.Process.Signal(os.Interrupt)
 	go func() {
-		cmd.Wait()
+		_ = cmd.Wait()
 	}()
 }
 
@@ -208,13 +208,13 @@ func (w *watchdog) checkCore(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Write HTTP/2 connection preface to verify this is a gRPC server.
 	// A gRPC server responds with a SETTINGS frame; anything else means
 	// the port is open but not serving gRPC.
 	preface := []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
-	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
 	if _, err := conn.Write(preface); err != nil {
 		return false
 	}

@@ -505,7 +505,7 @@ func TestReapStaleTasks_Healthy(t *testing.T) {
 	p.UpdateStatus(context.Background(), id, contracts.WorkerTaskStatusRunning, "")
 	p.Heartbeat(context.Background(), id)
 
-	p.reapStaleTasks(context.Background(), )
+	p.reapStaleTasks(context.Background())
 
 	task, _ := p.Status(context.Background(), id)
 	if task.Status != contracts.WorkerTaskStatusRunning {
@@ -525,7 +525,7 @@ func TestReapStaleTasks_Stale(t *testing.T) {
 	// Wait for the heartbeat to go stale.
 	time.Sleep(5 * time.Millisecond)
 
-	p.reapStaleTasks(context.Background(), )
+	p.reapStaleTasks(context.Background())
 
 	task, _ := p.Status(context.Background(), id)
 	if task.Status != contracts.WorkerTaskStatusFailed {
@@ -544,7 +544,7 @@ func TestReapStaleTasks_SkipsPending(t *testing.T) {
 	})
 	time.Sleep(5 * time.Millisecond)
 
-	p.reapStaleTasks(context.Background(), )
+	p.reapStaleTasks(context.Background())
 
 	task, _ := p.Status(context.Background(), id)
 	if task.Status != contracts.WorkerTaskStatusPending {
@@ -563,7 +563,7 @@ func TestReapStaleTasks_Multiple(t *testing.T) {
 	// id3 stays pending
 
 	time.Sleep(5 * time.Millisecond)
-	p.reapStaleTasks(context.Background(), )
+	p.reapStaleTasks(context.Background())
 
 	t1, _ := p.Status(context.Background(), id1)
 	t2, _ := p.Status(context.Background(), id2)
