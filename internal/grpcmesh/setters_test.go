@@ -135,7 +135,7 @@ func (m *mockServerStream) SendHeader(metadata.MD) error { return nil }
 func (m *mockServerStream) SetTrailer(metadata.MD)       {}
 
 func TestAuthServerStream_Context(t *testing.T) {
-	stream := &authServerStream{ctx: context.Background()}
+	stream := &authServerStream{ctxFn: func() context.Context { return context.Background() }}
 	if stream.Context() != context.Background() {
 		t.Error("expected context.Background()")
 	}

@@ -1,3 +1,4 @@
+//nolint:govet // struct field alignment
 package registry
 
 import (
@@ -90,11 +91,11 @@ func (r *Registry) Unregister(id string) error {
 	}
 
 	// Clean up capability index.
-	for _, cap := range entry.Info.Capabilities {
-		if mods, ok := r.capIndex[cap]; ok {
+	for _, capability := range entry.Info.Capabilities {
+		if mods, ok := r.capIndex[capability]; ok {
 			delete(mods, id)
 			if len(mods) == 0 {
-				delete(r.capIndex, cap)
+				delete(r.capIndex, capability)
 			}
 		}
 	}
@@ -141,11 +142,11 @@ func (r *Registry) ListByRole(role string) []*Entry {
 	return entries
 }
 
-func (r *Registry) ListByCapability(cap string) []*Entry {
+func (r *Registry) ListByCapability(capability string) []*Entry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	if mods, ok := r.capIndex[cap]; ok {
+	if mods, ok := r.capIndex[capability]; ok {
 		entries := make([]*Entry, 0, len(mods))
 		for id := range mods {
 			if e, exists := r.modules[id]; exists {
@@ -260,7 +261,7 @@ func (r *Registry) ResolveDeps(id string) ([]string, error) {
 	return depList, nil
 }
 
-func (r *Registry) resolveDeps(entry *Entry, resolved map[string]bool, visiting map[string]bool) error {
+func (r *Registry) resolveDeps(entry *Entry, resolved, visiting map[string]bool) error {
 	id := entry.Info.ID
 	if visiting[id] {
 		return fmt.Errorf("circular dependency detected: %q", id)
@@ -378,8 +379,8 @@ func (r *Registry) FindByRole(role string) []contracts.ModuleEntry {
 	return result
 }
 
-func (r *Registry) FindByCapability(cap string) []contracts.ModuleEntry {
-	entries := r.ListByCapability(cap)
+func (r *Registry) FindByCapability(capability string) []contracts.ModuleEntry {
+	entries := r.ListByCapability(capability)
 	result := make([]contracts.ModuleEntry, len(entries))
 	for i, e := range entries {
 		result[i] = contracts.ModuleEntry{Info: e.Info, State: e.State, Module: e.Module}
@@ -387,11 +388,11 @@ func (r *Registry) FindByCapability(cap string) []contracts.ModuleEntry {
 	return result
 }
 
-func (r *Registry) SupportsCapability(moduleID, cap string) bool {
+func (r *Registry) SupportsCapability(moduleID, capability string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	if mods, ok := r.capIndex[cap]; ok {
+	if mods, ok := r.capIndex[capability]; ok {
 		return mods[moduleID]
 	}
 	return false

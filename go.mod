@@ -1,4 +1,4 @@
-go 1.26.3
+go 1.26.4
 
 require (
 	github.com/Muxcore-Media/contracts-reconciler v0.0.0-20260526214139-5692629c5d6e

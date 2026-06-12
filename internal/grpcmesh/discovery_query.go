@@ -271,7 +271,7 @@ func (s *DiscoveryServer) Resolve(ctx context.Context, req *discoveryv1.ResolveR
 	}
 	entry, err := reg.Get(req.ModuleId)
 	if err != nil {
-		return &discoveryv1.ResolveResponse{Found: false}, nil
+		return &discoveryv1.ResolveResponse{Found: false}, nil //nolint:nilerr // module not found is not an error, return empty result
 	}
 	return &discoveryv1.ResolveResponse{
 		Found:  true,

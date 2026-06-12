@@ -36,6 +36,7 @@ import (
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 
+	auditv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/audit/v1"
 	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
 	healthv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/health/v1"
@@ -77,6 +78,7 @@ type Client struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 
+	Audit     *AuditClient
 	Discovery *DiscoveryClient
 	Events    *EventsClient
 	Storage   *StorageClient
@@ -144,9 +146,10 @@ func applyDefaults(opts *ReconnectOptions) {
 	}
 }
 
-// initServiceClients creates all five gRPC service clients from a connection.
-func initServiceClients(conn *grpc.ClientConn) (*DiscoveryClient, *EventsClient, *StorageClient, *HealthClient, *MeshClient) {
-	return &DiscoveryClient{discoveryv1.NewDiscoveryServiceClient(conn)},
+// initServiceClients creates all gRPC service clients from a connection.
+func initServiceClients(conn *grpc.ClientConn) (*AuditClient, *DiscoveryClient, *EventsClient, *StorageClient, *HealthClient, *MeshClient) {
+	return &AuditClient{auditv1.NewAuditServiceClient(conn)},
+		&DiscoveryClient{discoveryv1.NewDiscoveryServiceClient(conn)},
 		&EventsClient{eventsv1.NewEventServiceClient(conn)},
 		&StorageClient{storagev1.NewStorageServiceClient(conn)},
 		&HealthClient{healthv1.NewHealthServiceClient(conn)},
@@ -209,7 +212,7 @@ func DialWithAddrs(addrs []string, opts ...Option) (*Client, error) {
 		ctx:           ctx,
 		cancel:        cancel,
 	}
-	c.Discovery, c.Events, c.Storage, c.Health, c.Mesh = initServiceClients(conn)
+	c.Audit, c.Discovery, c.Events, c.Storage, c.Health, c.Mesh = initServiceClients(conn)
 
 	// Start the reconnect loop if there are fallback addresses or more than one.
 	if len(allAddrs) > 1 {
@@ -229,12 +232,13 @@ func (c *Client) Close() error {
 // replaceConn atomically swaps the gRPC connection and all service clients.
 // The old connection is closed asynchronously.
 func (c *Client) replaceConn(newConn *grpc.ClientConn, addr string) {
-	disc, ev, stor, hlth, mesh := initServiceClients(newConn)
+	aud, disc, ev, stor, hlth, mesh := initServiceClients(newConn)
 
 	c.mu.Lock()
 	oldConn := c.conn
 	c.conn = newConn
 	c.currentAddr = addr
+	c.Audit = aud
 	c.Discovery = disc
 	c.Events = ev
 	c.Storage = stor
@@ -595,3 +599,47 @@ func (m *MeshClient) Call(ctx context.Context, targetModule, method string, payl
 
 // Raw returns the underlying gRPC client.
 func (m *MeshClient) Raw() meshv1.ModuleMeshClient { return m.raw }
+
+// --- Audit ---
+
+// AuditClient wraps the AuditService gRPC client for reading and writing
+// audit log entries.
+type AuditClient struct {
+	raw auditv1.AuditServiceClient
+}
+
+// Log writes an entry to the core audit log.
+func (a *AuditClient) Log(ctx context.Context, actor, action, resource, resourceID, traceID string, details map[string]string) (string, error) {
+	resp, err := a.raw.Log(ctx, &auditv1.LogRequest{
+		Actor:      actor,
+		Action:     action,
+		Resource:   resource,
+		ResourceId: resourceID,
+		Details:    details,
+		TraceId:    traceID,
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.GetId(), nil
+}
+
+// Query returns audit entries matching the given filter parameters.
+func (a *AuditClient) Query(ctx context.Context, actor, action, resource, traceID, fromTime, toTime string, maxResults int32) ([]*auditv1.AuditEntryProto, error) {
+	resp, err := a.raw.Query(ctx, &auditv1.AuditQueryRequest{
+		Actor:      actor,
+		Action:     action,
+		Resource:   resource,
+		TraceId:    traceID,
+		FromTime:   fromTime,
+		ToTime:     toTime,
+		MaxResults: maxResults,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetEntries(), nil
+}
+
+// Raw returns the underlying gRPC client.
+func (a *AuditClient) Raw() auditv1.AuditServiceClient { return a.raw }

@@ -38,7 +38,7 @@ func TestSDKWire_StoragePutGetDelete(t *testing.T) {
 
 	prov := newMemStorage()
 	mod := &storageModule{id: "storage-wire-test", prov: prov}
-	h.modMgr.Register(mod, nil)
+	h.modMgr.Register(context.Background(), mod, nil)
 	h.store.DiscoverStorage()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -118,7 +118,7 @@ func TestSDKWire_StorageList(t *testing.T) {
 	prov.objects["sdklist/a.txt"] = []byte("a")
 	prov.objects["sdklist/b.txt"] = []byte("bb")
 	mod := &storageModule{id: "storage-list-wire", prov: prov}
-	h.modMgr.Register(mod, nil)
+	h.modMgr.Register(context.Background(), mod, nil)
 	h.store.DiscoverStorage()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

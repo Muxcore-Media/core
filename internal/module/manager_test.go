@@ -75,7 +75,7 @@ func TestManagerLifecycle(t *testing.T) {
 
 	ctx := context.Background()
 
-	if err := mgr.Register(mod, nil); err != nil {
+	if err := mgr.Register(context.Background(), mod, nil); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
@@ -137,9 +137,9 @@ func TestDependencyOrder(t *testing.T) {
 	}
 
 	// Register in reverse dependency order
-	mgr.Register(makeMod("downloader"), nil)
-	mgr.Register(makeMod("media-manager"), []string{"downloader"})
-	mgr.Register(makeMod("ui"), []string{"media-manager"})
+	mgr.Register(context.Background(), makeMod("downloader"), nil)
+	mgr.Register(context.Background(), makeMod("media-manager"), []string{"downloader"})
+	mgr.Register(context.Background(), makeMod("ui"), []string{"media-manager"})
 
 	ctx := context.Background()
 	if err := mgr.InitAll(ctx); err != nil {
@@ -167,8 +167,8 @@ func TestCircularDependency(t *testing.T) {
 		}
 	}
 
-	mgr.Register(makeMod("A"), []string{"B"})
-	mgr.Register(makeMod("B"), []string{"A"})
+	mgr.Register(context.Background(), makeMod("A"), []string{"B"})
+	mgr.Register(context.Background(), makeMod("B"), []string{"A"})
 
 	ctx := context.Background()
 	err := mgr.InitAll(ctx)
@@ -189,14 +189,14 @@ func TestUnregister(t *testing.T) {
 		},
 	}
 
-	if err := mgr.Register(mod, nil); err != nil {
+	if err := mgr.Register(context.Background(), mod, nil); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	if reg.Count() != 1 {
 		t.Fatalf("expected 1 module after register, got %d", reg.Count())
 	}
 
-	if err := mgr.Unregister("test-module"); err != nil {
+	if err := mgr.Unregister(context.Background(), "test-module"); err != nil {
 		t.Fatalf("unregister: %v", err)
 	}
 	if reg.Count() != 0 {
@@ -208,7 +208,7 @@ func TestUnregister_Nonexistent(t *testing.T) {
 	reg := registry.New()
 	mgr := module.NewManager(reg, nil)
 
-	if err := mgr.Unregister("nonexistent"); err == nil {
+	if err := mgr.Unregister(context.Background(), "nonexistent"); err == nil {
 		t.Fatal("expected error for nonexistent module")
 	}
 }
@@ -230,7 +230,7 @@ func TestSetAuditLogger_FiresLifecycleEvents(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if err := mgr.Register(mod, nil); err != nil {
+	if err := mgr.Register(context.Background(), mod, nil); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	if err := mgr.InitAll(ctx); err != nil {
@@ -302,10 +302,10 @@ func TestPublishModuleEvents(t *testing.T) {
 		},
 	}
 
-	if err := mgr.Register(mod, nil); err != nil {
+	if err := mgr.Register(context.Background(), mod, nil); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if err := mgr.Unregister("test-module"); err != nil {
+	if err := mgr.Unregister(context.Background(), "test-module"); err != nil {
 		t.Fatalf("unregister: %v", err)
 	}
 
@@ -355,7 +355,7 @@ func TestPublishModuleDegraded(t *testing.T) {
 		healthErr: errUnhealthy,
 	}
 
-	mgr.Register(mod, nil)
+	mgr.Register(context.Background(), mod, nil)
 	ctx := context.Background()
 	mgr.InitAll(ctx)
 	mgr.StartAll(ctx)
@@ -410,7 +410,7 @@ func TestRegister_PublishesEvent(t *testing.T) {
 	mod := &testModule{
 		info: contracts.ModuleInfo{ID: "evt-mod", Name: "Evt", Version: "1.0.0"},
 	}
-	if err := mgr.Register(mod, nil); err != nil {
+	if err := mgr.Register(context.Background(), mod, nil); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
@@ -438,8 +438,8 @@ func TestUnregister_PublishesEvent(t *testing.T) {
 	mod := &testModule{
 		info: contracts.ModuleInfo{ID: "unreg-evt", Name: "Unreg", Version: "1.0.0"},
 	}
-	mgr.Register(mod, nil)
-	mgr.Unregister("unreg-evt")
+	mgr.Register(context.Background(), mod, nil)
+	mgr.Unregister(context.Background(), "unreg-evt")
 
 	time.Sleep(100 * time.Millisecond)
 	if !gotEvent.Load() {
@@ -465,8 +465,8 @@ func TestInitAll_DegradedOnUnresolvedDeps(t *testing.T) {
 			Version: "1.0.0",
 		},
 	}
-	mgr.Register(base, []string{"missing-dep"})
-	mgr.Register(orphan, nil)
+	mgr.Register(context.Background(), base, []string{"missing-dep"})
+	mgr.Register(context.Background(), orphan, nil)
 
 	ctx := context.Background()
 	err := mgr.InitAll(ctx)
@@ -502,8 +502,8 @@ func TestStopAll_ReverseOrder(t *testing.T) {
 	b := makeMod("beta")
 	b.deps = []string{"alpha"}
 
-	mgr.Register(a, nil)
-	mgr.Register(b, []string{"alpha"})
+	mgr.Register(context.Background(), a, nil)
+	mgr.Register(context.Background(), b, []string{"alpha"})
 
 	ctx := context.Background()
 	mgr.InitAll(ctx)
@@ -549,7 +549,7 @@ func TestHealthCheck_RecordsErrors(t *testing.T) {
 		},
 		healthErr: errUnhealthy,
 	}
-	mgr.Register(mod, nil)
+	mgr.Register(context.Background(), mod, nil)
 
 	ctx := context.Background()
 	results := mgr.HealthCheck(ctx)
@@ -575,7 +575,7 @@ func TestHealthCheck_HealthyModule(t *testing.T) {
 			Version: "1.0.0",
 		},
 	}
-	mgr.Register(mod, nil)
+	mgr.Register(context.Background(), mod, nil)
 
 	results := mgr.HealthCheck(context.Background())
 	if results["healthy-mod"] != nil {
@@ -616,10 +616,10 @@ func TestPublishNilBus_NoPanic(t *testing.T) {
 	mod := &testModule{
 		info: contracts.ModuleInfo{ID: "nil-bus-mod", Name: "NilBus", Version: "1.0.0"},
 	}
-	if err := mgr.Register(mod, nil); err != nil {
+	if err := mgr.Register(context.Background(), mod, nil); err != nil {
 		t.Fatalf("register with nil bus: %v", err)
 	}
-	if err := mgr.Unregister("nil-bus-mod"); err != nil {
+	if err := mgr.Unregister(context.Background(), "nil-bus-mod"); err != nil {
 		t.Fatalf("unregister with nil bus: %v", err)
 	}
 
@@ -636,10 +636,10 @@ func TestRegister_DuplicateFails(t *testing.T) {
 	mod := &testModule{
 		info: contracts.ModuleInfo{ID: "dup", Name: "Dup", Version: "1.0.0"},
 	}
-	if err := mgr.Register(mod, nil); err != nil {
+	if err := mgr.Register(context.Background(), mod, nil); err != nil {
 		t.Fatalf("first register: %v", err)
 	}
-	if err := mgr.Register(mod, nil); err == nil {
+	if err := mgr.Register(context.Background(), mod, nil); err == nil {
 		t.Error("expected error for duplicate registration")
 	}
 }
@@ -653,7 +653,7 @@ func TestStopAll_AuditLifecycle(t *testing.T) {
 	mod := &testModule{
 		info: contracts.ModuleInfo{ID: "stop-audit", Name: "Stop", Version: "1.0.0"},
 	}
-	mgr.Register(mod, nil)
+	mgr.Register(context.Background(), mod, nil)
 
 	ctx := context.Background()
 	mgr.InitAll(ctx)

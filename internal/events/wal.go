@@ -1,3 +1,4 @@
+//nolint:govet // struct field alignment
 package events
 
 import (
@@ -74,7 +75,7 @@ type walEntry struct {
 // If the directory doesn't exist, it is created.
 func NewWALWriter(dir string) (*WALWriter, error) {
 	// 0700: WAL contains event payloads which may be sensitive — owner-only.
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("wal: create directory %s: %w", dir, err)
 	}
 
@@ -292,7 +293,7 @@ func (w *WALWriter) scanLastSeq(path string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var lastSeq uint64
 	var skipped int
@@ -344,7 +345,7 @@ func (w *WALWriter) openCurrentSegment() error {
 	}
 
 	// Create a new segment. 0600: owner-only, matches WAL directory permissions.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600) //nolint:gosec // path is internally constructed from WAL dir
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // path is internally constructed from WAL dir
 	if err != nil {
 		return fmt.Errorf("create segment %s: %w", path, err)
 	}
@@ -363,13 +364,13 @@ func (w *WALWriter) openCurrentSegment() error {
 }
 
 func (w *WALWriter) openSegment(path string) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600) //nolint:gosec // path is internally constructed from WAL dir
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // path is internally constructed from WAL dir
 	if err != nil {
 		return err
 	}
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	w.file = f
@@ -402,7 +403,7 @@ func (w *WALWriter) replaySegment(ctx context.Context, path string, sinceSeq uin
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)

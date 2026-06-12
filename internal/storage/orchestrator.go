@@ -1,3 +1,4 @@
+//nolint:govet // struct field alignment
 package storage
 
 import (
@@ -665,13 +666,13 @@ func (o *Orchestrator) WatchModules(ctx context.Context, bus contracts.EventBus)
 
 		var payload contracts.ModuleRegisteredPayload
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return nil // skip malformed events
+			return nil //nolint:nilerr // skip malformed events in event handler
 		}
 
 		// Look up the newly registered module
 		entry, err := o.registry.Resolve(payload.ModuleID)
 		if err != nil {
-			return nil // module may have unregistered already
+			return nil //nolint:nilerr // module may have unregistered already, skip
 		}
 
 		// Check if it's a storage provider

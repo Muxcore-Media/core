@@ -1,3 +1,4 @@
+//nolint:govet // struct field alignment
 package api
 
 import (
@@ -118,7 +119,7 @@ func isAllowedOrigin(origin string, trustedOrigins []string) bool {
 var auditSem = make(chan struct{}, 100)
 
 // spawnFireAndForget launches a function in a goroutine bounded by auditSem.
-func spawnFireAndForget(fn func()) {
+func spawnFireAndForget(ctx context.Context, fn func(context.Context)) {
 	select {
 	case auditSem <- struct{}{}:
 		go func() {
@@ -128,7 +129,7 @@ func spawnFireAndForget(fn func()) {
 					slog.Error("audit fire-and-forget panic recovered", "panic", r)
 				}
 			}()
-			fn()
+			fn(ctx)
 		}()
 	default:
 		slog.Warn("audit: too many concurrent audit logs, dropping entry")
@@ -169,8 +170,8 @@ func authMiddleware(authFn func(r *http.Request) (*contracts.Session, error), au
 						},
 						TraceID: traceID,
 					}
-					spawnFireAndForget(func() {
-						if err := auditLogger.Log(context.Background(), entry); err != nil {
+					spawnFireAndForget(r.Context(), func(ctx context.Context) {
+						if err := auditLogger.Log(ctx, entry); err != nil {
 							slog.Error("audit log write failed", "path", r.URL.Path, "error", err)
 						}
 					})
@@ -285,8 +286,8 @@ func authzMiddleware(authz contracts.Authorizer, auditLogger contracts.AuditLogg
 						},
 						TraceID: traceID,
 					}
-					spawnFireAndForget(func() {
-						if err := auditLogger.Log(context.Background(), entry); err != nil {
+					spawnFireAndForget(r.Context(), func(ctx context.Context) {
+						if err := auditLogger.Log(ctx, entry); err != nil {
 							slog.Error("audit log write failed", "path", r.URL.Path, "error", err)
 						}
 					})

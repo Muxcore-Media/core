@@ -128,8 +128,8 @@ func FetchTag(ctx context.Context, spoolURL, tagName string) (*contracts.TagDefi
 	// overrides this check — operators who add a private host to the list
 	// are assumed to have a legitimate local spool.
 	if !hasAllowList {
-		if err := blockPrivateHost(ctx, u.Host); err != nil {
-			return nil, err
+		if err2 := blockPrivateHost(ctx, u.Host); err2 != nil {
+			return nil, err2
 		}
 	}
 
@@ -140,7 +140,7 @@ func FetchTag(ctx context.Context, spoolURL, tagName string) (*contracts.TagDefi
 		fmt.Fprintf(os.Stderr, "   Only use spools from sources you trust. See https://opencode.ai for details.\n\n")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fetchURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fetchURL, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("spool: create request: %w", err)
 	}
@@ -148,7 +148,7 @@ func FetchTag(ctx context.Context, spoolURL, tagName string) (*contracts.TagDefi
 	if err != nil {
 		return nil, fmt.Errorf("spool: fetch %s: %w", fetchURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("spool: fetch %s: HTTP %d", fetchURL, resp.StatusCode)
