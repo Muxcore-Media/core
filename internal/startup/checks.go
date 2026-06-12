@@ -2,6 +2,8 @@
 // These catch misconfigurations early — missing directories, wrong permissions,
 // version mismatches — so they surface as clear log messages rather than
 // cryptic runtime errors.
+//
+//nolint:govet // struct field alignment
 package startup
 
 import (

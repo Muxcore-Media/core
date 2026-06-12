@@ -2,6 +2,8 @@
 // When configured with a non-empty LogPath, writes JSON Lines (one JSON
 // object per line) to the specified file. When LogPath is empty, all
 // operations are no-ops — safe to instantiate with zero config.
+//
+//nolint:govet // struct field alignment
 package audit
 
 import (

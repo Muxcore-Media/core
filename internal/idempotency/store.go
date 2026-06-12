@@ -1,3 +1,4 @@
+//nolint:govet // struct field alignment
 package idempotency
 
 import (
