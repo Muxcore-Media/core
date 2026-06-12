@@ -14,7 +14,6 @@ import (
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/storage"
-	"github.com/Muxcore-Media/core/pkg/contracts"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -219,112 +218,6 @@ func TestGRPCInterceptors(t *testing.T) {
 			t.Errorf("expected 'response', got %v", resp)
 		}
 	})
-}
-
-// Mock implementations for testing wire functions
-
-type mockCallPolicy struct {
-	allow bool
-}
-
-func (m *mockCallPolicy) AllowCall(ctx context.Context, callerModuleID, targetModuleID, method string) (bool, error) {
-	return m.allow, nil
-}
-
-type mockPublishPolicy struct {
-	allow bool
-}
-
-func (m *mockPublishPolicy) CanPublish(ctx context.Context, callerID, eventType string) (bool, error) {
-	return m.allow, nil
-}
-
-type mockAuthorizer struct {
-	can bool
-}
-
-func (m *mockAuthorizer) Can(ctx context.Context, session contracts.Session, action, resource string) (bool, error) {
-	return m.can, nil
-}
-
-type mockAuthProvider struct {
-	session contracts.Session
-	err     error
-}
-
-func (m *mockAuthProvider) Authenticate(ctx context.Context, creds contracts.Credentials) (contracts.Session, error) {
-	return m.session, m.err
-}
-
-func (m *mockAuthProvider) Validate(ctx context.Context, token string) (contracts.Session, error) {
-	return m.session, m.err
-}
-
-func (m *mockAuthProvider) Revoke(ctx context.Context, token string) error {
-	return m.err
-}
-
-type mockModule struct {
-	info contracts.ModuleInfo
-	caps []string
-}
-
-func (m *mockModule) Info() contracts.ModuleInfo {
-	return contracts.ModuleInfo{
-		ID:           m.info.ID,
-		Name:         m.info.Name,
-		Version:      m.info.Version,
-		Capabilities: m.caps,
-	}
-}
-
-func (m *mockModule) Init(ctx context.Context) error   { return nil }
-func (m *mockModule) Start(ctx context.Context) error  { return nil }
-func (m *mockModule) Stop(ctx context.Context) error   { return nil }
-func (m *mockModule) Health(ctx context.Context) error { return nil }
-
-type mockCallPolicyModule struct {
-	mockModule
-	policy *mockCallPolicy
-}
-
-func (m *mockCallPolicyModule) AllowCall(ctx context.Context, callerModuleID, targetModuleID, method string) (bool, error) {
-	return m.policy.allow, nil
-}
-
-type mockPublishPolicyModule struct {
-	mockModule
-	policy *mockPublishPolicy
-}
-
-func (m *mockPublishPolicyModule) CanPublish(ctx context.Context, callerID, eventType string) (bool, error) {
-	return m.policy.allow, nil
-}
-
-type mockAuthorizerModule struct {
-	mockModule
-	authorizer *mockAuthorizer
-}
-
-func (m *mockAuthorizerModule) Can(ctx context.Context, session contracts.Session, action, resource string) (bool, error) {
-	return m.authorizer.can, nil
-}
-
-type mockAuthProviderModule struct {
-	mockModule
-	provider *mockAuthProvider
-}
-
-func (m *mockAuthProviderModule) Authenticate(ctx context.Context, creds contracts.Credentials) (contracts.Session, error) {
-	return m.provider.session, m.provider.err
-}
-
-func (m *mockAuthProviderModule) Validate(ctx context.Context, token string) (contracts.Session, error) {
-	return m.provider.session, m.provider.err
-}
-
-func (m *mockAuthProviderModule) Revoke(ctx context.Context, token string) error {
-	return m.provider.err
 }
 
 func TestWireCallPolicy(t *testing.T) {
