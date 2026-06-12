@@ -2,7 +2,6 @@ package contracts
 
 import (
 	"context"
-	"net/http"
 )
 
 // ModuleKind is a user-defined string that categorizes a module's role.
@@ -84,27 +83,4 @@ type ModuleEntry struct {
 	Info   ModuleInfo
 	State  ModuleState
 	Module Module
-}
-
-type RouteRegistrar interface {
-	Handle(pattern string, handler http.Handler)
-	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
-}
-
-type ModuleFactory func(deps Fabric) Module
-
-// Fabric provides in-process modules with the core fabric services they need
-// during construction. Sidecar modules (the primary model) do not use Fabric —
-// they access the same services via the five gRPC services on the mesh address.
-//
-// Domain-specific services (SecretsProvider, DatabaseProvider, etc.) are
-// discovered at runtime via the Registry — they are not pre-wired here.
-type Fabric struct {
-	Registry   Registry
-	EventBus   EventBus
-	Routes     RouteRegistrar
-	Storage    StorageOrchestrator
-	WorkerPool WorkerPool
-	Audit      AuditLogger
-	Mesh       ModuleMeshClient
 }

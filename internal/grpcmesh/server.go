@@ -10,11 +10,14 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/Muxcore-Media/core/internal/callerid"
+	"github.com/Muxcore-Media/core/internal/config"
+	"github.com/Muxcore-Media/core/internal/trace"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	meshv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/mesh/v1"
 	"google.golang.org/grpc"
@@ -25,10 +28,12 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// isInsecureTLS returns true when the MUXCORE_INSECURE_DISABLE_TLS env var is set.
-func isInsecureTLS() bool {
-	v := os.Getenv("MUXCORE_INSECURE_DISABLE_TLS")
-	return v == "true" || v == "1"
+// isDevTLSSkip returns true when TLS enforcement should be bypassed.
+// Delegates to the shared config function which checks both
+// MUXCORE_INSECURE_DISABLE_TLS (canonical) and the deprecated
+// MUXCORE_DEV_TLS_SKIP.
+func isDevTLSSkip() bool {
+	return config.InsecureTLSSkipEnabled()
 }
 
 // ErrRemoteRoutingUnavailable is returned when a cross-node call is attempted
@@ -110,30 +115,34 @@ func (s *Server) Call(ctx context.Context, req *meshv1.CallRequest) (*meshv1.Cal
 	nodeID := s.nodeID
 	s.mu.RUnlock()
 	if auditLogger != nil {
-		// Extract peer identity for the audit record.
-		sourceAddr := "unknown"
-		if p, ok := peer.FromContext(ctx); ok {
-			sourceAddr = p.Addr.String()
-		}
-		entry := contracts.AuditEntry{
-			ID:        uuid.New().String(),
-			Timestamp: time.Now(),
-			Actor:     sourceAddr,
-			Action:    "grpc.call",
-			Resource:  target,
-			Details: map[string]string{
-				"method": method,
-			},
-			NodeID: nodeID,
-		}
-		if err := auditLogger.Log(ctx, entry); err != nil {
-			slog.Error("audit log write failed", "method", method, "error", err)
-		}
+		traceID := trace.FromContext(ctx)
+		go func() { //nolint:gosec // fire-and-forget audit — request context may be cancelled before write completes
+			sourceAddr := "unknown"
+			if p, ok := peer.FromContext(ctx); ok {
+				sourceAddr = p.Addr.String()
+			}
+			entry := contracts.AuditEntry{
+				ID:        uuid.New().String(),
+				Timestamp: time.Now(),
+				Actor:     sourceAddr,
+				Action:    "grpc.call",
+				Resource:  target,
+				Details: map[string]string{
+					"method": method,
+				},
+				TraceID: traceID,
+				NodeID:  nodeID,
+			}
+			if err := auditLogger.Log(context.Background(), entry); err != nil {
+				slog.Error("audit log write failed", "method", method, "error", err)
+			}
+		}()
 	}
 
 	result, err := handler.HandleCall(ctx, method, req.GetPayload())
 	if err != nil {
-		return &meshv1.CallResponse{Error: err.Error()}, nil
+		slog.Error("module call handler error", "target", target, "method", method, "error", err)
+		return &meshv1.CallResponse{Error: "handler error"}, nil
 	}
 
 	return &meshv1.CallResponse{Payload: result}, nil
@@ -170,29 +179,35 @@ func (s *Server) StreamCall(stream meshv1.ModuleMesh_StreamCallServer) error {
 		nodeID := s.nodeID
 		s.mu.RUnlock()
 		if auditLogger != nil {
-			sourceAddr := "unknown"
-			if p, ok := peer.FromContext(stream.Context()); ok {
-				sourceAddr = p.Addr.String()
-			}
-			entry := contracts.AuditEntry{
-				ID:        uuid.New().String(),
-				Timestamp: time.Now(),
-				Actor:     sourceAddr,
-				Action:    "grpc.stream_call",
-				Resource:  target,
-				Details: map[string]string{
-					"method": method,
-				},
-				NodeID: nodeID,
-			}
-			if err := auditLogger.Log(stream.Context(), entry); err != nil {
-				slog.Error("audit log write failed", "error", err)
-			}
+			streamCtx := stream.Context()
+			traceID := trace.FromContext(streamCtx)
+			go func() { //nolint:gosec // fire-and-forget audit — request context may be cancelled before write completes
+				sourceAddr := "unknown"
+				if p, ok := peer.FromContext(streamCtx); ok {
+					sourceAddr = p.Addr.String()
+				}
+				entry := contracts.AuditEntry{
+					ID:        uuid.New().String(),
+					Timestamp: time.Now(),
+					Actor:     sourceAddr,
+					Action:    "grpc.stream_call",
+					Resource:  target,
+					Details: map[string]string{
+						"method": method,
+					},
+					TraceID: traceID,
+					NodeID:  nodeID,
+				}
+				if err := auditLogger.Log(context.Background(), entry); err != nil {
+					slog.Error("audit log write failed", "error", err)
+				}
+			}()
 		}
 
 		result, err := handler.HandleCall(stream.Context(), method, req.GetPayload())
 		if err != nil {
-			if sendErr := stream.Send(&meshv1.CallResponse{Error: err.Error()}); sendErr != nil {
+			slog.Error("module stream call handler error", "target", target, "method", method, "error", err)
+			if sendErr := stream.Send(&meshv1.CallResponse{Error: "handler error"}); sendErr != nil {
 				return sendErr
 			}
 			continue
@@ -217,6 +232,54 @@ func (s *Server) localCall(ctx context.Context, targetModule, method string, pay
 	return handler.HandleCall(ctx, method, payload)
 }
 
+// routeToNode sends a cross-node gRPC call to a specific cluster member.
+// Requires transport credentials (TLS) to be configured.
+func (c *Client) routeToNode(ctx context.Context, member contracts.NodeInfo, targetModule, method string, payload []byte) ([]byte, error) {
+	if c.transportCreds == nil {
+		return nil, fmt.Errorf("%w: cross-node routing requires TLS — no transport credentials configured", ErrRemoteRoutingUnavailable)
+	}
+	conn, err := grpc.NewClient(member.GRPCAddr,
+		grpc.WithTransportCredentials(c.transportCreds),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(maxClientMsgSize),
+			grpc.MaxCallSendMsgSize(maxClientMsgSize),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to dial remote node %q at %s: %w", ErrRemoteRoutingUnavailable, member.ID, member.GRPCAddr, err)
+	}
+	defer conn.Close()
+
+	// Propagate caller identity and trace ID via gRPC metadata.
+	callCtx := ctx
+	var mdPairs []string
+	if callerID := callerid.Get(ctx); callerID != "" {
+		mdPairs = append(mdPairs, "x-caller-id", callerID)
+	}
+	if traceID := trace.FromContext(ctx); traceID != "" {
+		mdPairs = append(mdPairs, "x-trace-id", traceID)
+	}
+	if len(mdPairs) > 0 {
+		callCtx = metadata.NewOutgoingContext(ctx, metadata.Pairs(mdPairs...))
+	}
+
+	client := meshv1.NewModuleMeshClient(conn)
+	req := &meshv1.CallRequest{
+		TargetModule: targetModule,
+		Method:       method,
+		Payload:      payload,
+	}
+
+	resp, err := client.Call(callCtx, req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: remote call to node %q failed: %w", ErrRemoteRoutingUnavailable, member.ID, err)
+	}
+	if resp.Error != "" {
+		return nil, fmt.Errorf("remote call error from module %q on node %q: %s", targetModule, member.ID, resp.Error)
+	}
+	return resp.Payload, nil
+}
+
 // --- ModuleMeshClient implementation ---
 
 // Client implements contracts.ModuleMeshClient.
@@ -230,10 +293,16 @@ type Client struct {
 	// When nil (no TLS configured), cross-node routing is disabled rather than
 	// falling back to insecure plaintext.
 	transportCreds credentials.TransportCredentials
+	// lbStrategy is the load balancing strategy for selecting among multiple
+	// remote nodes that advertise the same target module.
+	// When nil, the first matching remote node is used (existing behavior).
+	lbStrategy contracts.LBStrategy
 	// audit is an optional audit logger for recording outbound mesh calls.
 	audit contracts.AuditLogger
 	// nodeID identifies this node in audit entries.
-	nodeID string
+	nodeID         string
+	callCount      atomic.Int64
+	circuitBreaker *CircuitBreakerSet
 }
 
 // NewClient creates a mesh client backed by the given server.
@@ -241,6 +310,11 @@ func NewClient(srv *Server) *Client {
 	return &Client{
 		server: srv,
 	}
+}
+
+// CallCount returns the total number of mesh calls made through this client.
+func (c *Client) CallCount() int64 {
+	return c.callCount.Load()
 }
 
 // SetCluster attaches a cluster module for cross-node routing.
@@ -274,6 +348,55 @@ func (c *Client) SetTransportCredentials(creds credentials.TransportCredentials)
 	c.transportCreds = creds
 }
 
+// SetLBStrategy attaches a load balancing strategy for cross-node routing.
+// When nil (default), the first matching remote node is used.
+func (c *Client) SetLBStrategy(strategy contracts.LBStrategy) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lbStrategy = strategy
+}
+
+// LBStrategy returns the currently registered load balancing strategy, or nil.
+func (c *Client) LBStrategy() contracts.LBStrategy {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.lbStrategy
+}
+
+// SetCircuitBreaker attaches a circuit breaker set for per-node failure tracking.
+func (c *Client) SetCircuitBreaker(cb *CircuitBreakerSet) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.circuitBreaker = cb
+}
+
+// CircuitBreaker returns the currently registered circuit breaker set, or nil.
+func (c *Client) CircuitBreaker() *CircuitBreakerSet {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.circuitBreaker
+}
+
+// filterOpenNodes removes candidates whose circuit breaker is open.
+func (c *Client) filterOpenNodes(candidates []contracts.NodeInfo) []contracts.NodeInfo {
+	c.mu.RLock()
+	cb := c.circuitBreaker
+	c.mu.RUnlock()
+	if cb == nil {
+		return candidates
+	}
+	var filtered []contracts.NodeInfo
+	for _, n := range candidates {
+		if cb.Allow(n.ID) {
+			filtered = append(filtered, n)
+		}
+	}
+	if len(filtered) == 0 {
+		return candidates // fallback: if all are open, try them anyway
+	}
+	return filtered
+}
+
 // SetAuditLogger attaches an audit logger for recording outbound mesh calls.
 func (c *Client) SetAuditLogger(a contracts.AuditLogger) {
 	c.mu.Lock()
@@ -293,6 +416,8 @@ func (c *Client) SetNodeID(id string) {
 // When no call policy is configured, all calls are denied (deny-by-default).
 // Deploy a module implementing "call.policy" to open access selectively.
 func (c *Client) Call(ctx context.Context, targetModule, method string, payload []byte) ([]byte, error) {
+	c.callCount.Add(1)
+
 	c.mu.RLock()
 	callPolicy := c.callPolicy
 	c.mu.RUnlock()
@@ -315,53 +440,81 @@ func (c *Client) Call(ctx context.Context, targetModule, method string, payload 
 
 	c.mu.RLock()
 	cluster := c.cluster
+	strategy := c.lbStrategy
 	c.mu.RUnlock()
 
-	if cluster != nil {
-		// Check if the target module exists on any remote node
-		for _, member := range cluster.Members() {
-			for _, modID := range member.ModuleIDs {
-				if modID == targetModule {
-					// Build gRPC connection to the remote node
-					// Require TLS for cross-node routing. Never fall back to insecure plaintext.
-					if c.transportCreds == nil {
-						return nil, fmt.Errorf("%w: cross-node routing requires TLS — no transport credentials configured", ErrRemoteRoutingUnavailable)
-					}
-					conn, err := grpc.NewClient(member.GRPCAddr, grpc.WithTransportCredentials(c.transportCreds))
-					if err != nil {
-						return nil, fmt.Errorf("%w: failed to dial remote node %q at %s: %w", ErrRemoteRoutingUnavailable, member.ID, member.GRPCAddr, err)
-					}
-					defer conn.Close()
+	if cluster == nil {
+		return nil, fmt.Errorf("%w: module %q not found locally and no cluster module is configured for remote routing", ErrRemoteRoutingUnavailable, targetModule)
+	}
 
-					// Propagate caller identity via gRPC metadata if set
-					callCtx := ctx
-					if callerID := callerid.Get(ctx); callerID != "" {
-						callCtx = metadata.NewOutgoingContext(ctx, metadata.Pairs("x-caller-id", callerID))
-					}
-
-					// Build and send the remote call request
-					client := meshv1.NewModuleMeshClient(conn)
-					req := &meshv1.CallRequest{
-						TargetModule: targetModule,
-						Method:       method,
-						Payload:      payload,
-					}
-
-					resp, err := client.Call(callCtx, req)
-					if err != nil {
-						return nil, fmt.Errorf("%w: remote call to node %q failed: %w", ErrRemoteRoutingUnavailable, member.ID, err)
-					}
-					if resp.Error != "" {
-						return nil, fmt.Errorf("remote call error from module %q on node %q: %s", targetModule, member.ID, resp.Error)
-					}
-					return resp.Payload, nil
-				}
+	// Gather remote candidates that advertise the target module.
+	localID := cluster.LocalNode().ID
+	var candidates []contracts.NodeInfo
+	for _, member := range cluster.Members() {
+		if member.ID == localID {
+			continue // already tried local
+		}
+		for _, modID := range member.ModuleIDs {
+			if modID == targetModule {
+				candidates = append(candidates, member)
+				break
 			}
 		}
+	}
+
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf("%w: module %q is not registered on any known node", ErrRemoteRoutingUnavailable, targetModule)
 	}
 
-	return nil, fmt.Errorf("%w: module %q not found locally and no cluster module is configured for remote routing", ErrRemoteRoutingUnavailable, targetModule)
+	// Filter to healthy candidates for the target module. Falls back to all
+	// candidates when none are healthy (best-effort degradation).
+	healthy := HealthyCandidates(candidates, targetModule)
+
+	// Filter out nodes whose circuit breaker is open.
+	healthy = c.filterOpenNodes(healthy)
+
+	// Build a set of candidates we've already tried, keyed by node ID.
+	tried := make(map[string]bool, len(candidates))
+
+	recordResult := func(nodeID string, callErr error) {
+		cb := c.circuitBreaker
+		if cb == nil {
+			return
+		}
+		if callErr != nil {
+			cb.RecordFailure(nodeID)
+		} else {
+			cb.RecordSuccess(nodeID)
+		}
+	}
+
+	// If an LB strategy is configured, use it to pick the preferred candidate.
+	if strategy != nil {
+		idx, pickErr := strategy.Pick(ctx, healthy)
+		if pickErr == nil && idx >= 0 && idx < len(healthy) {
+			member := healthy[idx]
+			tried[member.ID] = true
+			result, err := c.routeToNode(ctx, member, targetModule, method, payload)
+			recordResult(member.ID, err)
+			if err == nil {
+				return result, nil
+			}
+		}
+	}
+
+	// Fallback: try remaining candidates in order until one succeeds.
+	for _, member := range candidates {
+		if tried[member.ID] {
+			continue
+		}
+		result, err := c.routeToNode(ctx, member, targetModule, method, payload)
+		recordResult(member.ID, err)
+		if err == nil {
+			return result, nil
+		}
+	}
+
+	return nil, fmt.Errorf("%w: module %q is not registered on any known node", ErrRemoteRoutingUnavailable, targetModule)
 }
 
 // RegisterHandler registers a local module to receive calls.
@@ -371,7 +524,7 @@ func (c *Client) RegisterHandler(moduleID string, handler contracts.MeshHandler)
 
 // GRPCTransportCredentials creates transport credentials for the gRPC server
 // from certificate and key files. If cert and key are both empty, returns
-// (nil, nil) only when MUXCORE_INSECURE_DISABLE_TLS is set to true or 1.
+// (nil, nil) only when MUXCORE_DEV_TLS_SKIP is set to true or 1.
 //
 // Environment variables:
 //
@@ -380,7 +533,7 @@ func (c *Client) RegisterHandler(moduleID string, handler contracts.MeshHandler)
 //	MUXCORE_GRPC_MTLS_ENABLED — if "true" or "1", enable mutual TLS
 func GRPCTransportCredentials(certFile, keyFile, caCertFile string, mtlsEnabled bool) (credentials.TransportCredentials, error) {
 	if certFile == "" && keyFile == "" {
-		if isInsecureTLS() {
+		if isDevTLSSkip() {
 			return nil, nil // insecure mode explicitly enabled
 		}
 		return nil, fmt.Errorf("TLS is required for gRPC — set MUXCORE_GRPC_TLS_CERT and MUXCORE_GRPC_TLS_KEY to enable encryption")

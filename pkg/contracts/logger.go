@@ -12,18 +12,21 @@ const (
 	LogLevelError LogLevel = "error"
 )
 
-// SensitiveLogFieldNames is a curated list of field name prefixes that
-// commonly carry credentials, tokens, or PII. Redaction providers and
-// logging implementations SHOULD use this list as a default deny-set.
+// SensitiveLogFieldNames returns a copy of the curated list of field name
+// prefixes that commonly carry credentials, tokens, or PII. Redaction
+// providers and logging implementations SHOULD use this list as a default
+// deny-set.
 //
 // This list is not exhaustive — implementations may extend it based
 // on their domain. The convention is lowercase field names as they
 // appear in structured log fields.
-var SensitiveLogFieldNames = []string{
-	"password", "passwd", "secret", "token", "api_key", "apikey",
-	"credential", "private_key", "ssh_key", "access_key", "auth",
-	"authorization", "cookie", "jwt", "session", "signature",
-	"credit_card", "ssn", "social_security", "passport",
+func SensitiveLogFieldNames() []string {
+	return []string{
+		"password", "passwd", "secret", "token", "api_key", "apikey",
+		"credential", "private_key", "ssh_key", "access_key", "auth",
+		"authorization", "cookie", "jwt", "session", "signature",
+		"credit_card", "ssn", "social_security", "passport",
+	}
 }
 
 // StructuredLogger provides leveled, structured logging for modules.

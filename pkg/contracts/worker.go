@@ -40,6 +40,12 @@ type WorkerTask struct {
 	// is reassigned after a node failure, the new executor checks this
 	// key before re-executing. If empty, no idempotency guard is applied.
 	IdempotencyKey string
+
+	// HeartbeatInterval is how often the executor promises to call
+	// Heartbeat() while processing this task. The worker pool reaper
+	// uses this to detect stalled executors. If zero, the pool's
+	// DefaultHeartbeatTimeout is used.
+	HeartbeatInterval time.Duration
 }
 
 // WorkerPool schedules tasks across cluster nodes and tracks their lifecycle.

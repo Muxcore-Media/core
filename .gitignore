@@ -32,3 +32,13 @@ Thumbs.db
 *.local.yaml
 .gstack/
 /muxcored
+
+# Coverage
+coverage.out
+coverage.html
+
+# Local config
+muxcore.json
+
+# Secrets audit
+secrets_audit_report.md

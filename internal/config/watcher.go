@@ -10,13 +10,11 @@ import (
 // ChangedFields describes which config fields changed during a reload.
 // The caller can use this to apply only the changed subset to subsystems.
 type ChangedFields struct {
-	LogLevel      bool
-	LogFormat     bool
-	AuditPath     bool
-	StrictCall    bool
-	StrictPublish bool
-	SeedNodes     bool
-	JoinToken     bool
+	LogLevel  bool
+	LogFormat bool
+	AuditPath bool
+	SeedNodes bool
+	JoinToken bool
 	// Unsafe indicates changes that require a restart (addresses, certs, etc.).
 	Unsafe       bool
 	UnsafeFields []string
@@ -60,71 +58,74 @@ func Reload(previous *Config, path string) (*ReloadResult, error) {
 }
 
 // diffConfigs compares two configs and identifies which safe fields changed.
-func diffConfigs(old, new *Config) *ChangedFields {
+func diffConfigs(old, newCfg *Config) *ChangedFields {
+	if old == nil || newCfg == nil {
+		return &ChangedFields{}
+	}
 	c := &ChangedFields{}
 
-	if old.Log.Level != new.Log.Level {
+	if old.Log.Level != newCfg.Log.Level {
 		c.LogLevel = true
 	}
-	if old.Log.Format != new.Log.Format {
+	if old.Log.Format != newCfg.Log.Format {
 		c.LogFormat = true
 	}
-	if old.Audit.Path != new.Audit.Path {
+	if old.Audit.Path != newCfg.Audit.Path {
 		c.AuditPath = true
 	}
 
 	// Seed nodes comparison.
-	if !stringSlicesEqual(old.GRPC.SeedNodes, new.GRPC.SeedNodes) {
+	if !stringSlicesEqual(old.GRPC.SeedNodes, newCfg.GRPC.SeedNodes) {
 		c.SeedNodes = true
 	}
 
 	// Join token.
-	if old.GRPC.JoinToken != new.GRPC.JoinToken {
+	if old.GRPC.JoinToken != newCfg.GRPC.JoinToken {
 		c.JoinToken = true
 		c.Unsafe = true
 		c.UnsafeFields = append(c.UnsafeFields, "grpc.join_token")
 	}
 
 	// Unsafe changes (require restart).
-	if old.Server.Addr != new.Server.Addr {
+	if old.Server.Addr != newCfg.Server.Addr {
 		c.Unsafe = true
 		c.UnsafeFields = append(c.UnsafeFields, "server.addr")
 	}
-	if old.Server.CertFile != new.Server.CertFile {
+	if old.Server.CertFile != newCfg.Server.CertFile {
 		c.Unsafe = true
 		c.UnsafeFields = append(c.UnsafeFields, "server.cert_file")
 	}
-	if old.Server.KeyFile != new.Server.KeyFile {
+	if old.Server.KeyFile != newCfg.Server.KeyFile {
 		c.Unsafe = true
 		c.UnsafeFields = append(c.UnsafeFields, "server.key_file")
 	}
-	if old.GRPC.Addr != new.GRPC.Addr {
+	if old.GRPC.Addr != newCfg.GRPC.Addr {
 		c.Unsafe = true
 		c.UnsafeFields = append(c.UnsafeFields, "grpc.addr")
 	}
-	if old.GRPC.CertFile != new.GRPC.CertFile {
+	if old.GRPC.CertFile != newCfg.GRPC.CertFile {
 		c.Unsafe = true
 		c.UnsafeFields = append(c.UnsafeFields, "grpc.cert_file")
 	}
-	if old.GRPC.KeyFile != new.GRPC.KeyFile {
+	if old.GRPC.KeyFile != newCfg.GRPC.KeyFile {
 		c.Unsafe = true
 		c.UnsafeFields = append(c.UnsafeFields, "grpc.key_file")
 	}
-	if old.GRPC.CACertFile != new.GRPC.CACertFile {
+	if old.GRPC.CACertFile != newCfg.GRPC.CACertFile {
 		c.Unsafe = true
 		c.UnsafeFields = append(c.UnsafeFields, "grpc.ca_cert_file")
 	}
-	if old.GRPC.MTLSEnabled != new.GRPC.MTLSEnabled {
+	if old.GRPC.MTLSEnabled != newCfg.GRPC.MTLSEnabled {
 		c.Unsafe = true
 		c.UnsafeFields = append(c.UnsafeFields, "grpc.mtls_enabled")
 	}
 
 	// Database and cache URL changes are unsafe (connections already established).
-	if !reflect.DeepEqual(old.Database, new.Database) {
+	if !reflect.DeepEqual(old.Database, newCfg.Database) {
 		c.Unsafe = true
 		c.UnsafeFields = append(c.UnsafeFields, "database")
 	}
-	if !reflect.DeepEqual(old.Cache, new.Cache) {
+	if !reflect.DeepEqual(old.Cache, newCfg.Cache) {
 		c.Unsafe = true
 		c.UnsafeFields = append(c.UnsafeFields, "cache")
 	}

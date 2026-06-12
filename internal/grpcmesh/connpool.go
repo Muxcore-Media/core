@@ -10,6 +10,11 @@ import (
 	"google.golang.org/grpc/keepalive"
 )
 
+// maxClientMsgSize is the default client-side gRPC message size limit (32MB).
+// Matches the server-side default. Prevents unbounded memory allocation when
+// reading responses from compromised or misconfigured peers.
+const maxClientMsgSize = 32 * 1024 * 1024
+
 const (
 	// connPoolIdleTimeout is how long an idle connection stays in the pool
 	// before being evicted.
@@ -39,6 +44,7 @@ type ConnPool struct {
 	connections map[string]*pooledConn
 	dialOpts    []grpc.DialOption
 	stopCh      chan struct{}
+	closeOnce   sync.Once
 }
 
 // NewConnPool creates a connection pool with the given dial options
@@ -49,13 +55,19 @@ type ConnPool struct {
 // 20 seconds so that stale pool entries are evicted on the next cleanup tick
 // rather than waiting the full idle timeout.
 func NewConnPool(dialOpts ...grpc.DialOption) *ConnPool {
-	// Prepend keepalive params so callers can override if needed.
-	kpOpts := make([]grpc.DialOption, 0, 1+len(dialOpts))
-	kpOpts = append(kpOpts, grpc.WithKeepaliveParams(keepalive.ClientParameters{
-		Time:                20 * time.Second,
-		Timeout:             10 * time.Second,
-		PermitWithoutStream: true,
-	}))
+	// Prepend message size limits and keepalive params so callers can override if needed.
+	kpOpts := make([]grpc.DialOption, 0, 2+len(dialOpts))
+	kpOpts = append(kpOpts,
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(maxClientMsgSize),
+			grpc.MaxCallSendMsgSize(maxClientMsgSize),
+		),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                20 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+	)
 	p := &ConnPool{
 		connections: make(map[string]*pooledConn),
 		dialOpts:    append(kpOpts, dialOpts...),
@@ -89,7 +101,9 @@ func (p *ConnPool) Get(addr string) (*grpc.ClientConn, error) {
 	// for the same address while we were dialing.
 	if existing, ok := p.connections[addr]; ok {
 		p.mu.Unlock()
-		conn.Close() // discard our newly created connection
+		if closeErr := conn.Close(); closeErr != nil {
+			slog.Warn("connpool: error discarding duplicate connection", "addr", addr, "error", closeErr)
+		}
 		return existing.conn, nil
 	}
 
@@ -104,19 +118,22 @@ func (p *ConnPool) Get(addr string) (*grpc.ClientConn, error) {
 }
 
 // Close drains the pool, closing all cached connections.
+// Safe to call multiple times.
 func (p *ConnPool) Close() {
-	close(p.stopCh)
+	p.closeOnce.Do(func() {
+		close(p.stopCh)
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
+		p.mu.Lock()
+		defer p.mu.Unlock()
 
-	for addr, pc := range p.connections {
-		if err := pc.conn.Close(); err != nil {
-			slog.Warn("connpool: error closing connection", "addr", addr, "error", err)
+		for addr, pc := range p.connections {
+			if err := pc.conn.Close(); err != nil {
+				slog.Warn("connpool: error closing connection", "addr", addr, "error", err)
+			}
 		}
-	}
-	p.connections = make(map[string]*pooledConn)
-	slog.Info("connpool: all connections closed")
+		p.connections = make(map[string]*pooledConn)
+		slog.Info("connpool: all connections closed")
+	})
 }
 
 // Size returns the current number of cached connections.
@@ -128,6 +145,11 @@ func (p *ConnPool) Size() int {
 
 // cleanupLoop periodically evicts idle connections.
 func (p *ConnPool) cleanupLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("connpool cleanup loop panic recovered", "panic", r)
+		}
+	}()
 	ticker := time.NewTicker(connPoolCleanupInterval)
 	defer ticker.Stop()
 

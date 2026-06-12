@@ -1,6 +1,21 @@
 package contracts
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrNoCandidates is returned by LBStrategy.Pick when the candidate list is empty.
+var ErrNoCandidates = errors.New("load balancing: no candidate nodes available")
+
+// LBStrategy selects a target node from a set of candidates for load-balanced
+// cross-node module routing. Implementations must be safe for concurrent use.
+type LBStrategy interface {
+	// Pick returns the index of the selected candidate from candidates.
+	// candidates is guaranteed to have at least one entry.
+	// Returns ErrNoCandidates if candidates is empty.
+	Pick(ctx context.Context, candidates []NodeInfo) (int, error)
+}
 
 // MeshHandler is implemented by modules that want to receive cross-module gRPC calls.
 // The mesh server routes incoming Call(targetModule, method, payload) requests
@@ -19,7 +34,7 @@ type MeshHandler interface {
 
 // ModuleMeshClient is the interface modules use to call other modules.
 // It abstracts whether the target is local (in-process) or remote (gRPC network call).
-// Modules receive this via Fabric.Mesh.
+// Modules dial core's gRPC ModuleMesh service to obtain a client.
 type ModuleMeshClient interface {
 	// Call invokes a method on the target module. If the target is registered
 	// locally, the call is dispatched in-process with zero network overhead.

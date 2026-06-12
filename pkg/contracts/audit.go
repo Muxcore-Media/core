@@ -32,6 +32,10 @@ type ChainVerificationResult struct {
 	Valid bool
 	// TotalEntries is the number of entries in the verified range.
 	TotalEntries int
+	// UnverifiableCount is the number of entries that existed in the oldest
+	// rotated file which was deleted before verification. These entries
+	// cannot be verified and are not counted in TotalEntries.
+	UnverifiableCount int
 	// BrokenLinks is the list of entry IDs where the PrevEntryHash does
 	// not match the computed hash of the previous entry.
 	BrokenLinks []string
@@ -78,4 +82,13 @@ type AuditLogger interface {
 	// If the provider does not support hash chains, this method returns
 	// a result with Valid=true and TotalEntries=0 (no chain to verify).
 	VerifyChainIntegrity(ctx context.Context, from, to time.Time) (ChainVerificationResult, error)
+
+	// VerifyAll performs a full integrity check across all surviving
+	// rotated audit log files and the current active file, verifying
+	// the hash chain and HMAC signatures across file boundaries.
+	//
+	// Entries in the deleted oldest rotated file (if any) are reported
+	// in UnverifiableCount. The active file is snapshotted at call time;
+	// entries written concurrently are not included.
+	VerifyAll(ctx context.Context) (ChainVerificationResult, error)
 }
