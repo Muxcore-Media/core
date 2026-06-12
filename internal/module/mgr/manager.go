@@ -994,7 +994,7 @@ func (s *registrationServer) Register(ctx context.Context, req *modulev1.Registe
 
 	// Register with the module lifecycle manager (adds to registry, publishes events).
 	deps := info.DependsOn
-	if err := s.mgr.modMgr.Register(proxy, deps); err != nil {
+	if err := s.mgr.modMgr.Register(ctx, proxy, deps); err != nil {
 		slog.Error("module registration: registry", "id", info.ID, "error", err)
 		return &modulev1.RegisterResponse{MeshAddr: s.mgr.meshAddr, Accepted: false, Error: err.Error()}, nil
 	}
@@ -1077,7 +1077,7 @@ func (s *registrationServer) BootstrapRegister(ctx context.Context, req *modulev
 }
 
 func (s *registrationServer) Unregister(ctx context.Context, req *modulev1.UnregisterRequest) (*modulev1.UnregisterResponse, error) {
-	if err := s.mgr.modMgr.Unregister(req.ModuleId); err != nil {
+	if err := s.mgr.modMgr.Unregister(ctx, req.ModuleId); err != nil {
 		slog.Warn("module unregistration failed", "id", req.ModuleId, "error", err)
 		return &modulev1.UnregisterResponse{Acknowledged: false}, nil
 	}

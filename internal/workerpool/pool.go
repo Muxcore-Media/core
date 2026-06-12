@@ -164,7 +164,7 @@ func (p *Pool) reaperLoop(ctx context.Context) {
 			slog.Info("workerpool: reaper stopped")
 			return
 		case <-ticker.C:
-			p.reapStaleTasks()
+			p.reapStaleTasks(ctx)
 		}
 	}
 }
@@ -185,7 +185,7 @@ func (p *Pool) reaperInterval() time.Duration {
 
 // reapStaleTasks finds all Running tasks whose LastHeartbeat is older than
 // heartbeatTimeout and marks them as Failed.
-func (p *Pool) reapStaleTasks() {
+func (p *Pool) reapStaleTasks(ctx context.Context) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -215,7 +215,7 @@ func (p *Pool) reapStaleTasks() {
 
 // FailNodeTasks marks all Running and Assigned tasks on the given node as
 // Failed. Returns the number of tasks failed.
-func (p *Pool) FailNodeTasks(nodeID string) int {
+func (p *Pool) FailNodeTasks(ctx context.Context, nodeID string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

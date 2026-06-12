@@ -315,7 +315,7 @@ func (a *AuthInterceptor) StreamInterceptor() grpc.StreamServerInterceptor {
 		if err != nil {
 			return err
 		}
-		wrappedStream := &authServerStream{ServerStream: stream, ctx: ctx}
+		wrappedStream := &authServerStream{ServerStream: stream, ctxFn: func() context.Context { return ctx }}
 		return handler(srv, wrappedStream)
 	}
 }
@@ -324,9 +324,9 @@ func (a *AuthInterceptor) StreamInterceptor() grpc.StreamServerInterceptor {
 // authenticated context after authorization.
 type authServerStream struct {
 	grpc.ServerStream
-	ctx context.Context
+	ctxFn func() context.Context
 }
 
 func (w *authServerStream) Context() context.Context {
-	return w.ctx
+	return w.ctxFn()
 }

@@ -48,7 +48,7 @@ func (m *Manager) SetAuditLogger(a contracts.AuditLogger) {
 	m.audit = a
 }
 
-func (m *Manager) Register(mod contracts.Module, deps []string) error {
+func (m *Manager) Register(ctx context.Context, mod contracts.Module, deps []string) error {
 	info := mod.Info()
 
 	// Check core version compatibility before registration.
@@ -66,12 +66,12 @@ func (m *Manager) Register(mod contracts.Module, deps []string) error {
 		return err
 	}
 
-	m.auditLifecycle("module.register", info.ID, map[string]string{"version": info.Version})
-	m.publishModuleRegistered(info)
+	m.auditLifecycle(ctx, "module.register", info.ID, map[string]string{"version": info.Version})
+	m.publishModuleRegistered(ctx, info)
 	return nil
 }
 
-func (m *Manager) Unregister(id string) error {
+func (m *Manager) Unregister(ctx context.Context, id string) error {
 	entry, err := m.registry.Get(id)
 	if err != nil {
 		return err
@@ -81,8 +81,8 @@ func (m *Manager) Unregister(id string) error {
 		return err
 	}
 
-	m.auditLifecycle("module.unregister", id, nil)
-	m.publishModuleUnregistered(entry.Info)
+	m.auditLifecycle(ctx, "module.unregister", id, nil)
+	m.publishModuleUnregistered(ctx, entry.Info)
 	return nil
 }
 
@@ -100,7 +100,7 @@ func (m *Manager) InitAll(ctx context.Context) error {
 			if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateDegraded); setErr != nil {
 				slog.Error("failed to set module state", "id", entry.Info.ID, "state", contracts.ModuleStateDegraded, "error", setErr)
 			}
-			m.publishModuleDegraded(entry.Info, err)
+			m.publishModuleDegraded(ctx, entry.Info, err)
 			continue
 		}
 		slog.Info("initializing module", "id", entry.Info.ID, "version", entry.Info.Version)
@@ -125,7 +125,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 			if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateDegraded); setErr != nil {
 				slog.Error("failed to set module state", "id", entry.Info.ID, "state", contracts.ModuleStateDegraded, "error", setErr)
 			}
-			m.publishModuleDegraded(entry.Info, err)
+			m.publishModuleDegraded(ctx, entry.Info, err)
 			continue
 		}
 		slog.Info("starting module", "id", entry.Info.ID)
@@ -161,7 +161,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 		if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateStopped); setErr != nil {
 			slog.Error("failed to set module state", "id", entry.Info.ID, "state", contracts.ModuleStateStopped, "error", setErr)
 		}
-		m.auditLifecycle("module.stop", entry.Info.ID, nil)
+		m.auditLifecycle(ctx, "module.stop", entry.Info.ID, nil)
 	}
 	return errors.Join(errs...)
 }
@@ -225,8 +225,8 @@ func (m *Manager) HealthCheck(ctx context.Context) map[string]error {
 		}
 		results[entry.Info.ID] = err
 		if err != nil {
-			m.auditLifecycle("module.degraded", entry.Info.ID, map[string]string{"error": err.Error()})
-			m.publishModuleDegraded(entry.Info, err)
+			m.auditLifecycle(ctx, "module.degraded", entry.Info.ID, map[string]string{"error": err.Error()})
+			m.publishModuleDegraded(ctx, entry.Info, err)
 		}
 	}
 	return results
@@ -242,7 +242,7 @@ func (m *Manager) initOne(ctx context.Context, entry *registry.Entry) error {
 	if err := entry.Module.Init(ctx); err != nil {
 		return err
 	}
-	m.auditLifecycle("module.init", entry.Info.ID, map[string]string{"version": entry.Info.Version})
+	m.auditLifecycle(ctx, "module.init", entry.Info.ID, map[string]string{"version": entry.Info.Version})
 	return nil
 }
 
@@ -265,7 +265,7 @@ func (m *Manager) startOne(ctx context.Context, entry *registry.Entry) error {
 	if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateRunning); setErr != nil {
 		slog.Error("failed to set module state", "id", entry.Info.ID, "state", contracts.ModuleStateRunning, "error", setErr)
 	}
-	m.auditLifecycle("module.start", entry.Info.ID, nil)
+	m.auditLifecycle(ctx, "module.start", entry.Info.ID, nil)
 	return nil
 }
 
@@ -317,7 +317,7 @@ func (m *Manager) startupOrder(entries []*registry.Entry) ([]*registry.Entry, er
 
 // auditLifecycle records a module lifecycle event via the audit logger.
 // It is a fire-and-forget operation; failures are silently dropped.
-func (m *Manager) auditLifecycle(action, moduleID string, details map[string]string) {
+func (m *Manager) auditLifecycle(ctx context.Context, action, moduleID string, details map[string]string) {
 	if m.audit == nil {
 		return
 	}
@@ -348,7 +348,7 @@ func (m *Manager) auditLifecycle(action, moduleID string, details map[string]str
 			Resource:  moduleID,
 			Details:   details,
 		}
-		if err := m.audit.Log(context.Background(), entry); err != nil {
+		if err := m.audit.Log(ctx, entry); err != nil {
 			slog.Error("audit log write failed", "action", action, "error", err)
 		}
 	}()
@@ -356,7 +356,7 @@ func (m *Manager) auditLifecycle(action, moduleID string, details map[string]str
 
 // publishModuleRegistered publishes a module.registered event on the event bus.
 // If no bus is configured, the event is silently dropped.
-func (m *Manager) publishModuleRegistered(info contracts.ModuleInfo) {
+func (m *Manager) publishModuleRegistered(ctx context.Context, info contracts.ModuleInfo) {
 	if m.bus == nil {
 		return
 	}
@@ -368,7 +368,7 @@ func (m *Manager) publishModuleRegistered(info contracts.ModuleInfo) {
 		slog.Error("failed to marshal module.registered event", "module", info.ID, "error", err)
 		return
 	}
-	if err := m.bus.Publish(context.Background(), contracts.Event{
+	if err := m.bus.Publish(ctx, contracts.Event{
 		Type:    contracts.EventModuleRegistered,
 		Source:  info.ID,
 		Payload: payload,
@@ -378,7 +378,7 @@ func (m *Manager) publishModuleRegistered(info contracts.ModuleInfo) {
 }
 
 // publishModuleUnregistered publishes a module.unregistered event on the event bus.
-func (m *Manager) publishModuleUnregistered(info contracts.ModuleInfo) {
+func (m *Manager) publishModuleUnregistered(ctx context.Context, info contracts.ModuleInfo) {
 	if m.bus == nil {
 		return
 	}
@@ -389,7 +389,7 @@ func (m *Manager) publishModuleUnregistered(info contracts.ModuleInfo) {
 		slog.Error("failed to marshal module.unregistered event", "module", info.ID, "error", err)
 		return
 	}
-	if err := m.bus.Publish(context.Background(), contracts.Event{
+	if err := m.bus.Publish(ctx, contracts.Event{
 		Type:    contracts.EventModuleUnregistered,
 		Source:  info.ID,
 		Payload: payload,
@@ -399,7 +399,7 @@ func (m *Manager) publishModuleUnregistered(info contracts.ModuleInfo) {
 }
 
 // publishModuleDegraded publishes a module.degraded event on the event bus.
-func (m *Manager) publishModuleDegraded(info contracts.ModuleInfo, err error) {
+func (m *Manager) publishModuleDegraded(ctx context.Context, info contracts.ModuleInfo, err error) {
 	if m.bus == nil {
 		return
 	}
@@ -415,7 +415,7 @@ func (m *Manager) publishModuleDegraded(info contracts.ModuleInfo, err error) {
 		slog.Error("failed to marshal module.degraded event", "module", info.ID, "error", marshalErr)
 		return
 	}
-	if err := m.bus.Publish(context.Background(), contracts.Event{
+	if err := m.bus.Publish(ctx, contracts.Event{
 		Type:    contracts.EventModuleDegraded,
 		Source:  info.ID,
 		Payload: payload,

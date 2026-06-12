@@ -41,8 +41,7 @@ type sub struct {
 	// Written to by Publish, drained by the subscriber worker.
 	ch chan contracts.Event
 
-	// ctx/cancel for the subscriber worker goroutine lifecycle.
-	ctx    context.Context
+	// cancel for the subscriber worker goroutine lifecycle.
 	cancel context.CancelFunc
 
 	// dropped counts events dropped due to full channel.
@@ -358,12 +357,11 @@ func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType str
 		handler:   handler,
 		moduleID:  moduleID,
 		ch:        make(chan contracts.Event, subscriberBufferSize),
-		ctx:       workerCtx,
 		cancel:    workerCancel,
 	}
 
 	// Start the dedicated worker goroutine for this subscriber.
-	go b.subscriberWorker(s, timeout)
+	go b.subscriberWorker(workerCtx, s, timeout)
 
 	b.subscribers = append(b.subscribers, s)
 	b.mu.Unlock()
@@ -387,7 +385,7 @@ func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType str
 // subscriberWorker drains the subscriber's channel and invokes the handler.
 // Each handler invocation gets a timeout context. When the subscriber is
 // removed (Unsubscribe/UnsubscribeAll), the worker's context is cancelled.
-func (b *MemoryBus) subscriberWorker(s *sub, timeout time.Duration) {
+func (b *MemoryBus) subscriberWorker(ctx context.Context, s *sub, timeout time.Duration) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("subscriber worker panic recovered",
@@ -398,7 +396,7 @@ func (b *MemoryBus) subscriberWorker(s *sub, timeout time.Duration) {
 	}()
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			return
 		case event, ok := <-s.ch:
 			if !ok {
@@ -407,7 +405,7 @@ func (b *MemoryBus) subscriberWorker(s *sub, timeout time.Duration) {
 			// Acquire semaphore slot for bounded concurrency.
 			select {
 			case b.sem <- struct{}{}:
-			case <-s.ctx.Done():
+			case <-ctx.Done():
 				return
 			}
 
@@ -425,7 +423,7 @@ func (b *MemoryBus) subscriberWorker(s *sub, timeout time.Duration) {
 					}
 					<-b.sem // release semaphore on panic or normal return
 				}()
-				handlerCtx, cancel := context.WithTimeout(s.ctx, timeout)
+				handlerCtx, cancel := context.WithTimeout(ctx, timeout)
 				defer cancel()
 				if event.TraceID != "" {
 					handlerCtx = trace.WithTraceID(handlerCtx, event.TraceID)

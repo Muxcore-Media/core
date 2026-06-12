@@ -386,7 +386,7 @@ func RunClusterEventListener(ctx context.Context, cluster contracts.Cluster, nod
 				}
 				switch evt.Type {
 				case contracts.ClusterNodeLeft:
-					count := workerPool.FailNodeTasks(evt.Node.ID)
+					count := workerPool.FailNodeTasks(ctx, evt.Node.ID)
 					if count > 0 {
 						slog.Warn("workerpool: tasks failed due to node departure",
 							"node", evt.Node.ID,
@@ -406,7 +406,7 @@ func RunClusterEventListener(ctx context.Context, cluster contracts.Cluster, nod
 					}
 
 				case contracts.ClusterNodeDegraded:
-					count := workerPool.FailNodeTasks(evt.Node.ID)
+					count := workerPool.FailNodeTasks(ctx, evt.Node.ID)
 					if count > 0 {
 						slog.Warn("workerpool: tasks failed due to node degradation",
 							"node", evt.Node.ID,
@@ -471,7 +471,7 @@ func InitHealthProbes(ctx context.Context, bus *events.MemoryBus, discoveryGrpc 
 
 	return func() map[string]error {
 		results := make(map[string]error)
-		for name, err := range coreH.Check(context.Background()) {
+		for name, err := range coreH.Check(ctx) {
 			results["core."+name] = err
 		}
 		for _, entry := range reg.ListAll() {
