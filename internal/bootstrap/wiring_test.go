@@ -239,31 +239,6 @@ func (m *mockPublishPolicy) CanPublish(ctx context.Context, callerID, eventType 
 	return m.allow, nil
 }
 
-type mockAuthorizer struct {
-	can bool
-}
-
-func (m *mockAuthorizer) Can(ctx context.Context, session contracts.Session, action, resource string) (bool, error) {
-	return m.can, nil
-}
-
-type mockAuthProvider struct {
-	session contracts.Session
-	err     error
-}
-
-func (m *mockAuthProvider) Authenticate(ctx context.Context, creds contracts.Credentials) (contracts.Session, error) {
-	return m.session, m.err
-}
-
-func (m *mockAuthProvider) Validate(ctx context.Context, token string) (contracts.Session, error) {
-	return m.session, m.err
-}
-
-func (m *mockAuthProvider) Revoke(ctx context.Context, token string) error {
-	return m.err
-}
-
 type mockModule struct {
 	info contracts.ModuleInfo
 	caps []string
@@ -299,32 +274,6 @@ type mockPublishPolicyModule struct {
 
 func (m *mockPublishPolicyModule) CanPublish(ctx context.Context, callerID, eventType string) (bool, error) {
 	return m.policy.allow, nil
-}
-
-type mockAuthorizerModule struct {
-	mockModule
-	authorizer *mockAuthorizer
-}
-
-func (m *mockAuthorizerModule) Can(ctx context.Context, session contracts.Session, action, resource string) (bool, error) {
-	return m.authorizer.can, nil
-}
-
-type mockAuthProviderModule struct {
-	mockModule
-	provider *mockAuthProvider
-}
-
-func (m *mockAuthProviderModule) Authenticate(ctx context.Context, creds contracts.Credentials) (contracts.Session, error) {
-	return m.provider.session, m.provider.err
-}
-
-func (m *mockAuthProviderModule) Validate(ctx context.Context, token string) (contracts.Session, error) {
-	return m.provider.session, m.provider.err
-}
-
-func (m *mockAuthProviderModule) Revoke(ctx context.Context, token string) error {
-	return m.provider.err
 }
 
 func TestWireCallPolicy(t *testing.T) {

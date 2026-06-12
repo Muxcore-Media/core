@@ -7,6 +7,7 @@ ARG VERSION=0.0.0-dev
 
 WORKDIR /src
 COPY go.mod go.sum ./
+COPY pkg/contracts/go.mod ./pkg/contracts/
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build \
