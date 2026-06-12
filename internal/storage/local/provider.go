@@ -42,6 +42,7 @@ func New(baseDir string) (*Provider, error) {
 // Uses URL-style percent encoding for '/' and other unsafe characters.
 func encodeKey(key string) string {
 	safe := strings.NewReplacer(
+		"%", "%25",
 		"/", "%2F",
 		"\\", "%5C",
 		"..", "%2E%2E",

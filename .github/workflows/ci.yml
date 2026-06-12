@@ -31,7 +31,7 @@ jobs:
         run: |
           go install github.com/psampaz/go-mod-outdated@latest
           echo "::group::Main module outdated deps"
-          go list -u -m -json all | go-mod-outdated --update-style
+          go list -u -m -json all | go-mod-outdated --update-style || true
           echo "::endgroup::"
           echo "::group::SDK client outdated deps"
           (cd sdk/go/client && go list -u -m -json all | go-mod-outdated --update-style || true)
