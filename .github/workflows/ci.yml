@@ -65,7 +65,7 @@ jobs:
       - name: Protobuf breaking change check
         uses: bufbuild/buf-action@v1
         with:
-          version: latest
+          version: 1.50.0
           setup_only: false
           input: proto
           against: https://github.com/Muxcore-Media/core.git
