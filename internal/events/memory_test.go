@@ -3,6 +3,7 @@ package events
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -388,6 +389,258 @@ func TestAutoIDTimestamp(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for event")
 	}
+}
+
+func TestSubscriberCount(t *testing.T) {
+	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
+
+	if c := bus.SubscriberCount(); c != 0 {
+		t.Errorf("expected 0 subscribers initially, got %d", c)
+	}
+
+	bus.Subscribe(context.Background(), "evt.a", func(_ context.Context, e contracts.Event) error { return nil })
+	bus.Subscribe(context.Background(), "evt.b", func(_ context.Context, e contracts.Event) error { return nil })
+
+	if c := bus.SubscriberCount(); c != 2 {
+		t.Errorf("expected 2 subscribers, got %d", c)
+	}
+}
+
+func TestPublishCount(t *testing.T) {
+	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
+
+	if c := bus.PublishCount(); c != 0 {
+		t.Errorf("expected 0 initially, got %d", c)
+	}
+
+	bus.Publish(context.Background(), contracts.Event{Type: "test"})
+	bus.Publish(context.Background(), contracts.Event{Type: "test"})
+	bus.Publish(context.Background(), contracts.Event{Type: "test"})
+
+	if c := bus.PublishCount(); c != 3 {
+		t.Errorf("expected 3 publishes, got %d", c)
+	}
+}
+
+func TestDroppedEvents_Initial(t *testing.T) {
+	bus := NewMemoryBus()
+	if c := bus.DroppedEvents(); c != 0 {
+		t.Errorf("expected 0 dropped events initially, got %d", c)
+	}
+}
+
+func TestMemoryBus_CloseWithDrain(t *testing.T) {
+	bus := NewMemoryBus()
+	bus.SetPublishPolicy(allowAllPolicy{})
+
+	var mu sync.Mutex
+	var processed int
+
+	handler := func(ctx context.Context, e contracts.Event) error {
+		mu.Lock()
+		processed++
+		mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+		return nil
+	}
+
+	bus.Subscribe(context.Background(), "test.event", handler)
+
+	for i := 0; i < 3; i++ {
+		bus.Publish(context.Background(), contracts.Event{
+			Type: "test.event", Source: "test",
+		})
+	}
+
+	bus.Close()
+
+	_, err := bus.Subscribe(context.Background(), "other.event", handler)
+	if err == nil {
+		t.Error("expected error subscribing after close")
+	}
+
+	mu.Lock()
+	if processed != 3 {
+		t.Errorf("expected 3 events processed, got %d", processed)
+	}
+	mu.Unlock()
+}
+
+func TestMemoryBus_Close_WithWAL(t *testing.T) {
+	dir := t.TempDir()
+	bus := NewMemoryBus()
+	bus.SetPublishPolicy(allowAllPolicy{})
+
+	if err := bus.EnableWAL(dir); err != nil {
+		t.Fatalf("EnableWAL: %v", err)
+	}
+
+	bus.Subscribe(context.Background(), "test.event",
+		func(_ context.Context, e contracts.Event) error { return nil },
+	)
+
+	bus.Publish(context.Background(), contracts.Event{Type: "test.event", Source: "test"})
+
+	bus.Close()
+}
+
+func TestMemoryBus_Close_BlocksSubscribe(t *testing.T) {
+	bus := NewMemoryBus()
+	bus.Close()
+
+	_, err := bus.Subscribe(context.Background(), "test", func(_ context.Context, e contracts.Event) error {
+		return nil
+	})
+	if err == nil {
+		t.Error("expected Subscribe to fail after Close")
+	}
+}
+
+func TestMemoryBus_Close_Idempotent(t *testing.T) {
+	bus := NewMemoryBus()
+	bus.Close()
+	bus.Close() // must not panic
+}
+
+func TestMemoryBus_SubscribeModule(t *testing.T) {
+	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
+
+	received := make(chan contracts.Event, 1)
+	_, err := bus.SubscribeModule(context.Background(), "mod-a", "test.event",
+		func(_ context.Context, e contracts.Event) error {
+			received <- e
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("SubscribeModule: %v", err)
+	}
+
+	bus.Publish(context.Background(), contracts.Event{Type: "test.event"})
+
+	select {
+	case <-received:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for event via SubscribeModule")
+	}
+}
+
+func TestMemoryBus_UnsubscribeAll(t *testing.T) {
+	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
+
+	var count int
+	bus.SubscribeModule(context.Background(), "mod-a", "evt",
+		func(_ context.Context, e contracts.Event) error { count++; return nil },
+	)
+	bus.SubscribeModule(context.Background(), "mod-a", "evt",
+		func(_ context.Context, e contracts.Event) error { count++; return nil },
+	)
+	bus.SubscribeModule(context.Background(), "mod-b", "evt",
+		func(_ context.Context, e contracts.Event) error { count++; return nil },
+	)
+
+	if c := bus.SubscriberCount(); c != 3 {
+		t.Fatalf("expected 3 subscribers before UnsubscribeAll, got %d", c)
+	}
+
+	bus.UnsubscribeAll(context.Background(), "mod-a")
+	if c := bus.SubscriberCount(); c != 1 {
+		t.Errorf("expected 1 subscriber after UnsubscribeAll(mod-a), got %d", c)
+	}
+}
+
+func TestMemoryBus_PublishPolicy(t *testing.T) {
+	bus := NewMemoryBus()
+	policy := permissivePolicy{}
+
+	// Should start as nil.
+	if bus.PublishPolicy() != nil {
+		t.Error("expected nil PublishPolicy initially")
+	}
+
+	bus.SetPublishPolicy(policy)
+	if bus.PublishPolicy() != policy {
+		t.Error("expected PublishPolicy to return the set policy")
+	}
+}
+
+func TestMemoryBus_SetAuditLogger_NoPanic(t *testing.T) {
+	bus := NewMemoryBus()
+	bus.SetAuditLogger(&mockAuditLogger{})
+	bus.SetNodeID("node-1")
+}
+
+func TestMemoryBus_SubscriptionStats(t *testing.T) {
+	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
+
+	bus.Subscribe(context.Background(), "evt.a", func(_ context.Context, e contracts.Event) error { return nil })
+	bus.Subscribe(context.Background(), "evt.a", func(_ context.Context, e contracts.Event) error { return nil })
+	bus.Subscribe(context.Background(), "evt.b", func(_ context.Context, e contracts.Event) error { return nil })
+
+	stats := bus.SubscriptionStats()
+	if len(stats) != 2 {
+		t.Fatalf("expected 2 event types in stats, got %d: %v", len(stats), stats)
+	}
+	for _, s := range stats {
+		switch s.EventType {
+		case "evt.a":
+			if s.SubscriberCount != 2 {
+				t.Errorf("expected 2 subscribers for evt.a, got %d", s.SubscriberCount)
+			}
+		case "evt.b":
+			if s.SubscriberCount != 1 {
+				t.Errorf("expected 1 subscriber for evt.b, got %d", s.SubscriberCount)
+			}
+		default:
+			t.Errorf("unexpected event type %q in stats", s.EventType)
+		}
+	}
+}
+
+func TestMemoryBus_SubscriberStats_AfterPublish(t *testing.T) {
+	bus := NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
+
+	bus.Subscribe(context.Background(), "evt.a", func(_ context.Context, e contracts.Event) error { return nil })
+	bus.Publish(context.Background(), contracts.Event{Type: "evt.a"})
+	bus.Publish(context.Background(), contracts.Event{Type: "evt.a"})
+	time.Sleep(50 * time.Millisecond)
+
+	stats := bus.SubscriberStats()
+	if len(stats) == 0 {
+		t.Fatal("expected subscriber stats after publish")
+	}
+	if stats[0].Processed == 0 {
+		t.Errorf("expected processed count > 0 after publish, got %d", stats[0].Processed)
+	}
+}
+
+func TestMemoryBus_ReplayFrom_WithoutWAL(t *testing.T) {
+	bus := NewMemoryBus()
+	err := bus.ReplayFrom(context.Background(), 0, func(e contracts.Event) error { return nil })
+	if err == nil {
+		t.Error("expected error when ReplayFrom called without WAL")
+	}
+}
+
+// mockAuditLogger implements contracts.AuditLogger for testing.
+type mockAuditLogger struct{}
+
+func (m *mockAuditLogger) Log(_ context.Context, _ contracts.AuditEntry) error { return nil }
+func (m *mockAuditLogger) Query(_ context.Context, _ contracts.AuditFilter) ([]contracts.AuditEntry, error) {
+	return nil, nil
+}
+func (m *mockAuditLogger) Export(_ context.Context, _ string) (io.ReadCloser, error) { return nil, nil }
+func (m *mockAuditLogger) VerifyChainIntegrity(_ context.Context, _, _ time.Time) (contracts.ChainVerificationResult, error) {
+	return contracts.ChainVerificationResult{Valid: true}, nil
+}
+func (m *mockAuditLogger) VerifyAll(_ context.Context) (contracts.ChainVerificationResult, error) {
+	return contracts.ChainVerificationResult{Valid: true}, nil
 }
 
 func TestPreservesProvidedIDTimestamp(t *testing.T) {
