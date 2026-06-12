@@ -20,6 +20,7 @@ require (
 	golang.org/x/sys v0.46.0
 )
 
+//nolint:gomoddirectives // local replace required for monorepo module
 replace github.com/Muxcore-Media/core/pkg/contracts => ./pkg/contracts
 
 module github.com/Muxcore-Media/core
