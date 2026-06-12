@@ -41,25 +41,60 @@ func New(baseDir string) (*Provider, error) {
 // encodeKey converts a storage key to a safe filesystem path segment.
 // Uses URL-style percent encoding for '/' and other unsafe characters.
 func encodeKey(key string) string {
-	safe := strings.NewReplacer(
-		"%", "%25",
-		"/", "%2F",
-		"\\", "%5C",
-		"..", "%2E%2E",
-		"\x00", "%00",
-	).Replace(key)
-	return safe
+	var b strings.Builder
+	b.Grow(len(key) * 3 / 2)
+	for i := 0; i < len(key); i++ {
+		switch {
+		case key[i] == '%':
+			b.WriteString("%25")
+		case key[i] == '/':
+			b.WriteString("%2F")
+		case key[i] == '\\':
+			b.WriteString("%5C")
+		case key[i] == '\x00':
+			b.WriteString("%00")
+		case key[i] == '.' && i+1 < len(key) && key[i+1] == '.':
+			b.WriteString("%2E%2E")
+			i++
+		default:
+			b.WriteByte(key[i])
+		}
+	}
+	return b.String()
 }
 
 // decodeKey reverses encodeKey.
 func decodeKey(encoded string) string {
-	unsafe := strings.NewReplacer(
-		"%2F", "/",
-		"%5C", "\\",
-		"%2E%2E", "..",
-		"%00", "\x00",
-	).Replace(encoded)
-	return unsafe
+	var b strings.Builder
+	b.Grow(len(encoded))
+	for i := 0; i < len(encoded); i++ {
+		if encoded[i] == '%' && i+2 < len(encoded) {
+			switch encoded[i : i+3] {
+			case "%25":
+				b.WriteByte('%')
+			case "%2F":
+				b.WriteByte('/')
+			case "%5C":
+				b.WriteByte('\\')
+			case "%00":
+				b.WriteByte('\x00')
+			case "%2E":
+				if i+5 < len(encoded) && encoded[i:i+6] == "%2E%2E" {
+					b.WriteString("..")
+					i += 5
+					continue
+				}
+				fallthrough
+			default:
+				b.WriteByte('%')
+				continue
+			}
+			i += 2
+		} else {
+			b.WriteByte(encoded[i])
+		}
+	}
+	return b.String()
 }
 
 func (p *Provider) objPath(key string) string {
