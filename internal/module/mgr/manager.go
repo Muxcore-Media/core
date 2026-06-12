@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -13,9 +14,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Muxcore-Media/contracts-reconciler/reconciler"
@@ -42,6 +45,58 @@ const (
 // the manager gives up and logs a permanent failure.
 const maxRestartAttempts = 5
 
+// ScanPolicy controls which dangerous patterns are rejected versus warned
+// during pre-build source scanning. All rejection flags default to true
+// (secure by default). Set a flag to false to allow the pattern.
+type ScanPolicy struct {
+	// RejectUnsafe rejects modules that import "unsafe". Default true.
+	RejectUnsafe bool
+	// RejectCGO rejects modules that import "C" (cgo). Default true.
+	RejectCGO bool
+	// RejectGoGenerate rejects modules with //go:generate directives. Default true.
+	RejectGoGenerate bool
+	// RejectExec rejects modules that import "os/exec". Default true.
+	RejectExec bool
+	// RejectSyscall rejects modules that import "syscall". Default true.
+	RejectSyscall bool
+	// RejectNetworkInit rejects modules that import networking packages in init(). Default true.
+	RejectNetworkInit bool
+	// WarnExec warns when modules import "os/exec". Default false (RejectExec takes precedence).
+	WarnExec bool
+	// WarnSyscall warns when modules import "syscall". Default false (RejectSyscall takes precedence).
+	WarnSyscall bool
+	// WarnNetworkInit warns when modules import networking packages in init(). Default false (RejectNetworkInit takes precedence).
+	WarnNetworkInit bool
+}
+
+// DefaultScanPolicy is the strict default: reject unsafe, cgo, go:generate,
+// os/exec, syscall, and network-in-init. All reject flags are true (secure by default).
+// Warn flags default to false since the corresponding Reject flags handle it.
+var DefaultScanPolicy = ScanPolicy{
+	RejectUnsafe:      true,
+	RejectCGO:         true,
+	RejectGoGenerate:  true,
+	RejectExec:        true,
+	RejectSyscall:     true,
+	RejectNetworkInit: true,
+}
+
+// CommandRunner abstracts os/exec for testability.
+type CommandRunner interface {
+	CommandContext(ctx context.Context, name string, arg ...string) *exec.Cmd
+}
+
+type execCommandRunner struct{}
+
+func (execCommandRunner) CommandContext(ctx context.Context, name string, arg ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, name, arg...) //nolint:gosec // arg is test-provided or from config
+}
+
+// versionPattern validates module version strings for git branch/tag safety.
+// Only allows semver-like strings: optional 'v' prefix, digits, dots, hyphens.
+// Rejects shell metacharacters and git-smart-protocol injection vectors.
+var versionPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$`)
+
 // ModuleBinary is a resolved module binary ready to run.
 type ModuleBinary struct {
 	ID            string
@@ -49,6 +104,10 @@ type ModuleBinary struct {
 	Path          string
 	Repo          string
 	RestartPolicy RestartPolicy
+	InstanceID    string
+	// Config is instance-specific configuration passed as environment
+	// variables (prefixed with MUXCORE_CFG_) to the module binary.
+	Config map[string]string
 }
 
 // Manager spawns and tracks sidecar module processes.
@@ -56,11 +115,74 @@ type Manager struct {
 	mu        sync.Mutex
 	processes map[string]*exec.Cmd
 	proxies   map[string]*SidecarProxy // module ID → proxy for health tracking
+	// pendingProcesses holds processes whose SidecarProxy hasn't registered yet
+	// (via gRPC TrackProxy). Once TrackProxy is called, the proxy is attached.
+	pendingProcesses map[string]*exec.Cmd
+	// finishedProcesses caches exit errors for processes that exited before
+	// their proxy registered. Cleared when TrackProxy delivers them.
+	finishedProcesses map[string]error
+	// resolving tracks module IDs that are currently being resolved (git clone +
+	// go build). Prevents duplicate concurrent resolve attempts for the same module.
+	resolving map[string]bool
 	meshAddr  string
 	cacheDir  string
 	reg       *registry.Registry
 	modMgr    *modulemgr.Manager
+	// ScanPolicy controls which dangerous patterns are rejected versus warned
+	// during pre-build source scanning. Default is strict (secure by default).
+	ScanPolicy ScanPolicy
+	// allowedRepoHosts restricts git clone to specific hosts. Empty means all hosts allowed.
+	// Set from SpoolConfig.AllowedHosts at bootstrap.
+	allowedRepoHosts []string
+	spawnCount       atomic.Int64
+	restartCount     atomic.Int64
+	resolveCount     atomic.Int64
+	cmdRunner        CommandRunner
+	// watchdogPath is the path to the muxcore-watchdog binary.
+	// When set, SpawnWithWatchdog launches this binary instead of the module
+	// directly, enabling automatic core failover for sidecar modules.
+	watchdogPath string
+	// tagModules maps module ID to its spool tag entry for resurrection.
+	// Populated by SetTag during bootstrap. Used by ResurrectOrphan to
+	// re-spawn modules that were running on a departed cluster node.
+	tagModules map[string]contracts.TagModule
+	// binaries maps module ID to its ModuleBinary for restart capabilities.
+	// Populated by Spawn/SpawnWithWatchdog. Used by RestartModule to
+	// re-spawn a process that is alive but unhealthy.
+	binaries map[string]*ModuleBinary
+	// spawnCancel holds per-module cancel funcs for the context passed to
+	// watchProcess. RestartModule cancels the old context before killing the
+	// process, ensuring watchProcess does not attempt a competing restart.
+	spawnCancel map[string]context.CancelFunc
+	// PostRegisterHook is called after every successful sidecar module
+	// registration, allowing core to re-discover and wire policy/auth
+	// providers that may have registered after the initial bootstrap window.
+	PostRegisterHook func(moduleID string, caps []string)
+	// certAuth is the internal certificate authority for issuing module
+	// certificates. When set, spawned modules get signed client certs
+	// and the BootstrapRegister RPC is available for external modules.
+	certAuth CertIssuer
 }
+
+// CertIssuer is the interface for issuing module certificates and
+// validating bootstrap tokens. Implemented by CertAuthority.
+type CertIssuer interface {
+	IssueModuleCertForDir(moduleID string, dir string) (certPath, keyPath string, err error)
+	ValidateToken(token string) (moduleID string, err error)
+	CACertPEM() []byte
+	GenerateToken(moduleID string) (token string, err error)
+}
+
+// SetCertAuthority sets the certificate authority for issuing module certs.
+func (m *Manager) SetCertAuthority(ca CertIssuer) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.certAuth = ca
+}
+
+func (m *Manager) SpawnCount() int64   { return m.spawnCount.Load() }
+func (m *Manager) RestartCount() int64 { return m.restartCount.Load() }
+func (m *Manager) ResolveCount() int64 { return m.resolveCount.Load() }
 
 // NewManager creates a module manager.
 // meshAddr is the gRPC address modules should connect to.
@@ -72,24 +194,186 @@ func NewManager(meshAddr string, reg *registry.Registry, modMgr *modulemgr.Manag
 		home = "/tmp"
 	}
 	return &Manager{
-		processes: make(map[string]*exec.Cmd),
-		proxies:   make(map[string]*SidecarProxy),
-		meshAddr:  meshAddr,
-		cacheDir:  filepath.Join(home, ".muxcore", "modules"),
-		reg:       reg,
-		modMgr:    modMgr,
+		processes:         make(map[string]*exec.Cmd),
+		proxies:           make(map[string]*SidecarProxy),
+		pendingProcesses:  make(map[string]*exec.Cmd),
+		finishedProcesses: make(map[string]error),
+		binaries:          make(map[string]*ModuleBinary),
+		spawnCancel:       make(map[string]context.CancelFunc),
+		resolving:         make(map[string]bool),
+		meshAddr:          meshAddr,
+		cacheDir:          filepath.Join(home, ".muxcore", "modules"),
+		reg:               reg,
+		modMgr:            modMgr,
+		ScanPolicy:        DefaultScanPolicy,
+		cmdRunner:         execCommandRunner{},
 	}
+}
+
+// SetAllowedRepoHosts restricts module resolution to repos hosted on the given hosts.
+// Pass nil or empty to allow all hosts (not recommended for production).
+func (m *Manager) SetAllowedRepoHosts(hosts []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(hosts) == 0 {
+		m.allowedRepoHosts = nil
+		return
+	}
+	m.allowedRepoHosts = make([]string, len(hosts))
+	copy(m.allowedRepoHosts, hosts)
+}
+
+// SetWatchdogPath sets the path to the muxcore-watchdog binary.
+// When set, SpawnWithWatchdog can be used to launch modules with
+// automatic core failover. If empty, SpawnWithWatchdog falls back
+// to the regular Spawn behavior.
+func (m *Manager) SetWatchdogPath(path string) {
+	m.watchdogPath = path
+}
+
+// SetTag stores the spool tag definition so the manager can look up module
+// repos and versions for resurrection. Must be called before Spawn or
+// ResurrectOrphan.
+func (m *Manager) SetTag(tag *contracts.TagDefinition) {
+	m.tagModules = make(map[string]contracts.TagModule, len(tag.Modules))
+	for _, tm := range tag.Modules {
+		// Derive module ID the same way Resolve does.
+		m.tagModules[ModuleIDFromRepo(tm.Repo)] = tm
+	}
+}
+
+// ResurrectOrphan resolves and spawns a module that was running on a departed
+// cluster node. This node must have the module's tag entry cached (via SetTag).
+// Returns an error if the module is already running locally, not in the tag,
+// or if resolution/spawning fails.
+func (m *Manager) ResurrectOrphan(ctx context.Context, moduleID string) error {
+	tm, ok := m.tagModules[moduleID]
+	if !ok {
+		return fmt.Errorf("module %q not found in tag cache", moduleID)
+	}
+
+	// Atomically check if the module is already running or being resolved,
+	// and mark it as resolving to prevent duplicate concurrent attempts.
+	m.mu.Lock()
+	if _, exists := m.processes[moduleID]; exists {
+		m.mu.Unlock()
+		return nil // already running, nothing to do
+	}
+	if m.resolving[moduleID] {
+		m.mu.Unlock()
+		return fmt.Errorf("module %q is already being resolved by another goroutine", moduleID)
+	}
+	m.resolving[moduleID] = true
+	m.mu.Unlock()
+
+	// Ensure the resolving flag is cleared on return regardless of outcome.
+	defer func() {
+		m.mu.Lock()
+		delete(m.resolving, moduleID)
+		m.mu.Unlock()
+	}()
+
+	// Check if registered but process not tracked (self-registered sidecar).
+	if entry, err := m.reg.Resolve(moduleID); err == nil && entry.State == contracts.ModuleStateRunning {
+		return nil
+	}
+
+	bin, err := m.ResolveTagModule(tm)
+	if err != nil {
+		return fmt.Errorf("resolve orphan %q: %w", moduleID, err)
+	}
+	if err := m.VerifyChecksum(bin, tm.Checksum); err != nil {
+		return fmt.Errorf("checksum orphan %q: %w", moduleID, err)
+	}
+	if err := m.Spawn(ctx, bin); err != nil {
+		return fmt.Errorf("spawn orphan %q: %w", moduleID, err)
+	}
+
+	slog.Info("module resurrected after node departure",
+		"module", moduleID, "repo", tm.Repo, "version", tm.Version)
+	return nil
+}
+
+// ResurrectPendingOrphans attempts to resurrect every module in the tag
+// cache that is not already running on this node. Used when this node
+// becomes leader after a leader change.
+func (m *Manager) ResurrectPendingOrphans(ctx context.Context) {
+	m.mu.Lock()
+	tagModules := make(map[string]contracts.TagModule, len(m.tagModules))
+	for k, v := range m.tagModules {
+		tagModules[k] = v
+	}
+	m.mu.Unlock()
+
+	for moduleID := range tagModules {
+		// Check if already running.
+		m.mu.Lock()
+		_, hasProcess := m.processes[moduleID]
+		m.mu.Unlock()
+		if hasProcess {
+			continue
+		}
+		// Check if registered but process not tracked (self-registered sidecar).
+		if entry, err := m.reg.Resolve(moduleID); err == nil && entry.State == contracts.ModuleStateRunning {
+			continue
+		}
+		if err := m.ResurrectOrphan(ctx, moduleID); err != nil {
+			slog.Debug("resurrection check for orphan", "module", moduleID, "error", err)
+		}
+	}
+}
+
+// SetCommandRunner sets the command runner for testing.
+func (m *Manager) SetCommandRunner(runner CommandRunner) {
+	m.cmdRunner = runner
 }
 
 // Resolve locates a module binary for the given repo and version.
 // Resolution order: cache → build from source.
 func (m *Manager) Resolve(repoURL, version string) (*ModuleBinary, error) {
-	moduleID := moduleIDFromRepo(repoURL)
+	return m.resolveWithInstance(repoURL, version, "", nil, "")
+}
+
+// ResolveTagModule resolves a full TagModule entry including instance ID
+// and config, producing a ModuleBinary with a compound ID if an instance
+// ID is set.
+func (m *Manager) ResolveTagModule(tm contracts.TagModule) (*ModuleBinary, error) {
+	return m.resolveWithInstance(tm.Repo, tm.Version, tm.InstanceID, tm.Config, tm.Checksum)
+}
+
+func (m *Manager) resolveWithInstance(repoURL, version, instanceID string, config map[string]string, checksum string) (*ModuleBinary, error) {
+	m.resolveCount.Add(1)
+	if !versionPattern.MatchString(version) {
+		return nil, fmt.Errorf("invalid module version %q — must match semver pattern %s", version, versionPattern.String())
+	}
+
+	// Validate repo URL against allowed host list (supply chain protection).
+	parsed, err := url.Parse(repoURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid repo URL %q: %w", repoURL, err)
+	}
+	m.mu.Lock()
+	hosts := m.allowedRepoHosts
+	m.mu.Unlock()
+	if len(hosts) > 0 {
+		hostAllowed := false
+		for _, h := range hosts {
+			if parsed.Host == h {
+				hostAllowed = true
+				break
+			}
+		}
+		if !hostAllowed {
+			return nil, fmt.Errorf("repo host %q is not in the allowed repos list", parsed.Host)
+		}
+	}
+
+	moduleID := ModuleIDFromRepoWithInstance(repoURL, instanceID)
 
 	cachedPath := filepath.Join(m.cacheDir, moduleID, version, "muxcore-module")
 	if _, err := os.Stat(cachedPath); err == nil {
 		slog.Info("module found in cache", "id", moduleID, "version", version)
-		return &ModuleBinary{ID: moduleID, Version: version, Path: cachedPath, Repo: repoURL}, nil
+		return &ModuleBinary{ID: moduleID, Version: version, Path: cachedPath, Repo: repoURL, InstanceID: instanceID}, nil
 	}
 
 	slog.Info("module not in cache, building from source", "id", moduleID, "repo", repoURL)
@@ -115,11 +399,14 @@ func (m *Manager) Resolve(repoURL, version string) (*ModuleBinary, error) {
 	// Pre-build source scan: detect dangerous patterns before compilation.
 	// The go build step can execute go:generate directives, init() functions,
 	// and cgo code. We scan for these patterns first so operators can audit
-	// modules that use them. Modules with unsafe or cgo are rejected outright.
-	scanResults, err := scanModuleSource(buildDir)
+	// modules that use them. Rejected patterns are controlled by ScanPolicy
+	// (default: reject unsafe, cgo, and go:generate).
+	scanResults, err := scanModuleSource(buildDir, m.ScanPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("source scan for %s: %w", moduleID, err)
 	}
+	// Also scan go.mod for replace directives (dependency redirection).
+	scanResults = append(scanResults, scanGoMod(buildDir)...)
 	if len(scanResults) > 0 {
 		slog.Warn("module source scan found patterns requiring audit",
 			"module", moduleID, "patterns", scanResults,
@@ -139,18 +426,32 @@ func (m *Manager) Resolve(repoURL, version string) (*ModuleBinary, error) {
 	}
 	cacheBinPath := filepath.Join(cacheBinDir, "muxcore-module")
 	if err := os.Rename(binPath, cacheBinPath); err != nil {
-		data, _ := os.ReadFile(binPath)                                //nolint:gosec // binPath is internally constructed
-		if err := os.WriteFile(cacheBinPath, data, 0600); err != nil { //nolint:gosec // cacheBinPath is internally constructed
+		data, readErr := os.ReadFile(binPath) //nolint:gosec // binPath is internally constructed
+		if readErr != nil {
+			slog.Warn("failed to read built module binary for cache", "id", moduleID, "error", readErr)
+		} else if err := os.WriteFile(cacheBinPath, data, 0600); err != nil { //nolint:gosec // cacheBinPath is internally constructed
 			slog.Warn("failed to cache module binary", "id", moduleID, "error", err)
 		}
 	}
 
+	// Verify the built binary against the expected checksum if one was provided.
+	if checksum != "" {
+		bin := &ModuleBinary{ID: moduleID, Version: version, Path: cacheBinPath, Repo: repoURL, InstanceID: instanceID}
+		if err := m.VerifyChecksum(bin, checksum); err != nil {
+			return nil, fmt.Errorf("build %s: %w", moduleID, err)
+		}
+	}
+
 	slog.Info("module built and cached", "id", moduleID, "version", version)
-	return &ModuleBinary{ID: moduleID, Version: version, Path: cacheBinPath, Repo: repoURL}, nil
+	return &ModuleBinary{ID: moduleID, Version: version, Path: cacheBinPath, Repo: repoURL, InstanceID: instanceID}, nil
 }
 
 // Spawn starts a module binary as a child process.
 func (m *Manager) Spawn(ctx context.Context, bin *ModuleBinary) error {
+	if bin == nil {
+		return fmt.Errorf("module binary is nil")
+	}
+	m.spawnCount.Add(1)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -158,11 +459,37 @@ func (m *Manager) Spawn(ctx context.Context, bin *ModuleBinary) error {
 		return fmt.Errorf("module %s already running", bin.ID)
 	}
 
-	cmd := exec.CommandContext(ctx, bin.Path, //nolint:gosec // bin.Path is internally built from cache
+	m.binaries[bin.ID] = bin
+
+	// Build command args with TLS certs if a CA is configured.
+	args := []string{
 		"--muxcore-mesh-addr", m.meshAddr,
 		"--muxcore-module-id", bin.ID,
-	)
-	// Prefix module output so it's distinguishable from core's own log lines.
+	}
+	tlsCertDir := ""
+	if ca := m.certAuth; ca != nil {
+		tlsCertDir = filepath.Join(os.TempDir(), "muxcore-certs", bin.ID)
+		if rmErr := os.RemoveAll(tlsCertDir); rmErr != nil {
+			slog.Warn("clean cert dir for spawn", "id", bin.ID, "error", rmErr)
+		}
+		certPath, keyPath, certErr := ca.IssueModuleCertForDir(bin.ID, tlsCertDir)
+		if certErr != nil {
+			slog.Error("issue cert for module spawn", "id", bin.ID, "error", certErr)
+		} else {
+			args = append(args,
+				"--muxcore-tls-cert", certPath,
+				"--muxcore-tls-key", keyPath,
+			)
+		}
+	}
+	cmd := m.cmdRunner.CommandContext(ctx, bin.Path, args...) //nolint:gosec // bin.Path is internally built from cache
+	// Inject instance-specific config as environment variables.
+	// Preserve the parent process environment so PATH, HOME, etc. are inherited.
+	cmd.Env = os.Environ()
+	for k, v := range bin.Config {
+		cmd.Env = append(cmd.Env, "MUXCORE_CFG_"+k+"="+v)
+	}
+	// Prefix module output so it's distinguishable from core's own log files.
 	// In JSON log mode (MUXCORE_LOG_FORMAT=json) unprefixed text output from
 	// modules corrupts the JSON stream — this prefix makes filtering possible.
 	cmd.Stdout = newPrefixedWriter(os.Stdout, "[module:"+bin.ID+"] ")
@@ -172,52 +499,189 @@ func (m *Manager) Spawn(ctx context.Context, bin *ModuleBinary) error {
 		return fmt.Errorf("spawn %s: %w", bin.ID, err)
 	}
 
+	// Cancel any previous spawn context for this module (defensive).
+	if cancel, ok := m.spawnCancel[bin.ID]; ok {
+		cancel()
+	}
+	spawnCtx, spawnCancel := context.WithCancel(ctx) //nolint:gosec // cancel stored in m.spawnCancel for lifecycle management
+	m.spawnCancel[bin.ID] = spawnCancel
+
 	m.processes[bin.ID] = cmd
 	slog.Info("module spawned", "id", bin.ID, "pid", cmd.Process.Pid)
 
-	// Attach process to proxy for health tracking.
-	if proxy, ok := m.proxies[bin.ID]; ok {
-		proxy.TrackProcess(cmd)
+	// Store in pending — watchProcess owns cmd.Wait() and will notify
+	// the proxy via setExit when the process exits.
+	m.pendingProcesses[bin.ID] = cmd
+
+	go m.watchProcess(spawnCtx, cmd, bin)
+
+	return nil
+}
+
+// SpawnWithWatchdog starts a module binary via the muxcore-watchdog wrapper.
+// The watchdog monitors core connectivity and reconnects to fallback addresses
+// on failure, keeping the module alive across core restarts.
+//
+// addrs should include the local core's gRPC address plus any cluster peers.
+// The watchdog binary must have been set via SetWatchdogPath.
+//
+// Unlike Spawn, the module's restart policy is handled by the watchdog rather
+// than by watchProcess. The module registers itself via gRPC as normal.
+func (m *Manager) SpawnWithWatchdog(ctx context.Context, bin *ModuleBinary, addrs []string) error {
+	if bin == nil {
+		return fmt.Errorf("module binary is nil")
+	}
+	m.spawnCount.Add(1)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.processes[bin.ID]; exists {
+		return fmt.Errorf("module %s already running", bin.ID)
 	}
 
-	go m.watchProcess(ctx, cmd, bin)
+	m.binaries[bin.ID] = bin
+
+	if m.watchdogPath == "" {
+		slog.Warn("watchdog path not set, falling back to direct spawn", "id", bin.ID)
+		return m.spawnLocked(ctx, bin, m.meshAddr)
+	}
+
+	// Build comma-separated address list for the watchdog.
+	addrStr := m.meshAddr
+	for _, a := range addrs {
+		if a != m.meshAddr {
+			addrStr += "," + a
+		}
+	}
+
+	cmd := m.cmdRunner.CommandContext(ctx, m.watchdogPath,
+		"--module-path", bin.Path,
+		"--module-id", bin.ID,
+		"--mesh-addrs", addrStr,
+	)
+	// The watchdog prefixes its own output as "[watchdog:<id>]".
+	cmd.Stdout = newPrefixedWriter(os.Stdout, "[watchdog:"+bin.ID+"] ")
+	cmd.Stderr = newPrefixedWriter(os.Stderr, "[watchdog:"+bin.ID+":err] ")
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("spawn watchdog %s: %w", bin.ID, err)
+	}
+
+	m.processes[bin.ID] = cmd
+	slog.Info("module spawned via watchdog", "id", bin.ID, "pid", cmd.Process.Pid, "addrs", addrStr)
+
+	// The watchdog manages the module lifecycle, including restarts.
+	// We only track the watchdog process so StopAll can kill it.
+	// The module registers via gRPC independently.
+	m.pendingProcesses[bin.ID] = cmd
+
+	go func() {
+		err := cmd.Wait()
+		m.mu.Lock()
+		delete(m.processes, bin.ID)
+		delete(m.pendingProcesses, bin.ID)
+		if proxy, ok := m.proxies[bin.ID]; ok {
+			proxy.setExit(err)
+		} else {
+			m.finishedProcesses[bin.ID] = err
+		}
+		m.mu.Unlock()
+	}()
+
+	return nil
+}
+
+// spawnLocked is the internal spawn logic used when the watchdog fallback
+// path is taken. Must be called with m.mu held.
+func (m *Manager) spawnLocked(ctx context.Context, bin *ModuleBinary, addr string) error {
+	if bin == nil {
+		return fmt.Errorf("module binary is nil")
+	}
+	cmd := m.cmdRunner.CommandContext(ctx, bin.Path,
+		"--muxcore-mesh-addr", addr,
+		"--muxcore-module-id", bin.ID,
+	)
+	// Inject instance-specific config as environment variables.
+	for k, v := range bin.Config {
+		cmd.Env = append(cmd.Env, "MUXCORE_CFG_"+k+"="+v)
+	}
+	cmd.Stdout = newPrefixedWriter(os.Stdout, "[module:"+bin.ID+"] ")
+	cmd.Stderr = newPrefixedWriter(os.Stderr, "[module:"+bin.ID+":err] ")
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("spawn %s: %w", bin.ID, err)
+	}
+
+	if cancel, ok := m.spawnCancel[bin.ID]; ok {
+		cancel()
+	}
+	spawnCtx, spawnCancel := context.WithCancel(ctx) //nolint:gosec // cancel stored in m.spawnCancel for lifecycle management
+	m.spawnCancel[bin.ID] = spawnCancel
+
+	m.processes[bin.ID] = cmd
+	slog.Info("module spawned", "id", bin.ID, "pid", cmd.Process.Pid)
+	m.pendingProcesses[bin.ID] = cmd
+
+	go m.watchProcess(spawnCtx, cmd, bin)
 
 	return nil
 }
 
 // watchProcess monitors a sidecar process and applies the restart policy on exit.
 func (m *Manager) watchProcess(ctx context.Context, cmd *exec.Cmd, bin *ModuleBinary) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("watch process panic recovered", "module", bin.ID, "panic", r)
+		}
+	}()
+	certDir := filepath.Join(os.TempDir(), "muxcore-certs", bin.ID)
+	defer os.RemoveAll(certDir)
+
+	// Build base command args reused across restarts. TLS cert files persist
+	// until the defer cleanup above runs (on final exit, not per-restart).
+	baseArgs := []string{
+		"--muxcore-mesh-addr", m.meshAddr,
+		"--muxcore-module-id", bin.ID,
+	}
+	if _, statErr := os.Stat(filepath.Join(certDir, "module.crt")); statErr == nil {
+		baseArgs = append(baseArgs,
+			"--muxcore-tls-cert", filepath.Join(certDir, "module.crt"),
+			"--muxcore-tls-key", filepath.Join(certDir, "module.key"),
+		)
+	}
+
 	for attempt := 0; ; attempt++ {
 		err := cmd.Wait()
 
 		m.mu.Lock()
 		delete(m.processes, bin.ID)
+		delete(m.pendingProcesses, bin.ID)
+		if proxy, ok := m.proxies[bin.ID]; ok {
+			proxy.setExit(err)
+		} else {
+			m.finishedProcesses[bin.ID] = err
+		}
 		m.mu.Unlock()
 
 		if ctx.Err() != nil {
-			// Context cancelled — shutdown in progress, don't restart.
 			return
 		}
 
 		cleanExit := err == nil
-
-		// Decide whether to restart.
 		shouldRestart := false
 		switch bin.RestartPolicy {
 		case RestartAlways:
 			shouldRestart = attempt < maxRestartAttempts
 		case RestartOnFailure:
 			shouldRestart = !cleanExit && attempt < maxRestartAttempts
-		default: // RestartNever
+		default:
 			shouldRestart = false
 		}
 
 		if !cleanExit {
 			slog.Error("module exited unexpectedly",
-				"id", bin.ID,
-				"error", err,
-				"attempt", attempt,
-				"restart", shouldRestart,
+				"id", bin.ID, "error", err,
+				"attempt", attempt, "restart", shouldRestart,
 			)
 		}
 
@@ -225,11 +689,11 @@ func (m *Manager) watchProcess(ctx context.Context, cmd *exec.Cmd, bin *ModuleBi
 			return
 		}
 
-		// Exponential back-off: 1s, 2s, 4s, 8s, 16s, capped at 30s.
 		backoff := time.Duration(1<<attempt) * time.Second
 		if backoff > 30*time.Second {
 			backoff = 30 * time.Second
 		}
+		m.restartCount.Add(1)
 		slog.Info("restarting module", "id", bin.ID, "backoff", backoff, "attempt", attempt+1)
 
 		select {
@@ -238,11 +702,12 @@ func (m *Manager) watchProcess(ctx context.Context, cmd *exec.Cmd, bin *ModuleBi
 		case <-time.After(backoff):
 		}
 
-		// Spawn a new process for the same binary.
-		newCmd := exec.CommandContext(ctx, bin.Path, //nolint:gosec // bin.Path is internally built from cache
-			"--muxcore-mesh-addr", m.meshAddr,
-			"--muxcore-module-id", bin.ID,
-		)
+		// Spawn a new process with the same baseArgs (includes TLS if issued).
+		newCmd := m.cmdRunner.CommandContext(ctx, bin.Path, baseArgs...) //nolint:gosec // bin.Path is internally built
+		newCmd.Env = os.Environ()
+		for k, v := range bin.Config {
+			newCmd.Env = append(newCmd.Env, "MUXCORE_CFG_"+k+"="+v)
+		}
 		newCmd.Stdout = newPrefixedWriter(os.Stdout, "[module:"+bin.ID+"] ")
 		newCmd.Stderr = newPrefixedWriter(os.Stderr, "[module:"+bin.ID+":err] ")
 
@@ -252,6 +717,10 @@ func (m *Manager) watchProcess(ctx context.Context, cmd *exec.Cmd, bin *ModuleBi
 		}
 
 		m.mu.Lock()
+		if ctx.Err() != nil {
+			m.mu.Unlock()
+			return
+		}
 		m.processes[bin.ID] = newCmd
 		m.mu.Unlock()
 		slog.Info("module restarted", "id", bin.ID, "pid", newCmd.Process.Pid)
@@ -260,21 +729,84 @@ func (m *Manager) watchProcess(ctx context.Context, cmd *exec.Cmd, bin *ModuleBi
 	}
 }
 
+// RestartModule kills the running process for the given module ID and
+// re-spawns it using the stored ModuleBinary. Only works for modules that
+// were spawned directly (not via watchdog). Returns an error if the module
+// is not found or the spawn fails.
+func (m *Manager) RestartModule(ctx context.Context, moduleID string) error {
+	m.mu.Lock()
+	cmd, hasProcess := m.processes[moduleID]
+	bin, hasBinary := m.binaries[moduleID]
+
+	// Cancel old spawn context so watchProcess exits on the next
+	// iteration and does not attempt a competing restart.
+	if cancel, ok := m.spawnCancel[moduleID]; ok {
+		cancel()
+		delete(m.spawnCancel, moduleID)
+	}
+
+	m.mu.Unlock()
+
+	if !hasBinary {
+		return fmt.Errorf("module %q not found in binaries", moduleID)
+	}
+
+	if hasProcess && cmd.Process != nil {
+		slog.Info("restarting module (health-triggered)", "id", moduleID)
+		if sigErr := cmd.Process.Signal(os.Interrupt); sigErr != nil {
+			slog.Warn("restart module: signal interrupt failed, process may have exited", "module", moduleID, "error", sigErr)
+		}
+		done := make(chan struct{})
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("restart module wait panic recovered", "module", moduleID, "panic", r)
+				}
+			}()
+			if waitErr := cmd.Wait(); waitErr != nil {
+				slog.Warn("restart module: process exited with error", "module", moduleID, "error", waitErr)
+			}
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			if killErr := cmd.Process.Kill(); killErr != nil {
+				slog.Warn("restart module: kill failed", "module", moduleID, "error", killErr)
+			}
+			<-done
+		}
+	}
+
+	return m.Spawn(ctx, bin)
+}
+
 // TrackProxy registers a SidecarProxy for health tracking.
-// Called during gRPC registration so Spawn can attach the process.
+// Called during gRPC registration. If the module was already spawned
+// before registration, attaches the running process to the proxy.
 func (m *Manager) TrackProxy(moduleID string, proxy *SidecarProxy) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.proxies[moduleID] = proxy
+	delete(m.pendingProcesses, moduleID)
+	// Deliver any cached exit error from a process that exited before
+	// the proxy registered.
+	if exitErr, ok := m.finishedProcesses[moduleID]; ok {
+		proxy.setExit(exitErr)
+		delete(m.finishedProcesses, moduleID)
+	}
 }
 
 // VerifyChecksum reads the binary at bin.Path, computes its SHA256 digest,
-// and compares it against the expected hex string. Returns nil if they match
-// or if expected is empty (backward compatible). Returns an error on mismatch
-// or if the file cannot be read.
+// and compares it against the expected hex string. Returns nil if they match.
+// Returns nil if expected is empty (no checksum to verify against).
+// Returns an error on mismatch, or if the file cannot be read.
 func (m *Manager) VerifyChecksum(bin *ModuleBinary, expected string) error {
+	if bin == nil {
+		return fmt.Errorf("verify checksum: module binary is nil")
+	}
 	if expected == "" {
-		return nil // backward compatible: no checksum declared
+		return nil // no checksum provided; skip verification
 	}
 	data, err := os.ReadFile(bin.Path)
 	if err != nil {
@@ -294,6 +826,9 @@ func (m *Manager) VerifyChecksum(bin *ModuleBinary, expected string) error {
 // keepVersions of 0 removes all cached versions. Call on startup to prevent
 // unbounded cache growth.
 func (m *Manager) PruneCache(keepVersions int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	entries, err := os.ReadDir(m.cacheDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -356,19 +891,38 @@ func (m *Manager) StopAll(ctx context.Context) error {
 		cmds = append(cmds, cmd)
 		slog.Info("stopping module", "id", id)
 	}
+	// Clear all tracking maps so watchProcess goroutines see empty state
+	// and do not attempt competing restarts during shutdown.
 	m.processes = make(map[string]*exec.Cmd)
+	m.pendingProcesses = make(map[string]*exec.Cmd)
+	m.proxies = make(map[string]*SidecarProxy)
+	m.binaries = make(map[string]*ModuleBinary)
+	m.finishedProcesses = make(map[string]error)
+	for _, cancel := range m.spawnCancel {
+		cancel()
+	}
+	m.spawnCancel = make(map[string]context.CancelFunc)
 	m.mu.Unlock()
 
 	for _, cmd := range cmds {
 		if cmd.Process != nil {
-			cmd.Process.Signal(os.Interrupt)
+			if sigErr := cmd.Process.Signal(os.Interrupt); sigErr != nil {
+				slog.Warn("stop modules: signal interrupt failed", "error", sigErr)
+			}
 		}
 	}
 
 	done := make(chan struct{})
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("stop modules wait panic recovered", "panic", r)
+			}
+		}()
 		for _, cmd := range cmds {
-			cmd.Wait()
+			if waitErr := cmd.Wait(); waitErr != nil {
+				slog.Warn("stop modules: wait failed", "error", waitErr)
+			}
 		}
 		close(done)
 	}()
@@ -379,7 +933,9 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	case <-ctx.Done():
 		for _, cmd := range cmds {
 			if cmd.Process != nil {
-				cmd.Process.Kill()
+				if killErr := cmd.Process.Kill(); killErr != nil {
+					slog.Warn("stop modules: kill failed", "error", killErr)
+				}
 			}
 		}
 		return ctx.Err()
@@ -396,14 +952,25 @@ type registrationServer struct {
 	mgr *Manager
 }
 
+func infoFromProto(m *modulev1.ModuleInfo) contracts.ModuleInfo {
+	return contracts.ModuleInfo{
+		ID:             m.GetId(),
+		Name:           m.GetName(),
+		Version:        m.GetVersion(),
+		Roles:          m.GetRoles(),
+		Description:    m.GetDescription(),
+		Author:         m.GetAuthor(),
+		Capabilities:   m.GetCapabilities(),
+		DependsOn:      m.GetDependsOn(),
+		MinCoreVersion: m.GetMinCoreVersion(),
+		HTTPAddr:       m.GetHttpAddr(),
+	}
+}
+
 func (s *registrationServer) Register(ctx context.Context, req *modulev1.RegisterRequest) (*modulev1.RegisterResponse, error) {
-	// Parse the module info from the registration payload.
 	var info contracts.ModuleInfo
-	if len(req.InfoJson) > 0 {
-		if err := json.Unmarshal(req.InfoJson, &info); err != nil {
-			slog.Error("module registration: invalid info_json", "id", req.ModuleId, "error", err)
-			return &modulev1.RegisterResponse{MeshAddr: s.mgr.meshAddr, Accepted: false, Error: fmt.Sprintf("invalid info_json: %v", err)}, nil
-		}
+	if req.ModuleInfo != nil {
+		info = infoFromProto(req.ModuleInfo)
 	}
 
 	if info.ID == "" {
@@ -411,6 +978,14 @@ func (s *registrationServer) Register(ctx context.Context, req *modulev1.Registe
 	}
 	if info.ID == "" {
 		return &modulev1.RegisterResponse{MeshAddr: s.mgr.meshAddr, Accepted: false, Error: "module ID is required"}, nil
+	}
+	if info.Name == "" {
+		info.Name = info.ID
+		slog.Warn("module registered without a name, using ID as name", "module_id", info.ID)
+	}
+	if info.Version == "" {
+		info.Version = "0.0.0"
+		slog.Warn("module registered without a version, assuming 0.0.0", "module_id", info.ID)
 	}
 
 	// Create a proxy that satisfies contracts.Module for registry registration.
@@ -432,7 +1007,73 @@ func (s *registrationServer) Register(ctx context.Context, req *modulev1.Registe
 		"capabilities", info.Capabilities,
 		"deps", deps,
 	)
+
+	if hook := s.mgr.PostRegisterHook; hook != nil {
+		hook(info.ID, info.Capabilities)
+	}
+
 	return &modulev1.RegisterResponse{MeshAddr: s.mgr.meshAddr, Accepted: true}, nil
+}
+
+func (s *registrationServer) BootstrapRegister(ctx context.Context, req *modulev1.BootstrapRegisterRequest) (*modulev1.BootstrapRegisterResponse, error) {
+	ca := s.mgr.certAuth
+	if ca == nil {
+		return &modulev1.BootstrapRegisterResponse{
+			Accepted: false,
+			Error:    "certificate authority not configured on this node",
+		}, nil
+	}
+
+	// Validate the one-time token.
+	claimedID, err := ca.ValidateToken(req.GetToken())
+	if err != nil {
+		slog.Warn("bootstrap register: invalid token", "claimed_id", req.GetModuleId(), "error", err)
+		return &modulev1.BootstrapRegisterResponse{
+			Accepted: false,
+			Error:    fmt.Sprintf("invalid token: %v", err),
+		}, nil
+	}
+
+	// Verify the claimed module ID matches the token's target.
+	if claimedID != req.GetModuleId() {
+		return &modulev1.BootstrapRegisterResponse{
+			Accepted: false,
+			Error:    fmt.Sprintf("token issued for module %q, but request claims %q", claimedID, req.GetModuleId()),
+		}, nil
+	}
+
+	// Issue a signed certificate with keypair for this module.
+	certPath, keyPath, err := ca.IssueModuleCertForDir(claimedID, os.TempDir())
+	if err != nil {
+		slog.Error("bootstrap register: sign cert failed", "module", claimedID, "error", err)
+		return &modulev1.BootstrapRegisterResponse{
+			Accepted: false,
+			Error:    fmt.Sprintf("certificate signing failed: %v", err),
+		}, nil
+	}
+
+	certData, certErr := os.ReadFile(certPath) //nolint:gosec // path from internal temp dir
+	if certErr != nil {
+		return &modulev1.BootstrapRegisterResponse{
+			Accepted: false,
+			Error:    fmt.Sprintf("read signed certificate: %v", certErr),
+		}, nil
+	}
+	keyData, keyErr := os.ReadFile(keyPath) //nolint:gosec // path from internal temp dir
+	if keyErr != nil {
+		return &modulev1.BootstrapRegisterResponse{
+			Accepted: false,
+			Error:    fmt.Sprintf("read private key: %v", keyErr),
+		}, nil
+	}
+
+	slog.Info("module bootstrap registered via token", "module", claimedID)
+	return &modulev1.BootstrapRegisterResponse{
+		Accepted:   true,
+		SignedCert: string(certData),
+		KeyPem:     string(keyData),
+		CaCert:     string(ca.CACertPEM()),
+	}, nil
 }
 
 func (s *registrationServer) Unregister(ctx context.Context, req *modulev1.UnregisterRequest) (*modulev1.UnregisterResponse, error) {
@@ -444,24 +1085,68 @@ func (s *registrationServer) Unregister(ctx context.Context, req *modulev1.Unreg
 	return &modulev1.UnregisterResponse{Acknowledged: true}, nil
 }
 
+// cgoExts lists file extensions that indicate cgo usage when present in a
+// Go module. These files are compiled by the cgo toolchain during go build
+// and can execute arbitrary C/C++ code.
+var cgoExts = map[string]bool{
+	".c": true, ".h": true, ".s": true, ".S": true,
+	".cpp": true, ".cxx": true, ".cc": true, ".m": true, ".mm": true,
+}
+
+// scanNonGoFile checks non-.go source files for patterns that can introduce
+// arbitrary code execution during the build step (cgo sources, build scripts,
+// embedded binaries). Returns true if the file should not be processed further.
+func scanNonGoFile(path string, d fs.DirEntry, buildDir string, policy ScanPolicy, found *[]string) (bool, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	base := strings.ToLower(filepath.Base(path))
+	if cgoExts[ext] {
+		if policy.RejectCGO {
+			return true, fmt.Errorf("module contains cgo source file: %s — cgo is disabled by policy", filepath.Base(path))
+		}
+		if !slicesContains(*found, "cgo-source") {
+			*found = append(*found, "cgo-source")
+		}
+		return true, nil
+	}
+	if base == "makefile" || strings.HasSuffix(base, ".sh") || strings.HasSuffix(base, ".bash") {
+		if !slicesContains(*found, "build-script") {
+			*found = append(*found, "build-script")
+		}
+	}
+	if strings.HasPrefix(path, filepath.Join(buildDir, "vendor")) ||
+		strings.Contains(path, filepath.Join("vendor", "src")) ||
+		strings.Contains(path, "testdata") {
+		if ext != ".go" && !cgoExts[ext] && !isTextExt(ext) {
+			if !slicesContains(*found, "embedded-binary") {
+				*found = append(*found, "embedded-binary")
+			}
+		}
+	}
+	return false, nil
+}
+
 // scanModuleSource scans a cloned module directory for patterns that can
 // execute arbitrary code during the build step. Returns a list of found
-// pattern names. Modules using "unsafe" or "cgo" are rejected with an error.
-//
-// Detected patterns (warning):
-//   - go:generate — directives execute arbitrary commands during go build
-//
-// Rejected patterns (error):
-//   - "unsafe" — pointer arithmetic, type punning, memory safety violations
-//   - import "C" — cgo enables arbitrary C code execution at build time
-func scanModuleSource(buildDir string) ([]string, error) {
+// pattern names. Which patterns are rejected (error) vs warned depends on
+// the given ScanPolicy. DefaultScanPolicy rejects unsafe, cgo, and
+// Go generate directives (secure by default).
+func scanModuleSource(buildDir string, policy ScanPolicy) ([]string, error) {
 	var found []string
 
 	walkErr := filepath.WalkDir(buildDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable files
 		}
-		if d.IsDir() || !strings.HasSuffix(path, ".go") {
+		if d.IsDir() {
+			return nil
+		}
+
+		// Check non-.Go files for cgo sources, build scripts, embedded binaries.
+		if !strings.HasSuffix(path, ".go") {
+			done, scanErr := scanNonGoFile(path, d, buildDir, policy, &found)
+			if done || scanErr != nil {
+				return scanErr
+			}
 			return nil
 		}
 
@@ -473,26 +1158,53 @@ func scanModuleSource(buildDir string) ([]string, error) {
 			return nil // skip files that don't parse (generated stubs, etc.)
 		}
 
-		// Reject imports of "unsafe" or cgo ("C") — both enable memory-unsafe
-		// or arbitrary-C-code execution and are prohibited in sidecar modules.
-		for _, imp := range f.Imports {
-			importPath := strings.Trim(imp.Path.Value, `"`)
-			switch importPath {
-			case "unsafe":
-				return fmt.Errorf("module imports unsafe package: %s", filepath.Base(path))
-			case "C":
-				return fmt.Errorf("module imports cgo (\"C\"): %s", filepath.Base(path))
+		if policy.RejectUnsafe || policy.RejectCGO {
+			for _, imp := range f.Imports {
+				importPath := strings.Trim(imp.Path.Value, `"`)
+				switch {
+				case policy.RejectUnsafe && importPath == "unsafe":
+					return fmt.Errorf("module imports unsafe package: %s", filepath.Base(path))
+				case policy.RejectCGO && importPath == "C":
+					return fmt.Errorf("module imports cgo (\"C\"): %s", filepath.Base(path))
+				}
 			}
 		}
 
-		// Detect (warn): //go:generate directives execute arbitrary commands
-		// during go build and should be reviewed by the operator.
-		for _, cg := range f.Comments {
-			for _, c := range cg.List {
-				if strings.HasPrefix(c.Text, "//go:generate") {
-					if !slicesContains(found, "go:generate") {
-						found = append(found, "go:generate")
+		// Reject //go:generate directives if the policy says so.
+		if policy.RejectGoGenerate {
+			for _, cg := range f.Comments {
+				for _, c := range cg.List {
+					if strings.HasPrefix(c.Text, "//go:generate") {
+						return fmt.Errorf("module uses //go:generate directive: %s", filepath.Base(path))
 					}
+				}
+			}
+		}
+
+		// Detect dangerous runtime patterns: reject or warn depending on policy.
+		for _, imp := range f.Imports {
+			importPath := strings.Trim(imp.Path.Value, `"`)
+			switch importPath {
+			case "os/exec":
+				if policy.RejectExec {
+					return fmt.Errorf("module imports os/exec: %s — os/exec is disabled by policy (set RejectExec=false to allow)", filepath.Base(path))
+				}
+				if policy.WarnExec && !slicesContains(found, "os/exec") {
+					found = append(found, "os/exec")
+				}
+			case "syscall":
+				if policy.RejectSyscall {
+					return fmt.Errorf("module imports syscall: %s — syscall is disabled by policy (set RejectSyscall=false to allow)", filepath.Base(path))
+				}
+				if policy.WarnSyscall && !slicesContains(found, "syscall") {
+					found = append(found, "syscall")
+				}
+			case "net/http", "net":
+				if policy.RejectNetworkInit && hasInitBlock(f) {
+					return fmt.Errorf("module imports %s in init(): %s — network-in-init is disabled by policy (set RejectNetworkInit=false to allow)", importPath, filepath.Base(path))
+				}
+				if policy.WarnNetworkInit && hasInitBlock(f) && !slicesContains(found, "network-in-init") {
+					found = append(found, "network-in-init")
 				}
 			}
 		}
@@ -504,6 +1216,16 @@ func scanModuleSource(buildDir string) ([]string, error) {
 	return found, nil
 }
 
+// hasInitBlock returns true if the AST has an init() function declaration.
+func hasInitBlock(f *ast.File) bool {
+	for _, decl := range f.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "init" {
+			return true
+		}
+	}
+	return false
+}
+
 func slicesContains(slice []string, item string) bool {
 	for _, s := range slice {
 		if s == item {
@@ -513,14 +1235,69 @@ func slicesContains(slice []string, item string) bool {
 	return false
 }
 
-func moduleIDFromRepo(repoURL string) string {
+// isTextExt returns true for file extensions that typically contain text
+// rather than compiled binaries. Used by the source scanner to distinguish
+// between text source files and embedded binary blobs.
+func isTextExt(ext string) bool {
+	switch ext {
+	case ".go", ".md", ".txt", ".json", ".yaml", ".yml", ".toml",
+		".xml", ".html", ".css", ".js", ".ts", ".proto",
+		".mod", ".sum", ".gitignore", ".gitkeep", ".dockerignore",
+		".env", ".cfg", ".conf", ".ini", ".properties",
+		".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd",
+		".py", ".rb", ".pl", ".php", ".lua":
+		return true
+	}
+	return false
+}
+
+// scanGoMod checks go.mod for replace directives that redirect module
+// dependencies to non-canonical sources. Returns a warning if found.
+func scanGoMod(buildDir string) []string {
+	var found []string
+	gmPath := filepath.Join(buildDir, "go.mod")
+	data, err := os.ReadFile(gmPath) //nolint:gosec // buildDir is internally constructed from temp dir
+	if err != nil {
+		return nil
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "replace ") {
+			if !slicesContains(found, "go-mod-replace") {
+				found = append(found, "go-mod-replace")
+			}
+		}
+	}
+	return found
+}
+
+func ModuleIDFromRepo(repoURL string) string {
+	return ModuleIDFromRepoWithInstance(repoURL, "")
+}
+
+// validInstanceID matches safe characters for instance IDs used in file paths.
+// Same pattern as validTagName: alphanumeric, underscore, hyphen, dot.
+var validInstanceID = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+// invalidInstanceIDChars matches any character NOT allowed in instance IDs.
+// Used for sanitization: strips dangerous characters from instance IDs.
+var invalidInstanceIDChars = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
+
+func ModuleIDFromRepoWithInstance(repoURL string, instanceID string) string {
 	u, err := url.Parse(strings.TrimSuffix(repoURL, ".git"))
 	if err != nil || u.Path == "" {
 		return ""
 	}
 	// filepath.Base strips all directory components, preventing path traversal
 	// via crafted repo URLs (e.g. "https://host/owner/../escape").
-	return filepath.Base(u.Path)
+	base := filepath.Base(u.Path)
+	if instanceID != "" {
+		if !validInstanceID.MatchString(instanceID) {
+			instanceID = invalidInstanceIDChars.ReplaceAllString(instanceID, "")
+		}
+		return base + "-" + instanceID
+	}
+	return base
 }
 
 // reconcileContracts checks the module's muxcore.json for non-canonical contract
@@ -568,6 +1345,17 @@ func (m *Manager) reconcileContracts(buildDir string) error {
 
 	if len(directives) == 0 {
 		return nil
+	}
+
+	// Validate resolved directives against the allow-list: only MuxCore-Media
+	// contract repos are permitted. This prevents supply chain attacks where a
+	// module's muxcore.json redirects imports to attacker-controlled forks.
+	allowedPrefix := "github.com/Muxcore-Media/"
+	for _, d := range directives {
+		if !strings.HasPrefix(d.NewPath, allowedPrefix) {
+			return fmt.Errorf("contract reconciliation rejected: new path %q is not in the allowed contract prefix %s",
+				d.NewPath, allowedPrefix)
+		}
 	}
 
 	slog.Info("applying contract reconciliation", "module", filepath.Base(buildDir), "directives", len(directives))

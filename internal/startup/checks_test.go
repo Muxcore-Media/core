@@ -10,7 +10,7 @@ import (
 
 func TestRunAll_NoFatalOnDefaultConfig(t *testing.T) {
 	cfg := config.Default()
-	results := RunAll(cfg)
+	results := RunAll(cfg, "")
 	if HasFatal(results) {
 		for _, r := range results {
 			if r.Fatal != nil {

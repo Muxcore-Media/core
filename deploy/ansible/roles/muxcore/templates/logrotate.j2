@@ -1,0 +1,11 @@
+{{ muxcore_audit_path }} {
+    daily
+    rotate {{ muxcore_logrotate_retention_days }}
+    compress
+    delaycompress
+    missingok
+    notifempty
+    postrotate
+        systemctl reload muxcored 2>/dev/null || true
+    endscript
+}

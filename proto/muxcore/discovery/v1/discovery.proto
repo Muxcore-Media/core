@@ -29,6 +29,10 @@ service DiscoveryService {
 
   // Resolve returns a single module entry by ID.
   rpc Resolve(ResolveRequest) returns (ResolveResponse);
+
+  // ListAll returns all registered modules on this node and all known
+  // peer nodes, including their state and health status.
+  rpc ListAll(ListAllRequest) returns (ListAllResponse);
 }
 
 message NodeInfo {
@@ -39,6 +43,10 @@ message NodeInfo {
   map<string, string> labels = 4;
   // modules lists the module IDs running on this node.
   repeated string modules = 5;
+  // module_health maps module ID to health status.
+  // Empty string means healthy. Non-empty is the error message from the
+  // module's last health check. Synced via heartbeat.
+  map<string, string> module_health = 6;
 }
 
 message JoinRequest {
@@ -69,6 +77,9 @@ message HeartbeatRequest {
   map<string, double> load = 2;
   // modules lists the module IDs currently running on this node.
   repeated string modules = 3;
+  // module_health maps module ID to health status for this node.
+  // Empty string means healthy. Non-empty is the error message.
+  map<string, string> module_health = 5;
   // term is the sender's current view of the leader term.
   uint64 term = 4;
 }
@@ -112,6 +123,13 @@ message ModuleInfoProto {
   string author = 6;
   repeated string capabilities = 7;
   repeated string depends_on = 8;
+  string min_core_version = 9;
+  string http_addr = 10;
+  // state is the module's current lifecycle state.
+  // One of: "registered", "starting", "running", "degraded", "stopping", "stopped".
+  string state = 11;
+  // health_error is empty when healthy, or contains the last health check error.
+  string health_error = 12;
 }
 
 message FindByCapabilityRequest {
@@ -138,4 +156,23 @@ message ResolveResponse {
   // found is false if no module with the given ID exists.
   bool found = 1;
   ModuleInfoProto module = 2;
+}
+
+message ListAllRequest {
+  // node_id optionally filters to a specific node. Empty returns all nodes.
+  string node_id = 1;
+}
+
+message ListAllResponse {
+  repeated ModuleEntryProto entries = 1;
+}
+
+message ModuleEntryProto {
+  ModuleInfoProto info = 1;
+  // state is the module's current lifecycle state.
+  string state = 2;
+  // health_error is empty when healthy, or contains the last health check error.
+  string health_error = 3;
+  // node_id is the cluster node running this module.
+  string node_id = 4;
 }

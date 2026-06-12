@@ -1,0 +1,28 @@
+# MuxCore Cosign Public Key
+#
+# This file contains the cosign public key used to verify MuxCore binary
+# signatures and SLSA provenance attestations. The corresponding private
+# key is stored as a GitHub Actions secret (COSIGN_PRIVATE_KEY) and is
+# used during the release process to sign release artifacts.
+#
+# Verification:
+#
+#   cosign verify-blob \
+#     --key .well-known/cosign.pub \
+#     --signature muxcored.sig \
+#     muxcored
+#
+# To verify SLSA provenance attestations:
+#
+#   cosign verify-blob-attestation \
+#     --key .well-known/cosign.pub \
+#     --type slsaprovenance \
+#     --signature provenance.sig \
+#     muxcored
+#
+# Replace this file with the actual public key when deploying the release
+# pipeline. The key can be exported from the COSIGN_PRIVATE_KEY secret:
+#
+#   cosign public-key --key env://COSIGN_PRIVATE_KEY > .well-known/cosign.pub
+#
+# See: https://docs.sigstore.dev/cosign/overview/

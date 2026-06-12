@@ -3,11 +3,14 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 )
 
@@ -105,8 +108,8 @@ func (r *mockRegistry) FindByRole(role string) []contracts.ModuleEntry {
 	}
 	return result
 }
-func (r *mockRegistry) FindByCapability(cap string) []contracts.ModuleEntry { return nil }
-func (r *mockRegistry) SupportsCapability(moduleID, cap string) bool        { return false }
+func (r *mockRegistry) FindByCapability(capability string) []contracts.ModuleEntry { return nil }
+func (r *mockRegistry) SupportsCapability(moduleID, capability string) bool        { return false }
 func (r *mockRegistry) Resolve(id string) (contracts.ModuleEntry, error) {
 	e, ok := r.providers[id]
 	if !ok {
@@ -486,5 +489,512 @@ func TestOrchestrator_StreamMissingKey(t *testing.T) {
 	_, err := orch.Stream(ctx, "missing", 0, 10)
 	if err == nil {
 		t.Error("expected error for missing key, got nil")
+	}
+}
+
+// --- Extended mocks for tiered + cache tests ---
+
+type tieredMockProvider struct {
+	*mockProvider
+	tier contracts.StorageTier
+}
+
+func (t *tieredMockProvider) Tier() contracts.StorageTier { return t.tier }
+func (t *tieredMockProvider) Promote(ctx context.Context, key string) error {
+	if _, ok := t.data[key]; !ok {
+		return contracts.ErrNotFound
+	}
+	return nil
+}
+func (t *tieredMockProvider) Relegate(ctx context.Context, key string) error {
+	if _, ok := t.data[key]; !ok {
+		return contracts.ErrNotFound
+	}
+	return nil
+}
+func (t *tieredMockProvider) Info() contracts.ModuleInfo {
+	return contracts.ModuleInfo{ID: t.id + "-mod", Roles: []string{"storage"}}
+}
+func (t *tieredMockProvider) Init(ctx context.Context) error   { return nil }
+func (t *tieredMockProvider) Start(ctx context.Context) error  { return nil }
+func (t *tieredMockProvider) Stop(ctx context.Context) error   { return nil }
+func (t *tieredMockProvider) Health(ctx context.Context) error { return nil }
+
+// cacheOnlyModule implements contracts.Module + contracts.CacheLayer
+// without being a StorageProvider (avoids Get signature conflict).
+type cacheOnlyModule struct {
+	id    string
+	cache map[string][]byte
+}
+
+func (c *cacheOnlyModule) Info() contracts.ModuleInfo {
+	return contracts.ModuleInfo{ID: c.id, Roles: []string{"cache"}, Capabilities: []string{"cache.local"}}
+}
+func (c *cacheOnlyModule) Init(ctx context.Context) error   { return nil }
+func (c *cacheOnlyModule) Start(ctx context.Context) error  { return nil }
+func (c *cacheOnlyModule) Stop(ctx context.Context) error   { return nil }
+func (c *cacheOnlyModule) Health(ctx context.Context) error { return nil }
+
+func (c *cacheOnlyModule) Get(_ context.Context, key string) ([]byte, bool) {
+	if c.cache == nil {
+		return nil, false
+	}
+	v, ok := c.cache[key]
+	return v, ok
+}
+func (c *cacheOnlyModule) Set(_ context.Context, key string, data []byte) error {
+	if c.cache == nil {
+		c.cache = make(map[string][]byte)
+	}
+	c.cache[key] = data
+	return nil
+}
+func (c *cacheOnlyModule) Invalidate(_ context.Context, prefix string) error {
+	for k := range c.cache {
+		if strings.HasPrefix(k, prefix) {
+			delete(c.cache, k)
+		}
+	}
+	return nil
+}
+
+type moduleWithRoles struct {
+	contracts.StorageProvider
+	id    string
+	roles []string
+	caps  []string
+}
+
+func (m *moduleWithRoles) Info() contracts.ModuleInfo {
+	return contracts.ModuleInfo{ID: m.id, Roles: m.roles, Capabilities: m.caps}
+}
+func (m *moduleWithRoles) Init(ctx context.Context) error   { return nil }
+func (m *moduleWithRoles) Start(ctx context.Context) error  { return nil }
+func (m *moduleWithRoles) Stop(ctx context.Context) error   { return nil }
+func (m *moduleWithRoles) Health(ctx context.Context) error { return nil }
+
+// mockRegistryWithCapabilities extends mockRegistry to support FindByCapability.
+type mockRegistryWithCaps struct {
+	providers map[string]contracts.ModuleEntry
+}
+
+func newMockRegistryWithCaps() *mockRegistryWithCaps {
+	return &mockRegistryWithCaps{providers: make(map[string]contracts.ModuleEntry)}
+}
+
+func (r *mockRegistryWithCaps) addProvider(prov contracts.StorageProvider, id string, roles []string, caps []string) {
+	entry := contracts.ModuleEntry{
+		Info: contracts.ModuleInfo{ID: id, Roles: roles, Capabilities: caps},
+	}
+	if m, ok := prov.(contracts.Module); ok {
+		entry.Module = m
+	} else {
+		entry.Module = &moduleWithRoles{StorageProvider: prov, id: id, roles: roles, caps: caps}
+	}
+	r.providers[id] = entry
+}
+
+func (r *mockRegistryWithCaps) addModule(mod contracts.Module, id string, roles []string, caps []string) {
+	r.providers[id] = contracts.ModuleEntry{
+		Info:   contracts.ModuleInfo{ID: id, Roles: roles, Capabilities: caps},
+		Module: mod,
+	}
+}
+
+func (r *mockRegistryWithCaps) FindByRole(role string) []contracts.ModuleEntry {
+	var result []contracts.ModuleEntry
+	for _, e := range r.providers {
+		for _, r := range e.Info.Roles {
+			if r == role {
+				result = append(result, e)
+			}
+		}
+	}
+	return result
+}
+
+func (r *mockRegistryWithCaps) FindByCapability(capability string) []contracts.ModuleEntry {
+	var result []contracts.ModuleEntry
+	for _, e := range r.providers {
+		for _, c := range e.Info.Capabilities {
+			if c == capability {
+				result = append(result, e)
+			}
+		}
+	}
+	return result
+}
+func (r *mockRegistryWithCaps) Resolve(id string) (contracts.ModuleEntry, error) {
+	e, ok := r.providers[id]
+	if !ok {
+		return contracts.ModuleEntry{}, fmt.Errorf("not found")
+	}
+	return e, nil
+}
+func (r *mockRegistryWithCaps) SupportsCapability(moduleID, capability string) bool { return false }
+func (r *mockRegistryWithCaps) ListAll() []contracts.ModuleEntry {
+	result := make([]contracts.ModuleEntry, 0, len(r.providers))
+	for _, e := range r.providers {
+		result = append(result, e)
+	}
+	return result
+}
+func (r *mockRegistryWithCaps) StartupOrder() ([]string, error) {
+	ids := make([]string, 0, len(r.providers))
+	for id := range r.providers {
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+func (r *mockRegistryWithCaps) DependencyGraph(id string) ([]string, error) { return nil, nil }
+
+// Tests for previously uncovered orchestrator functions
+
+func TestOrchestrator_DiscoverCache_Found(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	cacheMod := &cacheOnlyModule{id: "cache-prov"}
+	reg.addModule(cacheMod, "cache-prov", []string{"cache"}, []string{"cache.local"})
+
+	orch := NewOrchestrator(reg)
+	orch.DiscoverCache()
+
+	if orch.cache == nil {
+		t.Fatal("expected cache layer to be set after DiscoverCache")
+	}
+}
+
+func TestOrchestrator_DiscoverCache_FromStorageRole(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+
+	// A storage provider that also implements CacheLayer via combined type.
+	type storageWithCache struct {
+		*mockProvider
+	}
+	prov := &storageWithCache{mockProvider: newMockProvider("hybrid")}
+	reg.addProvider(prov, "hybrid", []string{"storage"}, nil)
+
+	orch := NewOrchestrator(reg)
+	orch.DiscoverStorage()
+	orch.DiscoverCache()
+
+	// The hybrid provider doesn't implement CacheLayer (Get signature mismatch),
+	// so cache should remain nil.
+	if orch.cache != nil {
+		t.Fatal("expected no cache for hybrid provider without CacheLayer interface")
+	}
+}
+
+func TestOrchestrator_DiscoverCache_NotFound(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	prov := newMockProvider("plain-prov")
+	reg.addProvider(prov, "plain-prov", []string{"storage"}, nil)
+
+	orch := NewOrchestrator(reg)
+	orch.DiscoverStorage()
+	orch.DiscoverCache()
+
+	if orch.cache != nil {
+		t.Fatal("expected no cache layer when no cache module is registered")
+	}
+}
+
+func TestOrchestrator_DiscoverTiers(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	hot := &tieredMockProvider{mockProvider: newMockProvider("hot-prov"), tier: contracts.StorageTierHot}
+	warm := &tieredMockProvider{mockProvider: newMockProvider("warm-prov"), tier: contracts.StorageTierWarm}
+	reg.addProvider(hot, "hot-prov", []string{"storage"}, nil)
+	reg.addProvider(warm, "warm-prov", []string{"storage"}, nil)
+
+	orch := NewOrchestrator(reg)
+	orch.DiscoverStorage()
+	orch.DiscoverTiers()
+
+	orch.mu.RLock()
+	hotTier, hotOK := orch.tiers["hot-prov"]
+	warmTier, warmOK := orch.tiers["warm-prov"]
+	orch.mu.RUnlock()
+
+	if !hotOK {
+		t.Error("expected hot-prov in tiers map")
+	} else if hotTier != contracts.StorageTierHot {
+		t.Errorf("expected hot tier, got %s", hotTier)
+	}
+	if !warmOK {
+		t.Error("expected warm-prov in tiers map")
+	} else if warmTier != contracts.StorageTierWarm {
+		t.Errorf("expected warm tier, got %s", warmTier)
+	}
+}
+
+func TestOrchestrator_Promote(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	prov := &tieredMockProvider{mockProvider: newMockProvider("hot-prov"), tier: contracts.StorageTierHot}
+	reg.addProvider(prov, "hot-prov", []string{"storage"}, nil)
+
+	orch := NewOrchestrator(reg)
+	orch.DiscoverStorage()
+
+	ctx := context.Background()
+	orch.Put(ctx, "test-key", bytes.NewReader([]byte("data")), 4)
+
+	err := orch.Promote(ctx, "test-key")
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+}
+
+func TestOrchestrator_Promote_NotFound(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	prov := &tieredMockProvider{mockProvider: newMockProvider("hot-prov"), tier: contracts.StorageTierHot}
+	reg.addProvider(prov, "hot-prov", []string{"storage"}, nil)
+
+	orch := NewOrchestrator(reg)
+	orch.DiscoverStorage()
+
+	err := orch.Promote(context.Background(), "nonexistent")
+	if err == nil {
+		t.Error("expected error for nonexistent key")
+	}
+}
+
+func TestOrchestrator_Relegate(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	prov := &tieredMockProvider{mockProvider: newMockProvider("cold-prov"), tier: contracts.StorageTierCold}
+	reg.addProvider(prov, "cold-prov", []string{"storage"}, nil)
+
+	orch := NewOrchestrator(reg)
+	orch.DiscoverStorage()
+
+	ctx := context.Background()
+	orch.Put(ctx, "test-key", bytes.NewReader([]byte("data")), 4)
+
+	err := orch.Relegate(ctx, "test-key")
+	if err != nil {
+		t.Fatalf("Relegate: %v", err)
+	}
+}
+
+func TestOrchestrator_SetTimeouts(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	prov := newMockProvider("timeout-prov")
+	reg.addProvider(prov, "timeout-prov", []string{"storage"}, nil)
+
+	orch := NewOrchestrator(reg)
+	orch.DiscoverStorage()
+
+	timeouts := Timeouts{
+		Read:   5 * time.Second,
+		Write:  10 * time.Second,
+		Delete: 3 * time.Second,
+	}
+	orch.SetTimeouts(timeouts)
+
+	// Verify by doing an operation (no panic, timing enforced by context).
+	ctx := context.Background()
+	err := orch.Put(ctx, "key", bytes.NewReader([]byte("data")), 4)
+	if err != nil {
+		t.Fatalf("Put after SetTimeouts: %v", err)
+	}
+}
+
+func TestOrchestrator_WatchModules_RegistersNewProvider(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	bus := events.NewMemoryBus()
+	bus.SetPublishPolicy(permissivePolicy{})
+
+	orch := NewOrchestrator(reg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_ = orch.WatchModules(ctx, bus)
+
+	// Publish a module.registered event for a storage provider.
+	payload, _ := json.Marshal(contracts.ModuleRegisteredPayload{ModuleID: "new-prov"})
+	bus.Publish(ctx, contracts.Event{
+		Type:    contracts.EventModuleRegistered,
+		Source:  "new-prov",
+		Payload: payload,
+	})
+
+	time.Sleep(200 * time.Millisecond)
+
+	// The module was published but isn't in the mock registry, so it won't
+	// be added to orch.providers. We're testing that WatchModules doesn't
+	// panic, not that it resolves modules (that requires a real registry).
+	// This at least exercises the subscription and handler path.
+}
+
+// permissivePolicy allows all event publication for testing.
+type permissivePolicy struct{}
+
+func (permissivePolicy) CanPublish(_ context.Context, _, _ string) (bool, error) { return true, nil }
+
+func TestProviderTierRank(t *testing.T) {
+	tests := []struct {
+		tier contracts.StorageTier
+		want int
+	}{
+		{contracts.StorageTierHot, 0},
+		{contracts.StorageTierWarm, 1},
+		{contracts.StorageTierCold, 2},
+		{contracts.StorageTierArchive, 3},
+		{"unknown", 1},
+		{"", 1},
+	}
+	for _, tt := range tests {
+		got := providerTierRank(tt.tier)
+		if got != tt.want {
+			t.Errorf("providerTierRank(%q) = %d, want %d", tt.tier, got, tt.want)
+		}
+	}
+}
+
+func TestIsNotFound(t *testing.T) {
+	tests := []struct {
+		err  error
+		want bool
+	}{
+		{contracts.ErrNotFound, true},
+		{fmt.Errorf("not found"), true},
+		{fmt.Errorf("no such key"), true},
+		{fmt.Errorf("does not exist"), true},
+		{fmt.Errorf("key not found"), true},
+		{fmt.Errorf("some other error"), false},
+		{nil, false},
+	}
+	for _, tt := range tests {
+		got := isNotFound(tt.err)
+		if got != tt.want {
+			t.Errorf("isNotFound(%v) = %v, want %v", tt.err, got, tt.want)
+		}
+	}
+}
+
+func TestSetProvider_AddsToPool(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	orch := NewOrchestrator(reg)
+
+	prov := newMockProvider("direct")
+	orch.SetProvider("direct-prov", prov)
+
+	if orch.ProviderCount() != 1 {
+		t.Errorf("expected 1 provider, got %d", orch.ProviderCount())
+	}
+}
+
+func TestSetAuditLogger_NoPanic(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	orch := NewOrchestrator(reg)
+
+	orch.SetAuditLogger(&storageAuditLogger{})
+	orch.SetAuditLogger(nil)
+}
+
+type storageAuditLogger struct{}
+
+func (s *storageAuditLogger) Log(ctx context.Context, _ contracts.AuditEntry) error { return nil }
+func (s *storageAuditLogger) Query(_ context.Context, _ contracts.AuditFilter) ([]contracts.AuditEntry, error) {
+	return nil, nil
+}
+func (s *storageAuditLogger) Export(_ context.Context, _ string) (io.ReadCloser, error) {
+	return nil, nil
+}
+func (s *storageAuditLogger) VerifyChainIntegrity(_ context.Context, _, _ time.Time) (contracts.ChainVerificationResult, error) {
+	return contracts.ChainVerificationResult{Valid: true}, nil
+}
+func (s *storageAuditLogger) VerifyAll(_ context.Context) (contracts.ChainVerificationResult, error) {
+	return contracts.ChainVerificationResult{Valid: true}, nil
+}
+
+func TestMetricCounters_InitialZero(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	orch := NewOrchestrator(reg)
+
+	if c := orch.PutCount(); c != 0 {
+		t.Errorf("expected PutCount=0, got %d", c)
+	}
+	if c := orch.Count(); c != 0 {
+		t.Errorf("expected Count=0, got %d", c)
+	}
+	if c := orch.DeleteCount(); c != 0 {
+		t.Errorf("expected DeleteCount=0, got %d", c)
+	}
+	if c := orch.StatCount(); c != 0 {
+		t.Errorf("expected StatCount=0, got %d", c)
+	}
+	if c := orch.ListCount(); c != 0 {
+		t.Errorf("expected ListCount=0, got %d", c)
+	}
+	if c := orch.MoveCount(); c != 0 {
+		t.Errorf("expected MoveCount=0, got %d", c)
+	}
+}
+
+func TestMetricCounters_Increment(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	prov := newMockProvider("cnt")
+	reg.addProvider(prov, "cnt", []string{"storage"}, nil)
+
+	orch := NewOrchestrator(reg)
+	orch.DiscoverStorage()
+
+	ctx := context.Background()
+	orch.Put(ctx, "k1", bytes.NewReader([]byte("a")), 1)
+	orch.Put(ctx, "k2", bytes.NewReader([]byte("b")), 1)
+
+	if c := orch.PutCount(); c != 2 {
+		t.Errorf("expected PutCount=2 after 2 puts, got %d", c)
+	}
+
+	orch.Get(ctx, "k1")
+	if c := orch.Count(); c != 1 {
+		t.Errorf("expected Count=1, got %d", c)
+	}
+
+	orch.Delete(ctx, "k1")
+	if c := orch.DeleteCount(); c != 1 {
+		t.Errorf("expected DeleteCount=1, got %d", c)
+	}
+
+	orch.Stat(ctx, "k2")
+	if c := orch.StatCount(); c != 1 {
+		t.Errorf("expected StatCount=1, got %d", c)
+	}
+
+	orch.List(ctx, "")
+	if c := orch.ListCount(); c != 1 {
+		t.Errorf("expected ListCount=1, got %d", c)
+	}
+
+	orch.Move(ctx, "k2", "k3")
+	if c := orch.MoveCount(); c != 1 {
+		t.Errorf("expected MoveCount=1, got %d", c)
+	}
+}
+
+func TestProviderInfo_Empty(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	orch := NewOrchestrator(reg)
+
+	info := orch.ProviderInfo()
+	if len(info) != 0 {
+		t.Errorf("expected empty ProviderInfo, got %d items", len(info))
+	}
+}
+
+func TestProviderInfo_WithProviders(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	prov := newMockProvider("p1")
+	reg.addProvider(prov, "p1", []string{"storage"}, nil)
+
+	orch := NewOrchestrator(reg)
+	orch.DiscoverStorage()
+
+	info := orch.ProviderInfo()
+	if len(info) != 1 {
+		t.Fatalf("expected 1 provider info, got %d", len(info))
+	}
+	if info[0].ID != "p1" {
+		t.Errorf("expected ID p1, got %s", info[0].ID)
 	}
 }

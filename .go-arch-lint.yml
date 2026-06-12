@@ -1,0 +1,53 @@
+version: 3
+workdir: .
+
+components:
+  cmd:
+    in: cmd/**
+
+  internal:
+    in: internal/**
+
+  pkg:
+    in: pkg/**
+
+  proto:
+    in: proto/gen/**
+
+  sdk:
+    in: sdk/**
+
+commonComponents:
+  - proto
+
+deps:
+  cmd:
+    mayDependOn:
+      - internal
+      - pkg
+      - proto
+    anyVendorDeps: true
+
+  internal:
+    anyProjectDeps: true
+    anyVendorDeps: true
+
+  pkg:
+    mayDependOn:
+      - proto
+    anyVendorDeps: true
+
+  sdk:
+    mayDependOn:
+      - pkg
+      - proto
+    anyVendorDeps: true
+
+  proto:
+    anyProjectDeps: true
+    anyVendorDeps: true
+
+exclude:
+  - "**/*_test.go"
+  - "**/mock/**"
+  - "**/integration/**"

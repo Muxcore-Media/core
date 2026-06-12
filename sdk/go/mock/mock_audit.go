@@ -138,6 +138,12 @@ func (a *Audit) VerifyChainIntegrity(ctx context.Context, from, to time.Time) (c
 	return result, nil
 }
 
+// VerifyAll returns the same result as VerifyChainIntegrity since the mock
+// has no rotated files — all entries are in the in-memory buffer.
+func (a *Audit) VerifyAll(ctx context.Context) (contracts.ChainVerificationResult, error) {
+	return a.VerifyChainIntegrity(ctx, time.Time{}, time.Time{})
+}
+
 // Count returns the number of recorded entries (test helper).
 func (a *Audit) Count() int {
 	a.mu.RLock()

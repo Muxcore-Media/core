@@ -8,14 +8,15 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/trace"
 	"github.com/Muxcore-Media/core/pkg/contracts"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -26,6 +27,12 @@ const (
 	// suspended. When available space drops below this threshold, writes are
 	// dropped and an error-level log is emitted.
 	walDiskFreeMinBytes = 100 * 1024 * 1024 // 100 MB
+
+	// walMaxSegments is the maximum number of WAL segment files to retain.
+	// At 32MB per segment, 100 segments = 3.2GB maximum WAL disk usage.
+	// When exceeded, the oldest segments are pruned regardless of subscriber
+	// sequence progress to prevent unbounded disk growth.
+	walMaxSegments = 100
 )
 
 // WALSegment is a single WAL journal file on disk.
@@ -310,13 +317,22 @@ func (w *WALWriter) scanLastSeq(path string) (uint64, error) {
 }
 
 // diskFree returns the number of free bytes available on the filesystem
-// containing the WAL directory.
+// containing the WAL directory. Supported on all unix-like platforms;
+// returns 0 on unsupported platforms (disk check is best-effort).
 func (w *WALWriter) diskFree() (uint64, error) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(w.dir, &stat); err != nil {
+	if runtime.GOOS == "windows" {
+		return 0, nil
+	}
+	var stat unix.Statfs_t
+	if err := unix.Statfs(w.dir, &stat); err != nil {
 		return 0, err
 	}
-	return stat.Bavail * uint64(stat.Bsize), nil //nolint:unconvert,gosec
+	if stat.Bsize <= 0 {
+		return 0, fmt.Errorf("wal: unexpected block size %d", stat.Bsize)
+	}
+	// Bsize is int32 on some platforms (darwin, freebsd), int64 on others (linux).
+	bsize := uint64(stat.Bsize)
+	return stat.Bavail * bsize, nil
 }
 
 func (w *WALWriter) openCurrentSegment() error {
@@ -412,6 +428,23 @@ func (w *WALWriter) replaySegment(ctx context.Context, path string, sinceSeq uin
 }
 
 func (w *WALWriter) pruneSegmentsLocked() {
+	// Always enforce the hard cap on segment count to prevent unbounded
+	// disk growth, regardless of subscriber progress.
+	if len(w.segments) > walMaxSegments {
+		excess := len(w.segments) - walMaxSegments
+		for i := 0; i < excess && i < len(w.segments); i++ {
+			path := w.segments[i].Path
+			slog.Warn("wal: pruning segment beyond max limit",
+				"path", path,
+				"max_segments", walMaxSegments,
+			)
+			if err := os.Remove(path); err != nil {
+				slog.Warn("wal: failed to prune segment", "path", path, "error", err)
+			}
+		}
+		w.segments = w.segments[excess:]
+	}
+
 	if w.minSubscriberSeq == 0 {
 		return
 	}
@@ -441,7 +474,7 @@ func (w *WALWriter) pruneSegmentsLocked() {
 
 // EnableWAL attaches a WAL writer to the event bus. All published events
 // are persisted to the WAL before being dispatched to subscribers.
-// The WAL must be closed separately via CloseWAL().
+// The WAL is closed automatically when bus.Close() is called.
 func (b *MemoryBus) EnableWAL(dir string) error {
 	w, err := NewWALWriter(dir)
 	if err != nil {
@@ -496,7 +529,11 @@ func (b *MemoryBus) SubscribeFrom(ctx context.Context, eventType string, handler
 
 	// Replay historical events if WAL is available.
 	if wal != nil && sinceSeq <= wal.LastSeq() {
-		replayCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		replayTimeout := b.WALReplayTimeout
+		if replayTimeout <= 0 {
+			replayTimeout = 30 * time.Second
+		}
+		replayCtx, cancel := context.WithTimeout(ctx, replayTimeout)
 		defer cancel()
 
 		replayed := uint64(0)

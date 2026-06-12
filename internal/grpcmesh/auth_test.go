@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Muxcore-Media/core/internal/callerid"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -42,7 +41,21 @@ func fakeHandler(resp interface{}, err error) grpc.UnaryHandler {
 
 // --- Tests ---
 
-func TestAuthInterceptor_NoEnforcement_AllowsAll(t *testing.T) {
+func TestAuthInterceptor_ModuleRegistration_AlwaysOpen(t *testing.T) {
+	a := NewAuthInterceptor()
+	interceptor := a.UnaryInterceptor()
+
+	_, err := interceptor(
+		context.Background(), nil,
+		fakeUnaryInfo("/muxcore.module.v1.ModuleRegistration/Register"),
+		fakeHandler("ok", nil),
+	)
+	if err != nil {
+		t.Errorf("module registration should be open: %v", err)
+	}
+}
+
+func TestAuthInterceptor_DeniesAnonymousByDefault(t *testing.T) {
 	a := NewAuthInterceptor()
 	interceptor := a.UnaryInterceptor()
 
@@ -51,29 +64,29 @@ func TestAuthInterceptor_NoEnforcement_AllowsAll(t *testing.T) {
 		fakeUnaryInfo("/health/Check"),
 		fakeHandler("ok", nil),
 	)
-	if err != nil {
-		t.Errorf("no enforcement: expected nil error, got %v", err)
+	if err == nil {
+		t.Fatal("expected denial for anonymous call")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.PermissionDenied {
+		t.Errorf("expected PermissionDenied, got %s", st.Code())
 	}
 }
 
-func TestAuthInterceptor_CallerIDPropagated(t *testing.T) {
+func TestAuthInterceptor_DeniesModuleWithoutAuthorizer(t *testing.T) {
 	a := NewAuthInterceptor()
 	interceptor := a.UnaryInterceptor()
 
 	ctx := metadata.NewIncomingContext(context.Background(),
 		metadata.Pairs("x-caller-id", "module-xyz"))
 
-	var capturedCallerID string
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		capturedCallerID = callerid.Get(ctx)
-		return nil, nil
+	_, err := interceptor(ctx, nil, fakeUnaryInfo("/mesh/Call"), fakeHandler(nil, nil))
+	if err == nil {
+		t.Fatal("expected denial for module call without authorizer configured")
 	}
-	_, err := interceptor(ctx, nil, fakeUnaryInfo("/mesh/Call"), handler)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if capturedCallerID != "module-xyz" {
-		t.Errorf("expected callerID 'module-xyz', got %q", capturedCallerID)
+	st, _ := status.FromError(err)
+	if st.Code() != codes.PermissionDenied {
+		t.Errorf("expected PermissionDenied, got %s", st.Code())
 	}
 }
 
@@ -151,18 +164,102 @@ func TestAuthInterceptor_Enforcement_NilIdentity_Unauthenticated(t *testing.T) {
 	}
 }
 
-func TestAuthInterceptor_SetAuthorizer_Nil_DisablesEnforcement(t *testing.T) {
+func TestAuthInterceptor_RateLimit_AfterThreshold(t *testing.T) {
+	a := NewAuthInterceptor()
+	defer a.StopCleanup()
+
+	// Always fail auth so every call increments the failure counter.
+	a.SetAuthorizer(&stubAuthorizer{allow: false})
+	a.SetIdentityProvider(&stubIdentityProvider{
+		identity: &contracts.Identity{ID: "user-1", Roles: []string{"admin"}},
+	})
+	interceptor := a.UnaryInterceptor()
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs())
+
+	// The backoff check happens at the START of extractAndVerify, before
+	// the failure is recorded. So after N failures, call N+1 returns the
+	// rate limit error (the Nth failure set blockUntil; call N+1 checks it).
+	for i := 0; i < gRPCAuthBackoffThreshold; i++ {
+		_, err := interceptor(ctx, nil, fakeUnaryInfo("/mesh/Call"), fakeHandler(nil, nil))
+		if err == nil {
+			t.Fatalf("attempt %d: expected error", i)
+		}
+		if st, _ := status.FromError(err); st.Code() != codes.PermissionDenied {
+			t.Fatalf("attempt %d: expected PermissionDenied, got %s", i, st.Code())
+		}
+	}
+
+	// Call N+1 should trigger ResourceExhausted (rate limited).
+	_, err := interceptor(ctx, nil, fakeUnaryInfo("/mesh/Call"), fakeHandler(nil, nil))
+	if err == nil {
+		t.Fatal("expected rate limit error after threshold")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.ResourceExhausted {
+		t.Errorf("expected ResourceExhausted, got %s", st.Code())
+	}
+	if st.Message() != "too many authentication failures" {
+		t.Errorf("unexpected message: %s", st.Message())
+	}
+}
+
+func TestAuthInterceptor_RateLimit_PerIdentity(t *testing.T) {
+	a := NewAuthInterceptor()
+	defer a.StopCleanup()
+
+	a.SetAuthorizer(&stubAuthorizer{allow: false})
+	a.SetIdentityProvider(&stubIdentityProvider{
+		identity: &contracts.Identity{ID: "user-1", Roles: []string{"admin"}},
+	})
+	interceptor := a.UnaryInterceptor()
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs())
+
+	// The backoff check happens at the START of extractAndVerify, before
+	// the failure is recorded. So we need N+1 calls to trigger rate limiting:
+	// N calls record failures, call N+1 sees the backoff and returns ResourceExhausted.
+	for i := 0; i < gRPCAuthBackoffThreshold; i++ {
+		interceptor(ctx, nil, fakeUnaryInfo("/mesh/Call"), fakeHandler(nil, nil))
+	}
+
+	// The default identity should now be rate limited (call N+1).
+	_, err := interceptor(ctx, nil, fakeUnaryInfo("/mesh/Call"), fakeHandler(nil, nil))
+	if err == nil {
+		t.Fatal("expected rate limit for exhausted identity")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.ResourceExhausted {
+		t.Errorf("expected ResourceExhausted, got %s", st.Code())
+	}
+
+	// A different identity (different x-caller-id) should NOT be rate limited.
+	otherCtx := metadata.NewIncomingContext(context.Background(),
+		metadata.Pairs("x-caller-id", "other-identity"))
+	_, err = interceptor(otherCtx, nil, fakeUnaryInfo("/mesh/Call"), fakeHandler(nil, nil))
+	if err == nil {
+		t.Fatal("expected PermissionDenied for different identity (still denied, but not rate limited)")
+	}
+	st, _ = status.FromError(err)
+	if st.Code() != codes.PermissionDenied {
+		t.Errorf("expected PermissionDenied for different identity, got %s", st.Code())
+	}
+}
+
+func TestAuthInterceptor_SetAuthorizer_Nil_StillDenies(t *testing.T) {
 	a := NewAuthInterceptor()
 	a.SetAuthorizer(&stubAuthorizer{allow: true})
 	a.SetIdentityProvider(&stubIdentityProvider{identity: &contracts.Identity{ID: "u"}})
-	// Disable by setting nil authorizer.
+	// Disable by setting nil authorizer — interceptor falls back to deny-by-default.
 	a.SetAuthorizer(nil)
 
 	interceptor := a.UnaryInterceptor()
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs())
 
 	_, err := interceptor(ctx, nil, fakeUnaryInfo("/mesh/Call"), fakeHandler(nil, nil))
-	if err != nil {
-		t.Errorf("nil authorizer should disable enforcement, got %v", err)
+	if err == nil {
+		t.Fatal("expected denial when authorizer is nil (deny-by-default)")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.PermissionDenied {
+		t.Errorf("expected PermissionDenied, got %s", st.Code())
 	}
 }

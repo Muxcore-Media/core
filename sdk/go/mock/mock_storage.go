@@ -106,7 +106,9 @@ func (s *Storage) Stream(ctx context.Context, key string, offset, length int64) 
 	}
 	defer data.Close()
 	buf := new(bytes.Buffer)
-	io.Copy(buf, data)
+	if _, err := io.Copy(buf, data); err != nil {
+		return nil, fmt.Errorf("mock storage: read data: %w", err)
+	}
 	b := buf.Bytes()
 	if offset >= int64(len(b)) {
 		return io.NopCloser(bytes.NewReader(nil)), nil

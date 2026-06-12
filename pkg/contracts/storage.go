@@ -86,16 +86,19 @@ type StorageEvent struct {
 	Key  string
 }
 
-// --- Storage tiering (RESERVED — planned for pre-1.0) ---
-// These types are defined ahead of a tiered storage module. No implementation
-// exists yet. The TieredProvider interface and related types are not consumed
-// by any code outside this file. They will be activated when a tiered storage
+// Storage tiering support.
+// These types are used by the storage orchestrator to support multi-tier
+// storage backends (hot/warm/cold/archive). Implement TieredProvider to
+// provide tiering capabilities in your storage module.
+//
+// TierTransitionPayload is excluded from the v1 stability guarantee —
+// it is experimental and may change before the first tiered storage
 // module ships.
 
 // EventStorageTierTransition is emitted when an object moves between tiers.
 const EventStorageTierTransition = "storage.tier.transition"
 
-// Storage tier constants.
+// StorageTier represents the performance/cost tier of a storage backend.
 type StorageTier string
 
 const (
@@ -121,6 +124,7 @@ type TieredProvider interface {
 }
 
 // TierTransitionPayload is the payload for storage.tier.transition events.
+// Experimental — may change before the first tiered storage module ships.
 type TierTransitionPayload struct {
 	Key      string      `json:"key"`
 	FromTier StorageTier `json:"from_tier"`

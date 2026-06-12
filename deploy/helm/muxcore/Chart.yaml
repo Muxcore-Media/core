@@ -1,0 +1,18 @@
+apiVersion: v2
+name: muxcore
+description: MuxCore distributed fabric for media orchestration
+type: application
+version: 0.1.0
+appVersion: "0.0.0-dev"
+home: https://github.com/Muxcore-Media/core
+icon: https://raw.githubusercontent.com/Muxcore-Media/core/main/docs/logo.svg
+sources:
+  - https://github.com/Muxcore-Media/core
+maintainers:
+  - name: MuxCore Team
+    url: https://github.com/Muxcore-Media/core
+keywords:
+  - media
+  - orchestration
+  - arr
+  - plex

@@ -10,6 +10,13 @@ import (
 // Event type constants and payload schemas are defined by contract repos,
 // not by core. Core only defines the module-lifecycle event types (below).
 // Cluster-lifecycle events are defined in cluster.go.
+//
+// Payload is opaque bytes. Producers and consumers agree on the encoding
+// (typically JSON) for a given event type. The EventSchemaVersion constant
+// is reserved for future typed-payload support; for v1, callers marshal
+// and unmarshal Payload themselves.
+//
+// Timestamp is set by the publisher. Consumers should treat it as advisory.
 type Event struct {
 	ID        string
 	Type      string
@@ -98,4 +105,5 @@ const (
 	EventModuleRegistered   = "module.registered"
 	EventModuleUnregistered = "module.unregistered"
 	EventModuleDegraded     = "module.degraded"
+	EventConfigReloaded     = "config.reloaded"
 )

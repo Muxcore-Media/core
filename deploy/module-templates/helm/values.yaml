@@ -1,0 +1,47 @@
+# Default values for a MuxCore sidecar module.
+# This is a template — override these in your module's values.yaml.
+
+# TODO: set the correct image repository and tag
+image:
+  repository: ghcr.io/your-org/your-module
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Module identity
+module:
+  id: my-module
+
+# Core gRPC address the module connects to
+core:
+  grpcAddr: "muxcore:9090"
+  # authToken: ""
+
+# Per-module configuration (MUXCORE_CFG_* env vars)
+config: {}
+#   api_key: "your-api-key"
+#   max_connections: "10"
+
+# Resource limits
+resources:
+  requests:
+    cpu: 100m
+    memory: 32Mi
+  limits:
+    cpu: 500m
+    memory: 128Mi
+
+# Security context
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+# Pod scheduling
+replicaCount: 1
+nodeSelector: {}
+tolerations: []
+affinity: {}

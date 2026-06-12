@@ -97,6 +97,32 @@ func TestHTTPMiddleware_PreservesProvided(t *testing.T) {
 	}
 }
 
+func TestIsValidTraceID(t *testing.T) {
+	tests := []struct {
+		id    string
+		valid bool
+	}{
+		{"", false},
+		{"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4", true},
+		{"A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4", true},
+		{`a1b2
+c3`, false},
+		{"not-hex-char-z!", false},
+		{"550e8400-e29b-41d4-a716-446655440000", true},
+		{"550e8400e29b41d4a716446655440000", true},
+		{"550e8400e29b41d4a71644665544000g", false},
+		{"\n", false},
+		{"valid-trace-id-123", false},
+		{"0", true},
+	}
+	for _, tt := range tests {
+		got := isValidTraceID(tt.id)
+		if got != tt.valid {
+			t.Errorf("isValidTraceID(%q) = %v, want %v", tt.id, got, tt.valid)
+		}
+	}
+}
+
 func TestFromContext_WrongType(t *testing.T) {
 	ctx := context.WithValue(context.Background(), ctxKey{}, 12345)
 	if got := FromContext(ctx); got != "" {

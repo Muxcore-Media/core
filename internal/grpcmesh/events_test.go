@@ -14,8 +14,16 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+// testAuthCtx returns a context with a test caller ID set in gRPC metadata
+// so that the auth interceptor permits the call during testing.
+func testAuthCtx() context.Context {
+	return metadata.NewOutgoingContext(context.Background(),
+		metadata.Pairs("x-caller-id", "test-runner"))
+}
 
 // allowAllPublishPolicy permits all event publication for testing.
 type allowAllPublishPolicy struct{}
@@ -68,7 +76,7 @@ func TestEventServer_Publish_Relay(t *testing.T) {
 		return nil
 	})
 
-	_, err := client.Publish(context.Background(), &eventsv1.PublishRequest{
+	_, err := client.Publish(testAuthCtx(), &eventsv1.PublishRequest{
 		Event: &eventsv1.Event{
 			Id:      "ev-1",
 			Type:    "test.relayed",
@@ -96,7 +104,7 @@ func TestEventServer_Publish_Relay(t *testing.T) {
 func TestEventServer_Subscribe_ReceivesPublished(t *testing.T) {
 	client, bus := startEventServer(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(testAuthCtx(), 5*time.Second)
 	defer cancel()
 
 	stream, err := client.Subscribe(ctx, &eventsv1.SubscribeRequest{
@@ -128,7 +136,7 @@ func TestEventServer_Subscribe_ReceivesPublished(t *testing.T) {
 func TestEventServer_Subscribe_MultipleTypes(t *testing.T) {
 	client, bus := startEventServer(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(testAuthCtx(), 5*time.Second)
 	defer cancel()
 
 	stream, err := client.Subscribe(ctx, &eventsv1.SubscribeRequest{
@@ -171,7 +179,7 @@ func TestEventServer_Request_Reply(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(testAuthCtx(), 5*time.Second)
 	defer cancel()
 
 	reply, err := client.Request(ctx, &eventsv1.RequestEvent{
@@ -199,7 +207,7 @@ func TestEventServer_Publish_SourceNodeOverridden(t *testing.T) {
 	})
 
 	// Claim to be source_node "hacker" — server should override with peer addr.
-	_, err := client.Publish(context.Background(), &eventsv1.PublishRequest{
+	_, err := client.Publish(testAuthCtx(), &eventsv1.PublishRequest{
 		Event: &eventsv1.Event{
 			Type:       "spoofed.event",
 			SourceNode: "hacker",
@@ -242,7 +250,7 @@ func (r *stubWALReplayer) ReplayFrom(_ context.Context, sinceSeq uint64, fn func
 func TestEventServer_Replay_NoWAL_Unimplemented(t *testing.T) {
 	client, _ := startEventServer(t) // no WAL replayer set
 
-	stream, err := client.Replay(context.Background(), &eventsv1.ReplayRequest{SinceSeq: 0})
+	stream, err := client.Replay(testAuthCtx(), &eventsv1.ReplayRequest{SinceSeq: 0})
 	if err != nil {
 		t.Fatalf("Replay open: %v", err)
 	}
@@ -266,7 +274,7 @@ func TestEventServer_Replay_WithWAL_StreamsEvents(t *testing.T) {
 	}
 	client, _ := startEventServerWithReplayer(t, replayer)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(testAuthCtx(), 5*time.Second)
 	defer cancel()
 
 	stream, err := client.Replay(ctx, &eventsv1.ReplayRequest{SinceSeq: 0})
@@ -304,7 +312,7 @@ func TestEventServer_Replay_WithWAL_TypeFilter(t *testing.T) {
 	}
 	client, _ := startEventServerWithReplayer(t, replayer)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(testAuthCtx(), 5*time.Second)
 	defer cancel()
 
 	stream, err := client.Replay(ctx, &eventsv1.ReplayRequest{
@@ -380,7 +388,7 @@ func TestEventServer_Replay_RealWAL(t *testing.T) {
 
 	client := eventsv1.NewEventServiceClient(conn)
 
-	replayCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	replayCtx, cancel := context.WithTimeout(testAuthCtx(), 5*time.Second)
 	defer cancel()
 
 	stream, err := client.Replay(replayCtx, &eventsv1.ReplayRequest{SinceSeq: 0})

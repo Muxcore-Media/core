@@ -7,7 +7,43 @@ import (
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	healthv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/health/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health/grpc_health_v1"
 )
+
+// RegisterStandardHealthProbe registers the standard gRPC Health Checking
+// Protocol service on the given server. This enables K8s liveness/readiness
+// probes and grpc-health-probing tools to check MuxCore health over gRPC.
+// The probe always reports SERVING — granular module health is available
+// via the custom HealthService (HealthServer).
+func RegisterStandardHealthProbe(srv *grpc.Server) {
+	grpc_health_v1.RegisterHealthServer(srv, &standardHealthProbe{})
+}
+
+// standardHealthProbe implements grpc_health_v1.HealthServer with a static
+// SERVING response. The custom HealthServer provides per-module health.
+type standardHealthProbe struct {
+	grpc_health_v1.UnimplementedHealthServer
+}
+
+func (p *standardHealthProbe) Check(_ context.Context, _ *grpc_health_v1.HealthCheckRequest) (*grpc_health_v1.HealthCheckResponse, error) {
+	return &grpc_health_v1.HealthCheckResponse{Status: grpc_health_v1.HealthCheckResponse_SERVING}, nil
+}
+
+func (p *standardHealthProbe) Watch(_ *grpc_health_v1.HealthCheckRequest, stream grpc_health_v1.Health_WatchServer) error {
+	resp := &grpc_health_v1.HealthCheckResponse{Status: grpc_health_v1.HealthCheckResponse_SERVING}
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		if err := stream.Send(resp); err != nil {
+			return err
+		}
+		select {
+		case <-stream.Context().Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
 
 // HealthServer implements the HealthService gRPC service.
 // It exposes module and node health over gRPC, using the core registry.

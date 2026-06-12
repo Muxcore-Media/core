@@ -8,13 +8,21 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/Muxcore-Media/core/internal/config"
 	"github.com/Muxcore-Media/core/internal/trace"
+	"github.com/Muxcore-Media/core/internal/version"
 	"github.com/Muxcore-Media/core/pkg/contracts"
+)
+
+const (
+	headerXForwardedFor = "X-Forwarded-For"
+	headerXRealIP       = "X-Real-IP"
+	headerHXRequest     = "HX-Request"
 )
 
 type Server struct {
@@ -39,27 +47,38 @@ type Server struct {
 	// authFailureCleanup stops the background auth failure map cleanup ticker.
 	authFailureCleanup chan struct{}
 	// authFailureMu guards the authFailures map for the cleanup loop.
-	authFailureMu sync.Mutex
-	authFailures  map[string]*authFailureRecord
+	authFailureMu     sync.Mutex
+	authFailures      map[string]*authFailureRecord
+	authFailuresTotal atomic.Int64
+	requestCount      atomic.Int64
+	statusHTTP2xx     atomic.Int64
+	statusHTTP3xx     atomic.Int64
+	statusHTTP4xx     atomic.Int64
+	statusHTTP5xx     atomic.Int64
 	// trustedProxies is the list of CIDR ranges whose X-Forwarded-For we trust.
 	trustedProxies []net.IPNet
+	// trustedOrigins restricts CORS Origin headers that are accepted for
+	// state-changing requests. Empty means same-origin only (secure default).
+	trustedOrigins []string
 }
 
 func NewServer(addr, certFile, keyFile string) *Server {
 	mux := http.NewServeMux()
 	s := &Server{
 		mux:                mux,
-		publicPaths:        map[string]bool{"/health": true},
+		publicPaths:        map[string]bool{"/health": true, "/version": true},
 		cspHeader:          "default-src 'none'; frame-ancestors 'none'",
 		routePermissions:   make(map[string]RoutePermission),
 		authFailureCleanup: make(chan struct{}),
 		authFailures:       make(map[string]*authFailureRecord),
 		trustedProxies:     []net.IPNet{{IP: net.IPv4(127, 0, 0, 0), Mask: net.CIDRMask(8, 32)}, {IP: net.ParseIP("::1"), Mask: net.CIDRMask(128, 128)}},
+		rateLimiter:        NewDefaultRateLimiter(100, 200),
 	}
 	// Start auth failure cleanup ticker once, not per rebuildChain call.
 	go s.authFailureCleanupLoop()
 
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/version", s.handleVersion)
 
 	s.http = &http.Server{
 		Addr:           addr,
@@ -92,11 +111,11 @@ func (s *Server) Start() error {
 	if s.certFile != "" && s.keyFile != "" {
 		return s.http.ListenAndServeTLS(s.certFile, s.keyFile)
 	}
-	if insecureTLSCheck() {
+	if devTLSSkipCheck() {
 		slog.Warn("API server starting without TLS — insecure mode explicitly enabled")
 		return s.http.ListenAndServe()
 	}
-	return fmt.Errorf("TLS is required — set MUXCORE_SERVER_TLS_CERT and MUXCORE_SERVER_TLS_KEY, or MUXCORE_INSECURE_DISABLE_TLS=true for development")
+	return fmt.Errorf("TLS is required — set MUXCORE_SERVER_TLS_CERT and MUXCORE_SERVER_TLS_KEY env vars, or MUXCORE_DEV_TLS_SKIP=true for development")
 }
 
 // Drain signals the HTTP server to stop accepting new connections and waits
@@ -123,6 +142,35 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// harmless — Shutdown on an already-shut-down server returns nil.
 	return s.http.Shutdown(ctx)
 }
+
+// AuthFailuresTotalCount returns the total number of auth failures recorded.
+func (s *Server) AuthFailuresTotalCount() int64 {
+	return s.authFailuresTotal.Load()
+}
+
+// BackoffActiveCount returns the number of IPs currently in auth backoff.
+func (s *Server) BackoffActiveCount() int {
+	s.authFailureMu.Lock()
+	defer s.authFailureMu.Unlock()
+	now := time.Now()
+	count := 0
+	for _, rec := range s.authFailures {
+		if now.Before(rec.blockedUntil) {
+			count++
+		}
+	}
+	return count
+}
+
+// RequestCount returns the total number of HTTP requests processed.
+func (s *Server) RequestCount() int64 {
+	return s.requestCount.Load()
+}
+
+func (s *Server) StatusHTTP2xx() int64 { return s.statusHTTP2xx.Load() }
+func (s *Server) StatusHTTP3xx() int64 { return s.statusHTTP3xx.Load() }
+func (s *Server) StatusHTTP4xx() int64 { return s.statusHTTP4xx.Load() }
+func (s *Server) StatusHTTP5xx() int64 { return s.statusHTTP5xx.Load() }
 
 // authFailureCleanupLoop periodically purges stale auth failure records.
 // Entries with no activity for over 10 minutes are removed.
@@ -171,6 +219,12 @@ func (s *Server) SetTrustedProxies(cidrs []string) {
 	s.trustedProxies = parsed
 }
 
+// SetTrustedOrigins configures additional CORS origins for browser-based access.
+// Empty list restricts to same-origin only (secure default).
+func (s *Server) SetTrustedOrigins(origins []string) {
+	s.trustedOrigins = origins
+}
+
 // Handle registers an http.Handler for the given pattern.
 func (s *Server) Handle(pattern string, handler http.Handler) {
 	s.mux.Handle(pattern, handler)
@@ -192,7 +246,6 @@ func (s *Server) SetAuthFunc(fn func(r *http.Request) (*contracts.Session, error
 	s.rebuildChain()
 }
 
-// SetRateLimiter sets the rate limiter module for the middleware chain.
 // SetCSP configures the Content-Security-Policy header sent on all responses.
 // The default is restrictive: "default-src 'none'; frame-ancestors 'none'".
 // Modules that serve HTML content (e.g. admin UI) must call this to set
@@ -201,6 +254,7 @@ func (s *Server) SetCSP(header string) {
 	s.cspHeader = header
 }
 
+// SetRateLimiter sets the rate limiter module for the middleware chain.
 func (s *Server) SetRateLimiter(rl contracts.RateLimiterProvider) {
 	s.rateLimiter = rl
 	s.rebuildChain()
@@ -244,32 +298,58 @@ func (s *Server) AddPublicPath(path string) {
 // In Go HTTP middleware, the last wrapper applied executes first, so the build
 // order is the reverse of the execution order.
 func (s *Server) rebuildChain() {
-	tlsActive := (s.certFile != "" && s.keyFile != "") || !insecureTLSCheck()
+	tlsActive := (s.certFile != "" && s.keyFile != "") || !devTLSSkipCheck()
 
 	var h http.Handler = s.mux
 	trusted := replicateSlice(s.trustedProxies)
 	// Build from innermost to outermost:
 	// trace (innermost, executes last before handler)
 	h = trace.HTTPMiddleware(h)
-	h = withLogging(h)
+	h = withLogging(h, &s.requestCount)
 	if s.auditLogger != nil {
-		h = auditMiddleware(s.auditLogger, s.nodeID, s.publicPaths, trusted)(h)
+		statusCnt := &[6]*atomic.Int64{
+			1: &s.statusHTTP2xx,
+			2: &s.statusHTTP3xx,
+			3: &s.statusHTTP4xx,
+			4: &s.statusHTTP5xx,
+		}
+		h = auditMiddleware(s.auditLogger, s.nodeID, s.publicPaths, trusted, statusCnt)(h)
 	}
 	if s.authorizer != nil {
 		h = authzMiddleware(s.authorizer, s.auditLogger, s.routePermissions, trusted)(h)
 	}
 	if s.AuthFunc != nil {
-		h = authMiddleware(s.AuthFunc, s.auditLogger, s.publicPaths, trusted, s.authFailures, &s.authFailureMu)(h)
+		h = authMiddleware(s.AuthFunc, s.auditLogger, s.publicPaths, trusted, s.authFailures, &s.authFailureMu, &s.authFailuresTotal)(h)
 	}
-	if s.rateLimiter != nil && s.rateLimiter.Enabled() {
+	if s.rateLimiter != nil {
 		h = rateLimitMiddleware(s.rateLimiter, s.publicPaths, trusted)(h)
 	}
 	h = recoveryMiddleware(h)
-	h = securityHeadersMiddleware(h, s.cspHeader, tlsActive)
+	h = securityHeadersMiddleware(h, s.cspHeader, tlsActive, s.trustedOrigins)
 	h = maxBodyMiddleware(h)
 	s.http.Handler = h
 }
 
+// handleHealth serves the /health endpoint.
+//
+// Method: GET only; other methods return 405.
+//
+// Response (JSON, Content-Type: application/json):
+//
+//	When no health checker is registered:
+//	  {"status": "ok", "time": "2026-06-08T12:00:00Z"}
+//
+//	When a health checker is registered:
+//	  {"status": "ok"|"degraded", "time": "...", "modules": {"module_id": "ok"|"error"}}
+//
+//	HTTP status: 200 when healthy, 503 when any module reports an error.
+//
+// HTMX support: when the HX-Request header is "true", returns an HTML snippet
+// with a colored status indicator instead of JSON. This enables live-updating
+// health badges in HTMX-driven admin UIs without client-side JSON parsing.
+//
+// The /health path is public (no authentication required) by default, set in
+// the publicPaths map during NewServer.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -296,12 +376,16 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			httpStatus = http.StatusServiceUnavailable
 		}
 
-		if r.Header.Get("HX-Request") == "true" {
+		if r.Header.Get(headerHXRequest) == "true" {
 			w.Header().Set("Content-Type", "text/html")
 			if degraded {
-				w.Write([]byte(`<span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-yellow-400"></span>System: Degraded</span>`))
+				if _, err := w.Write([]byte(`<span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-yellow-400"></span>System: Degraded</span>`)); err != nil {
+					slog.Debug("health htmx degraded write", "error", err)
+				}
 			} else {
-				w.Write([]byte(`<span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>System: Online</span>`))
+				if _, err := w.Write([]byte(`<span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>System: Online</span>`)); err != nil {
+					slog.Debug("health htmx online write", "error", err)
+				}
 			}
 			return
 		}
@@ -314,9 +398,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Header.Get("HX-Request") == "true" {
+	if r.Header.Get(headerHXRequest) == "true" {
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(`<span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>System: Online</span>`))
+		if _, err := w.Write([]byte(`<span class="inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>System: Online</span>`)); err != nil {
+			slog.Debug("health htmx write", "error", err)
+		}
 		return
 	}
 
@@ -326,11 +412,22 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// insecureTLSCheck returns true when the MUXCORE_INSECURE_DISABLE_TLS
-// environment variable is set to "true" or "1".
-func insecureTLSCheck() bool {
-	v := os.Getenv("MUXCORE_INSECURE_DISABLE_TLS")
-	return v == "true" || v == "1"
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"version": version.String(),
+	})
+}
+
+// devTLSSkipCheck returns true when TLS enforcement should be bypassed.
+// Delegates to the shared config function which checks both
+// MUXCORE_INSECURE_DISABLE_TLS (canonical) and the deprecated
+// MUXCORE_DEV_TLS_SKIP.
+func devTLSSkipCheck() bool {
+	return config.InsecureTLSSkipEnabled()
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -341,8 +438,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
-func withLogging(next http.Handler) http.Handler {
+func withLogging(next http.Handler, reqCounter *atomic.Int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if reqCounter != nil {
+			reqCounter.Add(1)
+		}
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		slog.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start), "trace_id", trace.FromContext(r.Context()))
@@ -395,12 +495,12 @@ func extractClientIP(r *http.Request, trustedProxies []net.IPNet) string {
 		host = r.RemoteAddr
 	}
 	if isTrustedProxy(host, trustedProxies) {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if xff := r.Header.Get(headerXForwardedFor); xff != "" {
 			if ip := parseRightmostXFF(xff); ip != "" {
 				return ip
 			}
 		}
-		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		if xri := r.Header.Get(headerXRealIP); xri != "" {
 			if ip := net.ParseIP(xri); ip != nil {
 				return ip.String()
 			}

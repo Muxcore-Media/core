@@ -2,6 +2,8 @@ package registry
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
@@ -288,5 +290,118 @@ func TestDiscover(t *testing.T) {
 	}
 	if len(r.Discover(context.TODO(), "nonexistent")) != 0 {
 		t.Fatal("expected 0 infos for unmatched kind")
+	}
+}
+
+func TestSetState_OK(t *testing.T) {
+	r := New()
+	r.Register(&mockModule{info: contracts.ModuleInfo{ID: "test", Name: "Test"}}, nil)
+
+	if err := r.SetState("test", contracts.ModuleStateStarting); err != nil {
+		t.Fatalf("SetState: %v", err)
+	}
+
+	entry, _ := r.Get("test")
+	if entry.State != contracts.ModuleStateStarting {
+		t.Errorf("expected Starting, got %s", entry.State)
+	}
+}
+
+func TestSetState_NotFound(t *testing.T) {
+	r := New()
+	if err := r.SetState("nonexistent", contracts.ModuleStateStarting); err == nil {
+		t.Fatal("expected error for unknown module")
+	}
+}
+
+func TestSetHealth_OK(t *testing.T) {
+	r := New()
+	r.Register(&mockModule{info: contracts.ModuleInfo{ID: "test", Name: "Test"}}, nil)
+
+	errCause := fmt.Errorf("disk full")
+	if err := r.SetHealth("test", errCause); err != nil {
+		t.Fatalf("SetHealth: %v", err)
+	}
+
+	entry, _ := r.Get("test")
+	if !errors.Is(entry.Health, errCause) {
+		t.Errorf("expected health error, got %v", entry.Health)
+	}
+}
+
+func TestSetHealth_NotFound(t *testing.T) {
+	r := New()
+	if err := r.SetHealth("nonexistent", nil); err == nil {
+		t.Fatal("expected error for unknown module")
+	}
+}
+
+func TestStartupOrder_Linear(t *testing.T) {
+	r := New()
+	r.Register(&mockModule{info: contracts.ModuleInfo{ID: "base", Name: "Base"}}, nil)
+	r.Register(&mockModule{info: contracts.ModuleInfo{ID: "middle", Name: "Middle"}}, []string{"base"})
+	r.Register(&mockModule{info: contracts.ModuleInfo{ID: "top", Name: "Top"}}, []string{"middle"})
+
+	order, err := r.StartupOrder()
+	if err != nil {
+		t.Fatalf("StartupOrder: %v", err)
+	}
+
+	// base must appear before middle, middle before top.
+	pos := make(map[string]int)
+	for i, id := range order {
+		pos[id] = i
+	}
+	if pos["base"] > pos["middle"] {
+		t.Errorf("expected base before middle, got order: %v", order)
+	}
+	if pos["middle"] > pos["top"] {
+		t.Errorf("expected middle before top, got order: %v", order)
+	}
+}
+
+func TestStartupOrder_Circular(t *testing.T) {
+	r := New()
+	r.Register(&mockModule{info: contracts.ModuleInfo{ID: "A", Name: "A"}}, []string{"B"})
+	r.Register(&mockModule{info: contracts.ModuleInfo{ID: "B", Name: "B"}}, []string{"A"})
+
+	_, err := r.StartupOrder()
+	if err == nil {
+		t.Fatal("expected error for circular dependency")
+	}
+}
+
+func TestDependencyGraph_OK(t *testing.T) {
+	r := New()
+	r.Register(&mockModule{info: contracts.ModuleInfo{ID: "base", Name: "Base"}}, nil)
+	r.Register(&mockModule{info: contracts.ModuleInfo{ID: "ext", Name: "Ext"}}, []string{"base"})
+
+	deps, err := r.DependencyGraph("base")
+	if err != nil {
+		t.Fatalf("DependencyGraph: %v", err)
+	}
+	if len(deps) != 1 || deps[0] != "ext" {
+		t.Errorf("expected [ext], got %v", deps)
+	}
+}
+
+func TestDependencyGraph_NoDependents(t *testing.T) {
+	r := New()
+	r.Register(&mockModule{info: contracts.ModuleInfo{ID: "alone", Name: "Alone"}}, nil)
+
+	deps, err := r.DependencyGraph("alone")
+	if err != nil {
+		t.Fatalf("DependencyGraph: %v", err)
+	}
+	if len(deps) != 0 {
+		t.Errorf("expected no dependents, got %v", deps)
+	}
+}
+
+func TestDependencyGraph_NotFound(t *testing.T) {
+	r := New()
+	_, err := r.DependencyGraph("nonexistent")
+	if err == nil {
+		t.Fatal("expected error for unknown module")
 	}
 }

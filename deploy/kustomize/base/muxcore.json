@@ -1,0 +1,3 @@
+{
+  "comment": "Override this ConfigMap via overlay or environment variables"
+}

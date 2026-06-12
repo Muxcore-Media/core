@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package muxcore.policy.v1;
+
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/policy/v1;policyv1";
+
+// PolicyService is implemented by sidecar modules that provide call policy
+// or publish policy enforcement. Core discovers these modules by capability
+// and queries them before dispatching inter-module calls or event publishes.
+service PolicyService {
+  // AllowCall checks whether a caller module is permitted to call a method
+  // on a target module. Core's mesh client calls this before every
+  // inter-module dispatch.
+  rpc AllowCall(AllowCallRequest) returns (AllowCallResponse);
+
+  // AllowPublish checks whether a caller module is permitted to publish
+  // events of the given type. Core's event bus calls this before every
+  // event publish.
+  rpc AllowPublish(AllowPublishRequest) returns (AllowPublishResponse);
+}
+
+message AllowCallRequest {
+  // caller_module_id is the module initiating the call.
+  string caller_module_id = 1;
+  // target_module_id is the module being called.
+  string target_module_id = 2;
+  // method is the RPC method name being invoked.
+  string method = 3;
+}
+
+message AllowCallResponse {
+  // allowed is true if the call is permitted.
+  bool allowed = 1;
+  // reason is a human-readable explanation when denied (e.g., "caller not in allow-list").
+  string reason = 2;
+}
+
+message AllowPublishRequest {
+  // caller_module_id is the module publishing the event.
+  string caller_module_id = 1;
+  // event_type is the type of event being published (e.g., "download.completed").
+  string event_type = 2;
+  // event_payload is the raw event payload for optional payload-level checks.
+  bytes event_payload = 3;
+}
+
+message AllowPublishResponse {
+  // allowed is true if the publish is permitted.
+  bool allowed = 1;
+  // reason is a human-readable explanation when denied.
+  string reason = 2;
+}

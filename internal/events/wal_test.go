@@ -330,6 +330,131 @@ func TestMemoryBus_UpdateMinSubscriberSeq_BeyondLastSeq(t *testing.T) {
 	}
 }
 
+func TestWALWriter_Sync_FlushesData(t *testing.T) {
+	dir := t.TempDir()
+	w, _ := NewWALWriter(dir)
+
+	w.Write(makeEvent("test.event"))
+	w.Flush() // flush bufio before Sync
+	if err := w.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	// Data should be visible on disk after flush+sync.
+	segments := w.Segments()
+	if len(segments) < 1 {
+		t.Fatal("expected at least 1 segment after write")
+	}
+	data, err := os.ReadFile(segments[0].Path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if len(data) == 0 {
+		t.Error("expected non-empty WAL segment after Sync")
+	}
+
+	w.Close()
+}
+
+// TestWALWriter_RotateLocked manually triggers a rotation to exercise the path.
+func TestWALWriter_RotateLocked(t *testing.T) {
+	dir := t.TempDir()
+	w, _ := NewWALWriter(dir)
+
+	// Write an event so we have an open segment.
+	w.Write(makeEvent("before.rotation"))
+	w.Flush()
+
+	segmentsBefore := len(w.Segments())
+
+	// Manually call rotateLocked (same package, unexported but accessible).
+	w.mu.Lock()
+	err := w.rotateLocked()
+	w.mu.Unlock()
+	if err != nil {
+		t.Fatalf("rotateLocked: %v", err)
+	}
+
+	segmentsAfter := w.Segments()
+	if len(segmentsAfter) <= segmentsBefore {
+		t.Errorf("expected more segments after rotation, before=%d after=%d", segmentsBefore, len(segmentsAfter))
+	}
+	if w.LastSeq() != 1 {
+		t.Errorf("expected LastSeq=1 unchanged after rotation, got %d", w.LastSeq())
+	}
+
+	// Write after rotation should still work.
+	seq, err := w.Write(makeEvent("after.rotation"))
+	if err != nil {
+		t.Fatalf("Write after rotation: %v", err)
+	}
+	if seq != 2 {
+		t.Errorf("expected seq=2 after rotation, got %d", seq)
+	}
+
+	w.Close()
+}
+
+func TestWALWriter_OpenSegment_ExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	w, _ := NewWALWriter(dir)
+	defer w.Close()
+
+	w.Write(makeEvent("first"))
+	w.Flush()
+
+	path := w.Segments()[0].Path
+	w.Close()
+
+	// Create a new writer and manually open the existing segment.
+	w2 := &WALWriter{dir: dir}
+	if err := w2.openSegment(path); err != nil {
+		t.Fatalf("openSegment existing file: %v", err)
+	}
+	if w2.file == nil {
+		t.Fatal("expected file to be set after openSegment")
+	}
+	w2.Close()
+}
+
+func TestWALWriter_OpenSegment_NonexistentPath(t *testing.T) {
+	w := &WALWriter{dir: t.TempDir()}
+	err := w.openSegment(filepath.Join(w.dir, "nonexistent.wal"))
+	if err == nil {
+		t.Error("expected error when opening nonexistent segment")
+	}
+}
+
+func TestWALWriter_DiscoveredSegments(t *testing.T) {
+	dir := t.TempDir()
+	w, _ := NewWALWriter(dir)
+
+	for range 5 {
+		w.Write(makeEvent("x"))
+	}
+	w.Flush()
+	w.Close()
+
+	// New writer should discover existing segments.
+	w2, _ := NewWALWriter(dir)
+	defer w2.Close()
+
+	if len(w2.Segments()) == 0 {
+		t.Error("expected existing segments to be discovered")
+	}
+}
+
+func TestWALWriter_Close_Empty(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewWALWriter(dir)
+	if err != nil {
+		t.Fatalf("NewWALWriter: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Errorf("Close on empty WAL: %v", err)
+	}
+}
+
 // allowAllPolicy implements contracts.PublishPolicyProvider for tests.
 type allowAllPolicy struct{}
 

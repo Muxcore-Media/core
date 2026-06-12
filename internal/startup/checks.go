@@ -28,16 +28,31 @@ type Result struct {
 // by the caller (typically: log and os.Exit(1) from main).
 //
 // RunAll never calls os.Exit itself — that responsibility belongs to the caller.
-func RunAll(cfg *config.Config) []Result {
-	checks := []struct {
+// configPath is the path to the config file (may be empty for env-only config).
+func RunAll(cfg *config.Config, configPath string) []Result {
+	if cfg == nil {
+		return []Result{{Name: "config", Fatal: fmt.Errorf("startup: config is nil")}}
+	}
+	type checkFn struct {
 		name string
 		fn   func(*config.Config) Result
-	}{
+	}
+	checks := []checkFn{
 		{"module_cache_writable", checkModuleCache},
 		{"audit_log_dir_writable", checkAuditLogDir},
 		{"cosign_pub_readable", checkCosignPub},
 		{"go_version_match", checkGoVersion},
 	}
+
+	// Add config file permission check if a path was provided.
+	if configPath != "" {
+		cfgPath := configPath // capture
+		checks = append(checks, checkFn{
+			"config_file_permissions",
+			func(cfg *config.Config) Result { return checkConfigFilePerms(cfg, cfgPath) },
+		})
+	}
+	checks = append(checks, checkFn{"tls_key_permissions", checkTLSCredsPerms})
 
 	results := make([]Result, 0, len(checks))
 
@@ -158,6 +173,61 @@ func checkCosignPub(_ *config.Config) Result {
 	}
 
 	r.Warning = "cosign.pub not found — spool module verification will use embedded key if available"
+	return r
+}
+
+// checkConfigFilePerms warns if the config file has overly permissive permissions.
+// configPath is the path to the config file; empty means no file (env-only config).
+func checkConfigFilePerms(cfg *config.Config, configPath string) Result {
+	r := Result{Name: "config_file_permissions"}
+
+	if configPath == "" {
+		return r
+	}
+
+	info, err := os.Stat(configPath)
+	if err != nil {
+		r.Warning = fmt.Sprintf("cannot stat config file %q: %v", configPath, err)
+		return r
+	}
+
+	// Check for world-readable or group-readable permissions (mode & 0077).
+	if info.Mode().Perm()&0077 != 0 {
+		r.Warning = fmt.Sprintf("config file %q has overly permissive permissions %o — recommend 0600 or 0640",
+			configPath, info.Mode().Perm())
+	}
+
+	return r
+}
+
+// checkTLSCredsPerms warns if TLS key files have overly permissive permissions.
+func checkTLSCredsPerms(cfg *config.Config) Result {
+	r := Result{Name: "tls_key_permissions"}
+
+	keyFiles := []struct {
+		path string
+		name string
+	}{
+		{cfg.Server.KeyFile, "server.key"},
+		{cfg.GRPC.KeyFile, "grpc.key"},
+	}
+	for _, kf := range keyFiles {
+		if kf.path == "" {
+			continue
+		}
+		info, err := os.Stat(kf.path)
+		if err != nil {
+			r.Warning = fmt.Sprintf("cannot stat %s at %q: %v", kf.name, kf.path, err)
+			continue
+		}
+		// TLS private keys should be owner-only (0600 or less).
+		// Anything readable by group or others is a security risk.
+		if info.Mode().Perm()&0077 != 0 {
+			r.Warning = fmt.Sprintf("TLS key file %q has mode %o — private keys should be 0600 or 0400",
+				kf.path, info.Mode().Perm())
+		}
+	}
+
 	return r
 }
 

@@ -54,6 +54,13 @@ MuxCore's audit system records security-relevant and operational events througho
                   └──────────────┘
 ```
 
+> **Note on core's built-in FileLogger:** The default `FileLogger` shipped with
+> core keeps an in-memory ring buffer of the last 50,000 entries for `Query()`
+> and `Export()`. The full history on disk (JSONL file) is not indexed for
+> search. For compliance and forensics use cases requiring disk-backed query,
+> deploy a module that implements `AuditLogger` with its own query engine
+> (e.g., SQLite, PostgreSQL). See "Writing an AuditLogger Module" below.
+
 ## Audit Entry Schema
 
 All audit entries use `contracts.AuditEntry`:
@@ -212,12 +219,6 @@ package auditsqlite
 import (
     "github.com/Muxcore-Media/core/pkg/contracts"
 )
-
-func init() {
-    contracts.Register(func(deps contracts.Fabric) contracts.Module {
-        return &Module{}
-    })
-}
 
 type Module struct { /* ... */ }
 
