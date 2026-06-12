@@ -115,6 +115,31 @@ func (s *AuditServer) Export(req *auditv1.AuditExportRequest, stream auditv1.Aud
 	}
 }
 
+// Log writes an audit entry.
+func (s *AuditServer) Log(ctx context.Context, req *auditv1.LogRequest) (*auditv1.LogResponse, error) {
+	if err := s.checkAuth(ctx); err != nil {
+		return nil, err
+	}
+	if s.logger == nil {
+		return nil, status.Error(codes.Unavailable, "audit: logger is disabled")
+	}
+
+	entry := contracts.AuditEntry{
+		Actor:      req.GetActor(),
+		Action:     req.GetAction(),
+		Resource:   req.GetResource(),
+		ResourceID: req.GetResourceId(),
+		Details:    req.GetDetails(),
+		TraceID:    req.GetTraceId(),
+	}
+
+	if err := s.logger.Log(ctx, entry); err != nil {
+		return nil, status.Errorf(codes.Unavailable, "audit log: %v", err)
+	}
+
+	return &auditv1.LogResponse{Id: entry.ID}, nil
+}
+
 // VerifyChain performs a standalone hash-chain integrity check.
 func (s *AuditServer) VerifyChain(ctx context.Context, req *auditv1.AuditVerifyChainRequest) (*auditv1.AuditVerifyChainResponse, error) {
 	if err := s.checkAuth(ctx); err != nil {
