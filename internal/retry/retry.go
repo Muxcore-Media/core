@@ -23,7 +23,7 @@ var (
 		if err := binary.Read(cryptorand.Reader, binary.LittleEndian, &seed); err != nil {
 			seed = 42
 		}
-		return rand.New(rand.NewSource(seed))
+		return rand.New(rand.NewSource(seed)) //nolint:gosec // non-crypto use for jitter in retry backoff
 	}()
 )
 

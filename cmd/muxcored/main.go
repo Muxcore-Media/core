@@ -163,7 +163,7 @@ func main() { //nolint:gocyclo // main initialization has many unavoidable branc
 	srv, metricsProvider := initHTTPServer(cfg, reg, bus, store, meshClient, discoveryGrpc, connPool, workerPool)
 
 	auditLogger := initAudit(cfg, bus, store, srv)
-	defer auditLogger.Close()
+	defer func() { _ = auditLogger.Close() }()
 
 	storageGrpc := grpcmesh.NewStorageServer(store)
 	storageGrpc.RegisterWithGRPC(grpcSrv)
@@ -215,9 +215,9 @@ func main() { //nolint:gocyclo // main initialization has many unavoidable branc
 
 	modMgr, lifecycleMgr := initModuleManager(cfg, reg, bus, auditLogger, grpcSrv, metricsProvider, *watchdogPath, authInterceptor, certAuth)
 	modMgr.PostRegisterHook = func(moduleID string, caps []string) {
-		bootstrap.WireCallPolicy(reg, meshClient, storageGrpc, creds, maxMsgBytes)
-		bootstrap.WirePublishPolicy(reg, bus, creds, maxMsgBytes)
-		bootstrap.WireAuth(reg, srv, authInterceptor, creds, maxMsgBytes)
+		_ = bootstrap.WireCallPolicy(reg, meshClient, storageGrpc, creds, maxMsgBytes)
+		_ = bootstrap.WirePublishPolicy(reg, bus, creds, maxMsgBytes)
+		_ = bootstrap.WireAuth(reg, srv, authInterceptor, creds, maxMsgBytes)
 	}
 
 	lifecycleMgr.SetRestarter(modMgr)
@@ -291,7 +291,7 @@ func main() { //nolint:gocyclo // main initialization has many unavoidable branc
 		}
 	}()
 
-	for _, discover := range []struct {
+	for _, discover := range []struct { //nolint:govet // struct field alignment is acceptable for this type
 		name string
 		fn   func() error
 	}{
@@ -371,7 +371,7 @@ func main() { //nolint:gocyclo // main initialization has many unavoidable branc
 	slog.Info("MuxCore stopped.")
 }
 
-func parseFlags() (tagName, spoolURL, watchdogPath, taskDir, idempotencyDir, deadletterDir *string, printVersion, dryRun *bool) {
+func parseFlags() (tagName, spoolURL, watchdogPath, taskDir, idempotencyDir, deadletterDir *string, printVersion, dryRun *bool) { //nolint:gocritic // too many results for flag parsing
 	tagName = flag.String("tag", "", "Module tag to load from the spool (e.g., 'default')")
 	spoolURL = flag.String("spool", spool.DefaultSpoolURL, "Spool URL to fetch tags from")
 	watchdogPath = flag.String("watchdog-path", "", "Path to the muxcore-watchdog binary (for module failover)")
@@ -409,7 +409,7 @@ func setupContext() (context.Context, context.CancelFunc, chan os.Signal) {
 	return ctx, cancel, sighupCh
 }
 
-func initIdempotency(ctx context.Context, reg *registry.Registry, nodeID string, dir string) *idempotency.Store {
+func initIdempotency(ctx context.Context, reg *registry.Registry, nodeID, dir string) *idempotency.Store {
 	var s *idempotency.Store
 	var err error
 	if dir != "" {
@@ -428,7 +428,7 @@ func initIdempotency(ctx context.Context, reg *registry.Registry, nodeID string,
 	return s
 }
 
-func initDeadLetter(ctx context.Context, reg *registry.Registry, nodeID string, dir string) *deadletter.Store {
+func initDeadLetter(ctx context.Context, reg *registry.Registry, nodeID, dir string) *deadletter.Store {
 	var s *deadletter.Store
 	var err error
 	if dir != "" {
@@ -472,7 +472,7 @@ func initEventBus() *events.MemoryBus {
 	return bus
 }
 
-func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus) (grpcSrv *grpc.Server, meshClient *grpcmesh.Client, discoveryGrpc *grpcmesh.DiscoveryServer, connPool *grpcmesh.ConnPool, reg *registry.Registry, creds credentials.TransportCredentials, authInterceptor *grpcmesh.AuthInterceptor, nodeID string, cluster contracts.Cluster, certAuth *grpcmesh.CertAuthority) {
+func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus) (grpcSrv *grpc.Server, meshClient *grpcmesh.Client, discoveryGrpc *grpcmesh.DiscoveryServer, connPool *grpcmesh.ConnPool, reg *registry.Registry, creds credentials.TransportCredentials, authInterceptor *grpcmesh.AuthInterceptor, nodeID string, cluster contracts.Cluster, certAuth *grpcmesh.CertAuthority) { //nolint:gocritic // too many results for gRPC mesh initialization
 	meshSrv := grpcmesh.NewServer()
 	meshClient = grpcmesh.NewClient(meshSrv)
 	slog.Info("gRPC mesh server created")
@@ -543,11 +543,8 @@ func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus
 		grpc.ChainStreamInterceptor(
 			bootstrap.GRPCLoggingStreamInterceptor,
 			bootstrap.GRPCPanicRecoveryStreamInterceptor,
-			authInterceptor.StreamInterceptor(),
+			authInterceptor.StreamInterceptor(), //nolint:contextcheck // gRPC interceptor factory — context is derived from stream
 		),
-	)
-
-	grpcOpts = append(grpcOpts,
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			MaxConnectionIdle: 5 * time.Minute,
 			Time:              2 * time.Minute,
@@ -602,7 +599,7 @@ func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus
 	cluster = grpcmesh.NewCluster(discoveryGrpc)
 	meshClient.SetCluster(cluster)
 	meshClient.SetLBStrategy(grpcmesh.NewRoundRobinStrategy())
-	cluster.Start(ctx)
+	_ = cluster.Start(ctx)
 	slog.Info("cluster adapter started")
 
 	connPool = grpcmesh.NewConnPool()

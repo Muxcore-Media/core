@@ -1,3 +1,4 @@
+//nolint:govet // struct field alignment
 package grpcmesh
 
 import (
@@ -582,7 +583,7 @@ func (s *DiscoveryServer) sendHeartbeats(ctx context.Context) {
 		}
 		// Don't close the conn — the pool manages its lifecycle.
 		if pool == nil {
-			conn.Close()
+			_ = conn.Close()
 		}
 		cancel()
 	}

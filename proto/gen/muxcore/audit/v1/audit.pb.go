@@ -21,6 +21,134 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type LogRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Actor         string                 `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
+	Action        string                 `protobuf:"bytes,2,opt,name=action,proto3" json:"action,omitempty"`
+	Resource      string                 `protobuf:"bytes,3,opt,name=resource,proto3" json:"resource,omitempty"`
+	ResourceId    string                 `protobuf:"bytes,4,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`
+	Details       map[string]string      `protobuf:"bytes,5,rep,name=details,proto3" json:"details,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	TraceId       string                 `protobuf:"bytes,6,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LogRequest) Reset() {
+	*x = LogRequest{}
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LogRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LogRequest) ProtoMessage() {}
+
+func (x *LogRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LogRequest.ProtoReflect.Descriptor instead.
+func (*LogRequest) Descriptor() ([]byte, []int) {
+	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *LogRequest) GetActor() string {
+	if x != nil {
+		return x.Actor
+	}
+	return ""
+}
+
+func (x *LogRequest) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *LogRequest) GetResource() string {
+	if x != nil {
+		return x.Resource
+	}
+	return ""
+}
+
+func (x *LogRequest) GetResourceId() string {
+	if x != nil {
+		return x.ResourceId
+	}
+	return ""
+}
+
+func (x *LogRequest) GetDetails() map[string]string {
+	if x != nil {
+		return x.Details
+	}
+	return nil
+}
+
+func (x *LogRequest) GetTraceId() string {
+	if x != nil {
+		return x.TraceId
+	}
+	return ""
+}
+
+type LogResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LogResponse) Reset() {
+	*x = LogResponse{}
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LogResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LogResponse) ProtoMessage() {}
+
+func (x *LogResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LogResponse.ProtoReflect.Descriptor instead.
+func (*LogResponse) Descriptor() ([]byte, []int) {
+	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *LogResponse) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
 type AuditQueryRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// actor filters by actor ID (user, system, or module). Empty matches all.
@@ -45,7 +173,7 @@ type AuditQueryRequest struct {
 
 func (x *AuditQueryRequest) Reset() {
 	*x = AuditQueryRequest{}
-	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[0]
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -57,7 +185,7 @@ func (x *AuditQueryRequest) String() string {
 func (*AuditQueryRequest) ProtoMessage() {}
 
 func (x *AuditQueryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[0]
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -70,7 +198,7 @@ func (x *AuditQueryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditQueryRequest.ProtoReflect.Descriptor instead.
 func (*AuditQueryRequest) Descriptor() ([]byte, []int) {
-	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{0}
+	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *AuditQueryRequest) GetActor() string {
@@ -148,7 +276,7 @@ type AuditEntryProto struct {
 
 func (x *AuditEntryProto) Reset() {
 	*x = AuditEntryProto{}
-	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[1]
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -160,7 +288,7 @@ func (x *AuditEntryProto) String() string {
 func (*AuditEntryProto) ProtoMessage() {}
 
 func (x *AuditEntryProto) ProtoReflect() protoreflect.Message {
-	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[1]
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -173,7 +301,7 @@ func (x *AuditEntryProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditEntryProto.ProtoReflect.Descriptor instead.
 func (*AuditEntryProto) Descriptor() ([]byte, []int) {
-	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{1}
+	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *AuditEntryProto) GetId() string {
@@ -263,7 +391,7 @@ type AuditQueryResponse struct {
 
 func (x *AuditQueryResponse) Reset() {
 	*x = AuditQueryResponse{}
-	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[2]
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -275,7 +403,7 @@ func (x *AuditQueryResponse) String() string {
 func (*AuditQueryResponse) ProtoMessage() {}
 
 func (x *AuditQueryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[2]
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -288,7 +416,7 @@ func (x *AuditQueryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditQueryResponse.ProtoReflect.Descriptor instead.
 func (*AuditQueryResponse) Descriptor() ([]byte, []int) {
-	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{2}
+	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *AuditQueryResponse) GetEntries() []*AuditEntryProto {
@@ -321,7 +449,7 @@ type AuditExportRequest struct {
 
 func (x *AuditExportRequest) Reset() {
 	*x = AuditExportRequest{}
-	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[3]
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -333,7 +461,7 @@ func (x *AuditExportRequest) String() string {
 func (*AuditExportRequest) ProtoMessage() {}
 
 func (x *AuditExportRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[3]
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -346,7 +474,7 @@ func (x *AuditExportRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditExportRequest.ProtoReflect.Descriptor instead.
 func (*AuditExportRequest) Descriptor() ([]byte, []int) {
-	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{3}
+	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *AuditExportRequest) GetFormat() string {
@@ -404,7 +532,7 @@ type AuditExportChunk struct {
 
 func (x *AuditExportChunk) Reset() {
 	*x = AuditExportChunk{}
-	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[4]
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -416,7 +544,7 @@ func (x *AuditExportChunk) String() string {
 func (*AuditExportChunk) ProtoMessage() {}
 
 func (x *AuditExportChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[4]
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -429,7 +557,7 @@ func (x *AuditExportChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditExportChunk.ProtoReflect.Descriptor instead.
 func (*AuditExportChunk) Descriptor() ([]byte, []int) {
-	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{4}
+	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *AuditExportChunk) GetData() []byte {
@@ -465,7 +593,7 @@ type AuditVerifyChainRequest struct {
 
 func (x *AuditVerifyChainRequest) Reset() {
 	*x = AuditVerifyChainRequest{}
-	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[5]
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -477,7 +605,7 @@ func (x *AuditVerifyChainRequest) String() string {
 func (*AuditVerifyChainRequest) ProtoMessage() {}
 
 func (x *AuditVerifyChainRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[5]
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -490,7 +618,7 @@ func (x *AuditVerifyChainRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditVerifyChainRequest.ProtoReflect.Descriptor instead.
 func (*AuditVerifyChainRequest) Descriptor() ([]byte, []int) {
-	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{5}
+	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AuditVerifyChainRequest) GetFromTime() string {
@@ -519,7 +647,7 @@ type AuditVerifyChainResponse struct {
 
 func (x *AuditVerifyChainResponse) Reset() {
 	*x = AuditVerifyChainResponse{}
-	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[6]
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -531,7 +659,7 @@ func (x *AuditVerifyChainResponse) String() string {
 func (*AuditVerifyChainResponse) ProtoMessage() {}
 
 func (x *AuditVerifyChainResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[6]
+	mi := &file_muxcore_audit_v1_audit_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -544,7 +672,7 @@ func (x *AuditVerifyChainResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditVerifyChainResponse.ProtoReflect.Descriptor instead.
 func (*AuditVerifyChainResponse) Descriptor() ([]byte, []int) {
-	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{6}
+	return file_muxcore_audit_v1_audit_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AuditVerifyChainResponse) GetValid() bool {
@@ -579,7 +707,21 @@ var File_muxcore_audit_v1_audit_proto protoreflect.FileDescriptor
 
 const file_muxcore_audit_v1_audit_proto_rawDesc = "" +
 	"\n" +
-	"\x1cmuxcore/audit/v1/audit.proto\x12\x10muxcore.audit.v1\"\xf2\x01\n" +
+	"\x1cmuxcore/audit/v1/audit.proto\x12\x10muxcore.audit.v1\"\x93\x02\n" +
+	"\n" +
+	"LogRequest\x12\x14\n" +
+	"\x05actor\x18\x01 \x01(\tR\x05actor\x12\x16\n" +
+	"\x06action\x18\x02 \x01(\tR\x06action\x12\x1a\n" +
+	"\bresource\x18\x03 \x01(\tR\bresource\x12\x1f\n" +
+	"\vresource_id\x18\x04 \x01(\tR\n" +
+	"resourceId\x12C\n" +
+	"\adetails\x18\x05 \x03(\v2).muxcore.audit.v1.LogRequest.DetailsEntryR\adetails\x12\x19\n" +
+	"\btrace_id\x18\x06 \x01(\tR\atraceId\x1a:\n" +
+	"\fDetailsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x1d\n" +
+	"\vLogResponse\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\xf2\x01\n" +
 	"\x11AuditQueryRequest\x12\x14\n" +
 	"\x05actor\x18\x01 \x01(\tR\x05actor\x12\x16\n" +
 	"\x06action\x18\x02 \x01(\tR\x06action\x12\x1a\n" +
@@ -628,11 +770,12 @@ const file_muxcore_audit_v1_audit_proto_rawDesc = "" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12#\n" +
 	"\rtotal_entries\x18\x02 \x01(\x05R\ftotalEntries\x12!\n" +
 	"\fbroken_links\x18\x03 \x03(\tR\vbrokenLinks\x12&\n" +
-	"\x0ffirst_broken_at\x18\x04 \x01(\tR\rfirstBrokenAt2\x9e\x02\n" +
+	"\x0ffirst_broken_at\x18\x04 \x01(\tR\rfirstBrokenAt2\xe2\x02\n" +
 	"\fAuditService\x12R\n" +
 	"\x05Query\x12#.muxcore.audit.v1.AuditQueryRequest\x1a$.muxcore.audit.v1.AuditQueryResponse\x12T\n" +
 	"\x06Export\x12$.muxcore.audit.v1.AuditExportRequest\x1a\".muxcore.audit.v1.AuditExportChunk0\x01\x12d\n" +
-	"\vVerifyChain\x12).muxcore.audit.v1.AuditVerifyChainRequest\x1a*.muxcore.audit.v1.AuditVerifyChainResponseBBZ@github.com/Muxcore-Media/core/proto/gen/muxcore/audit/v1;auditv1b\x06proto3"
+	"\vVerifyChain\x12).muxcore.audit.v1.AuditVerifyChainRequest\x1a*.muxcore.audit.v1.AuditVerifyChainResponse\x12B\n" +
+	"\x03Log\x12\x1c.muxcore.audit.v1.LogRequest\x1a\x1d.muxcore.audit.v1.LogResponseBBZ@github.com/Muxcore-Media/core/proto/gen/muxcore/audit/v1;auditv1b\x06proto3"
 
 var (
 	file_muxcore_audit_v1_audit_proto_rawDescOnce sync.Once
@@ -646,31 +789,37 @@ func file_muxcore_audit_v1_audit_proto_rawDescGZIP() []byte {
 	return file_muxcore_audit_v1_audit_proto_rawDescData
 }
 
-var file_muxcore_audit_v1_audit_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_muxcore_audit_v1_audit_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_muxcore_audit_v1_audit_proto_goTypes = []any{
-	(*AuditQueryRequest)(nil),        // 0: muxcore.audit.v1.AuditQueryRequest
-	(*AuditEntryProto)(nil),          // 1: muxcore.audit.v1.AuditEntryProto
-	(*AuditQueryResponse)(nil),       // 2: muxcore.audit.v1.AuditQueryResponse
-	(*AuditExportRequest)(nil),       // 3: muxcore.audit.v1.AuditExportRequest
-	(*AuditExportChunk)(nil),         // 4: muxcore.audit.v1.AuditExportChunk
-	(*AuditVerifyChainRequest)(nil),  // 5: muxcore.audit.v1.AuditVerifyChainRequest
-	(*AuditVerifyChainResponse)(nil), // 6: muxcore.audit.v1.AuditVerifyChainResponse
-	nil,                              // 7: muxcore.audit.v1.AuditEntryProto.DetailsEntry
+	(*LogRequest)(nil),               // 0: muxcore.audit.v1.LogRequest
+	(*LogResponse)(nil),              // 1: muxcore.audit.v1.LogResponse
+	(*AuditQueryRequest)(nil),        // 2: muxcore.audit.v1.AuditQueryRequest
+	(*AuditEntryProto)(nil),          // 3: muxcore.audit.v1.AuditEntryProto
+	(*AuditQueryResponse)(nil),       // 4: muxcore.audit.v1.AuditQueryResponse
+	(*AuditExportRequest)(nil),       // 5: muxcore.audit.v1.AuditExportRequest
+	(*AuditExportChunk)(nil),         // 6: muxcore.audit.v1.AuditExportChunk
+	(*AuditVerifyChainRequest)(nil),  // 7: muxcore.audit.v1.AuditVerifyChainRequest
+	(*AuditVerifyChainResponse)(nil), // 8: muxcore.audit.v1.AuditVerifyChainResponse
+	nil,                              // 9: muxcore.audit.v1.LogRequest.DetailsEntry
+	nil,                              // 10: muxcore.audit.v1.AuditEntryProto.DetailsEntry
 }
 var file_muxcore_audit_v1_audit_proto_depIdxs = []int32{
-	7, // 0: muxcore.audit.v1.AuditEntryProto.details:type_name -> muxcore.audit.v1.AuditEntryProto.DetailsEntry
-	1, // 1: muxcore.audit.v1.AuditQueryResponse.entries:type_name -> muxcore.audit.v1.AuditEntryProto
-	0, // 2: muxcore.audit.v1.AuditService.Query:input_type -> muxcore.audit.v1.AuditQueryRequest
-	3, // 3: muxcore.audit.v1.AuditService.Export:input_type -> muxcore.audit.v1.AuditExportRequest
-	5, // 4: muxcore.audit.v1.AuditService.VerifyChain:input_type -> muxcore.audit.v1.AuditVerifyChainRequest
-	2, // 5: muxcore.audit.v1.AuditService.Query:output_type -> muxcore.audit.v1.AuditQueryResponse
-	4, // 6: muxcore.audit.v1.AuditService.Export:output_type -> muxcore.audit.v1.AuditExportChunk
-	6, // 7: muxcore.audit.v1.AuditService.VerifyChain:output_type -> muxcore.audit.v1.AuditVerifyChainResponse
-	5, // [5:8] is the sub-list for method output_type
-	2, // [2:5] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	9,  // 0: muxcore.audit.v1.LogRequest.details:type_name -> muxcore.audit.v1.LogRequest.DetailsEntry
+	10, // 1: muxcore.audit.v1.AuditEntryProto.details:type_name -> muxcore.audit.v1.AuditEntryProto.DetailsEntry
+	3,  // 2: muxcore.audit.v1.AuditQueryResponse.entries:type_name -> muxcore.audit.v1.AuditEntryProto
+	2,  // 3: muxcore.audit.v1.AuditService.Query:input_type -> muxcore.audit.v1.AuditQueryRequest
+	5,  // 4: muxcore.audit.v1.AuditService.Export:input_type -> muxcore.audit.v1.AuditExportRequest
+	7,  // 5: muxcore.audit.v1.AuditService.VerifyChain:input_type -> muxcore.audit.v1.AuditVerifyChainRequest
+	0,  // 6: muxcore.audit.v1.AuditService.Log:input_type -> muxcore.audit.v1.LogRequest
+	4,  // 7: muxcore.audit.v1.AuditService.Query:output_type -> muxcore.audit.v1.AuditQueryResponse
+	6,  // 8: muxcore.audit.v1.AuditService.Export:output_type -> muxcore.audit.v1.AuditExportChunk
+	8,  // 9: muxcore.audit.v1.AuditService.VerifyChain:output_type -> muxcore.audit.v1.AuditVerifyChainResponse
+	1,  // 10: muxcore.audit.v1.AuditService.Log:output_type -> muxcore.audit.v1.LogResponse
+	7,  // [7:11] is the sub-list for method output_type
+	3,  // [3:7] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_muxcore_audit_v1_audit_proto_init() }
@@ -684,7 +833,7 @@ func file_muxcore_audit_v1_audit_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_muxcore_audit_v1_audit_proto_rawDesc), len(file_muxcore_audit_v1_audit_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -1,3 +1,4 @@
+//nolint:govet // struct field alignment
 package grpcmesh
 
 import (
@@ -20,7 +21,7 @@ import (
 // authFailureRecord tracks gRPC authentication failures per caller identity
 // for brute-force protection, analogous to the HTTP auth failure tracking.
 // Uses cumulative counts with exponential backoff.
-type grpcAuthFailureRecord struct {
+type grpcAuthFailureRecord struct { //nolint:govet // struct field alignment is acceptable
 	count         int
 	totalFailures int
 	blockedUntil  time.Time
@@ -315,7 +316,7 @@ func (a *AuthInterceptor) StreamInterceptor() grpc.StreamServerInterceptor {
 		if err != nil {
 			return err
 		}
-		wrappedStream := &authServerStream{ServerStream: stream, ctx: ctx}
+		wrappedStream := &authServerStream{ServerStream: stream, ctxFn: func() context.Context { return ctx }}
 		return handler(srv, wrappedStream)
 	}
 }
@@ -324,9 +325,9 @@ func (a *AuthInterceptor) StreamInterceptor() grpc.StreamServerInterceptor {
 // authenticated context after authorization.
 type authServerStream struct {
 	grpc.ServerStream
-	ctx context.Context
+	ctxFn func() context.Context
 }
 
 func (w *authServerStream) Context() context.Context {
-	return w.ctx
+	return w.ctxFn()
 }

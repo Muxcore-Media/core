@@ -61,7 +61,7 @@ func TestChaos_HealthCheckLoop_DetectsAndRemediates(t *testing.T) {
 		stubModule: stubModule{id: "chaos-health", name: "Chaos Health", version: "1.0.0"},
 	}
 	mod.setHealth(nil)
-	if err := h.modMgr.Register(mod, nil); err != nil {
+	if err := h.modMgr.Register(context.Background(), mod, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if err := h.modMgr.InitAll(h.ctx); err != nil {
@@ -127,7 +127,7 @@ func TestChaos_MultipleUnhealthyModules(t *testing.T) {
 			},
 		}
 		mods[i] = mod
-		if err := h.modMgr.Register(mod, nil); err != nil {
+		if err := h.modMgr.Register(context.Background(), mod, nil); err != nil {
 			t.Fatalf("Register mod-%d: %v", i, err)
 		}
 	}
@@ -163,7 +163,7 @@ func TestChaos_HealthLoop_NoRestarterIsNoop(t *testing.T) {
 	mod := &controllableHealthModule{
 		stubModule: stubModule{id: "chaos-noop", name: "No Restarter", version: "1.0.0"},
 	}
-	h.modMgr.Register(mod, nil)
+	h.modMgr.Register(context.Background(), mod, nil)
 	h.modMgr.InitAll(h.ctx)
 	h.modMgr.StartAll(h.ctx)
 

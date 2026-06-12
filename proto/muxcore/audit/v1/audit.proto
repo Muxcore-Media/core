@@ -19,6 +19,24 @@ service AuditService {
   // over the audit log in the given time range. Returns verification
   // results without exposing entry content.
   rpc VerifyChain(AuditVerifyChainRequest) returns (AuditVerifyChainResponse);
+
+  // Log writes an entry to the audit log. Used by admin tools and modules
+  // to record user-initiated actions. The caller must provide at least
+  // an actor, action, and resource.
+  rpc Log(LogRequest) returns (LogResponse);
+}
+
+message LogRequest {
+  string actor = 1;
+  string action = 2;
+  string resource = 3;
+  string resource_id = 4;
+  map<string, string> details = 5;
+  string trace_id = 6;
+}
+
+message LogResponse {
+  string id = 1;
 }
 
 message AuditQueryRequest {

@@ -1,3 +1,4 @@
+//nolint:govet // struct field alignment
 package config
 
 import (

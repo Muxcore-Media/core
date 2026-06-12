@@ -505,7 +505,7 @@ func TestStatusCounters_InitialValues(t *testing.T) {
 
 func TestSpawnFireAndForget_RunsFunction(t *testing.T) {
 	ran := make(chan struct{}, 1)
-	spawnFireAndForget(func() {
+	spawnFireAndForget(context.Background(), func(ctx context.Context) {
 		ran <- struct{}{}
 	})
 	select {
@@ -528,7 +528,7 @@ func TestSpawnFireAndForget_OverflowDrops(t *testing.T) {
 
 	// When the semaphore is full, spawnFireAndForget should not block.
 	ran := make(chan struct{}, 1)
-	spawnFireAndForget(func() {
+	spawnFireAndForget(context.Background(), func(ctx context.Context) {
 		ran <- struct{}{}
 	})
 	select {

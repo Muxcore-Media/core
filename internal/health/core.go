@@ -3,6 +3,8 @@
 // or an error describing what's wrong. The CoreHealth aggregator runs all
 // probes concurrently and caches results to avoid thundering-herd on
 // health polling.
+//
+//nolint:govet // struct field alignment
 package health
 
 import (

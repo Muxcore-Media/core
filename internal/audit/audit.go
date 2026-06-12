@@ -2,6 +2,8 @@
 // When configured with a non-empty LogPath, writes JSON Lines (one JSON
 // object per line) to the specified file. When LogPath is empty, all
 // operations are no-ops — safe to instantiate with zero config.
+//
+//nolint:govet // struct field alignment
 package audit
 
 import (
@@ -82,7 +84,7 @@ func NewFileLogger(logPath string) (*FileLogger, error) {
 	if logPath == "" {
 		return fl, nil
 	}
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) //nolint:gosec // path comes from operator configuration
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // path comes from operator configuration
 	if err != nil {
 		return nil, fmt.Errorf("audit: open %s: %w", logPath, err)
 	}
@@ -263,7 +265,7 @@ func (fl *FileLogger) Log(ctx context.Context, entry contracts.AuditEntry) error
 	if fi, statErr := fl.file.Stat(); statErr == nil {
 		chainData += "\n" + fmt.Sprintf("%d", fi.Size())
 	}
-	if writeErr := os.WriteFile(chainPath, []byte(chainData+"\n"), 0600); writeErr != nil {
+	if writeErr := os.WriteFile(chainPath, []byte(chainData+"\n"), 0o600); writeErr != nil {
 		slog.Warn("audit: persist chain state failed", "error", writeErr)
 	}
 
@@ -328,18 +330,18 @@ func (fl *FileLogger) Export(ctx context.Context, format string) (io.ReadCloser,
 				}
 			}()
 			enc := json.NewEncoder(pw)
-			pw.Write([]byte("["))
+			_, _ = pw.Write([]byte("["))
 			for i, e := range entries {
 				if i > 0 {
-					pw.Write([]byte(","))
+					_, _ = pw.Write([]byte(","))
 				}
 				if err := enc.Encode(e); err != nil {
 					pw.CloseWithError(fmt.Errorf("audit: encode entry: %w", err))
 					return
 				}
 			}
-			pw.Write([]byte("]"))
-			pw.Close()
+			_, _ = pw.Write([]byte("]"))
+			_ = pw.Close()
 		}()
 		return pr, nil
 	case "csv":
@@ -349,7 +351,7 @@ func (fl *FileLogger) Export(ctx context.Context, format string) (io.ReadCloser,
 					pw.CloseWithError(fmt.Errorf("audit export CSV panic: %v", r))
 				}
 			}()
-			pw.Write([]byte("id,timestamp,actor,action,resource,resource_id,trace_id,node_id\n"))
+			_, _ = pw.Write([]byte("id,timestamp,actor,action,resource,resource_id,trace_id,node_id\n"))
 			for _, e := range entries {
 				line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s\n",
 					e.ID, e.Timestamp.Format("2006-01-02T15:04:05Z"),
@@ -360,11 +362,11 @@ func (fl *FileLogger) Export(ctx context.Context, format string) (io.ReadCloser,
 					return
 				}
 			}
-			pw.Close()
+			_ = pw.Close()
 		}()
 		return pr, nil
 	default:
-		pw.Close()
+		_ = pw.Close()
 		return nil, fmt.Errorf("audit: unsupported export format: %q", format)
 	}
 }
@@ -450,7 +452,7 @@ func (fl *FileLogger) VerifyAll(ctx context.Context) (contracts.ChainVerificatio
 
 			var entry contracts.AuditEntry
 			if err := json.Unmarshal(line, &entry); err != nil {
-				f.Close()
+				_ = f.Close()
 				return result, fmt.Errorf("audit: verify %s:%d: unmarshal: %w", p, lineNo+1, err)
 			}
 
@@ -470,7 +472,7 @@ func (fl *FileLogger) VerifyAll(ctx context.Context) (contracts.ChainVerificatio
 				entryCopy.Signature = ""
 				canonData, err := json.Marshal(entryCopy)
 				if err != nil {
-					f.Close()
+					_ = f.Close()
 					return result, fmt.Errorf("audit: verify %s:%d: marshal for signature: %w", p, lineNo+1, err)
 				}
 				mac := hmac.New(sha256.New, signingKey)
@@ -490,7 +492,7 @@ func (fl *FileLogger) VerifyAll(ctx context.Context) (contracts.ChainVerificatio
 			entryCopy.PrevEntryHash = ""
 			canonData, err := json.Marshal(entryCopy)
 			if err != nil {
-				f.Close()
+				_ = f.Close()
 				return result, fmt.Errorf("audit: verify %s:%d: marshal for hash: %w", p, lineNo+1, err)
 			}
 			h.Reset()
@@ -502,10 +504,10 @@ func (fl *FileLogger) VerifyAll(ctx context.Context) (contracts.ChainVerificatio
 		}
 
 		if err := scanner.Err(); err != nil {
-			f.Close()
+			_ = f.Close()
 			return result, fmt.Errorf("audit: verify %s: scan: %w", p, err)
 		}
-		f.Close()
+		_ = f.Close()
 	}
 
 	if len(result.BrokenLinks) > 0 {
@@ -618,11 +620,11 @@ func (fl *FileLogger) maybeRotateLocked() error {
 
 	info, err := fl.file.Stat()
 	if err != nil || info.Size() < maxBytes {
-		return nil // no rotation needed
+		return nil //nolint:nilerr // no rotation needed when stat fails or size is below threshold
 	}
 
 	// Close the current file before renaming.
-	fl.file.Close()
+	_ = fl.file.Close()
 	fl.file = nil
 
 	maxRotated := fl.MaxRotatedFiles
@@ -634,19 +636,19 @@ func (fl *FileLogger) maybeRotateLocked() error {
 	for i := maxRotated; i > 1; i-- {
 		older := fmt.Sprintf("%s.%d", fl.path, i)
 		newer := fmt.Sprintf("%s.%d", fl.path, i-1)
-		if _, err := os.Stat(newer); err == nil {
-			if err := os.Rename(newer, older); err != nil {
-				slog.Error("audit: rename rotated file", "from", newer, "to", older, "error", err)
+		if _, err2 := os.Stat(newer); err2 == nil {
+			if err3 := os.Rename(newer, older); err3 != nil {
+				slog.Error("audit: rename rotated file", "from", newer, "to", older, "error", err3)
 			}
 		}
 	}
 	// Rename current file to .1
-	if err := os.Rename(fl.path, fl.path+".1"); err != nil {
-		return fmt.Errorf("audit: rename current log for rotation: %w", err)
+	if err2 := os.Rename(fl.path, fl.path+".1"); err2 != nil {
+		return fmt.Errorf("audit: rename current log for rotation: %w", err2)
 	}
 
 	// Open a new file.
-	f, err := os.OpenFile(fl.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(fl.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("audit: open new log after rotation: %w", err)
 	}

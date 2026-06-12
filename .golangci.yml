@@ -34,6 +34,8 @@ linters:
     - spancheck
   default: none
   settings:
+    gomoddirectives:
+      replace-local: true
     govet:
       enable:
         - fieldalignment
