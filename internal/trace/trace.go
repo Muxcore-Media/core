@@ -12,6 +12,9 @@ type ctxKey struct{}
 
 // FromContext extracts the trace ID from context, or returns "".
 func FromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
 	if v, ok := ctx.Value(ctxKey{}).(string); ok {
 		return v
 	}
@@ -20,11 +23,17 @@ func FromContext(ctx context.Context) string {
 
 // NewContext returns a context with a new trace ID.
 func NewContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return context.WithValue(ctx, ctxKey{}, uuid.New().String())
 }
 
 // WithTraceID returns a context with the given trace ID.
 func WithTraceID(ctx context.Context, id string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return context.WithValue(ctx, ctxKey{}, id)
 }
 

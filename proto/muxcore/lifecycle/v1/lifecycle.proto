@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package muxcore.lifecycle.v1;
+
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/lifecycle/v1;lifecyclev1";
+
+// ModuleLifecycleService provides runtime control over module lifecycle.
+// Admin tools use this to inspect, spawn, stop, and restart modules.
+service ModuleLifecycleService {
+  // ListModules returns all modules known to this node, including
+  // their current state and health. Includes both locally-spawned
+  // and remotely-registered modules.
+  rpc ListModules(ListModulesRequest) returns (ListModulesResponse);
+
+  // SpawnModule resolves and spawns a module from a spool tag entry.
+  // The module must be defined in the current tag cache (set via
+  // --tag at startup or a previous DeployTag call).
+  rpc SpawnModule(SpawnModuleRequest) returns (SpawnModuleResponse);
+
+  // StopModule sends SIGTERM to a running module and waits for it
+  // to stop. Returns an error if the module is not found.
+  rpc StopModule(StopModuleRequest) returns (StopModuleResponse);
+
+  // RestartModule kills the running process for a module and
+  // re-spawns it from the same binary. Only works for modules
+  // spawned directly (not via watchdog).
+  rpc RestartModule(RestartModuleRequest) returns (RestartModuleResponse);
+}
+
+message ListModulesRequest {
+  // state_filter optionally filters by module state.
+  // Empty returns all modules.
+  string state_filter = 1;
+  // capability_filter optionally filters by capability.
+  string capability_filter = 2;
+}
+
+message ModuleStatusProto {
+  string module_id = 1;
+  string name = 2;
+  string version = 3;
+  string state = 4;
+  string health_error = 5;
+  repeated string capabilities = 6;
+  string repo = 7;
+  // node_id indicates which cluster node is running this module.
+  string node_id = 8;
+  // restart_policy is "never", "on-failure", or "always".
+  string restart_policy = 9;
+  // uptime_seconds is how long the module has been running (zero if not running).
+  int64 uptime_seconds = 10;
+}
+
+message ListModulesResponse {
+  repeated ModuleStatusProto modules = 1;
+  int32 total = 2;
+}
+
+message SpawnModuleRequest {
+  // tag_name is the tag that contains the module definition.
+  // Must have been previously deployed or set at startup.
+  string tag_name = 1;
+  // repo is the module's repository URL.
+  string repo = 2;
+  // version is the module version to resolve (e.g. "v1.0.0").
+  string version = 3;
+  // instance_id differentiates multiple copies of the same module.
+  string instance_id = 4;
+  // config is instance-specific configuration passed as env vars.
+  map<string, string> config = 5;
+}
+
+message SpawnModuleResponse {
+  string module_id = 1;
+  bool accepted = 2;
+  string error = 3;
+}
+
+message StopModuleRequest {
+  string module_id = 1;
+}
+
+message StopModuleResponse {
+  bool acknowledged = 1;
+  string error = 2;
+}
+
+message RestartModuleRequest {
+  string module_id = 1;
+}
+
+message RestartModuleResponse {
+  bool accepted = 1;
+  string error = 2;
+}
