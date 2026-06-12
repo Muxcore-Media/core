@@ -80,6 +80,19 @@ type DatabaseProvider interface {
 	// Implementations SHOULD verify migration content against a known
 	// checksum or signature before execution when operating in production.
 	Migrate(ctx context.Context, migrations []Migration) error
+
+	// Rollback reverts schema migrations down to the given target version
+	// by applying Down SQL in reverse version order. targetVersion of 0
+	// rolls back all migrations (empty schema). Returns nil if no rollback
+	// is needed (current version <= targetVersion). Returns
+	// ErrMigrationTargetNotFound if targetVersion does not exist in the
+	// migrations list. Returns ErrRollbackNotSupported if the provider
+	// does not implement rollback.
+	//
+	// Implementations MUST apply Down SQL within transactions and track
+	// the current schema version in their migrations tracking table.
+	// They MUST reject rollback past version 0 (dropping below baseline).
+	Rollback(ctx context.Context, targetVersion int) error
 }
 
 // Rows is an iterator over query result rows.
@@ -96,13 +109,20 @@ type Tx interface {
 	Query(ctx context.Context, query string, args ...any) (Rows, error)
 }
 
+// ErrRollbackNotSupported is returned by DatabaseProvider.Rollback when
+// the provider does not implement rollback functionality.
+var ErrRollbackNotSupported = errors.New("database: rollback not supported by this provider")
+
+// ErrMigrationTargetNotFound is returned by DatabaseProvider.Rollback when
+// the targetVersion does not exist in the provider's migration list.
+var ErrMigrationTargetNotFound = errors.New("database: target migration version not found")
+
 // Migration represents a versioned schema migration.
 type Migration struct {
 	Version int
 	Name    string
 	Up      string // SQL to apply
-	// Down is SQL to roll back.
-	// RESERVED — DatabaseProvider.Migrate does not yet support rollback;
-	// will be wired when Rollback is added.
+	// Down is SQL to revert the migration. Used by Rollback to undo
+	// schema changes in reverse version order.
 	Down string
 }

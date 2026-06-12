@@ -1,0 +1,85 @@
+---
+- name: Create muxcore system group
+  ansible.builtin.group:
+    name: "{{ muxcore_system_group }}"
+    system: true
+    state: present
+
+- name: Create muxcore system user
+  ansible.builtin.user:
+    name: "{{ muxcore_system_user }}"
+    group: "{{ muxcore_system_group }}"
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+    state: present
+
+- name: Create required directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ muxcore_system_user }}"
+    group: "{{ muxcore_system_group }}"
+    mode: "0750"
+  loop:
+    - "{{ muxcore_data_dir }}"
+    - "{{ muxcore_log_dir }}"
+    - "{{ muxcore_config_dir }}"
+
+- name: Install muxcored from local binary
+  when: muxcore_local_binary | length > 0
+  ansible.builtin.copy:
+    src: "{{ muxcore_local_binary }}"
+    dest: "{{ muxcore_binary_path }}"
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Look up latest release tag from GitHub
+  when: muxcore_version == 'latest' and muxcore_local_binary | length == 0
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ muxcore_github_owner }}/{{ muxcore_github_repo }}/releases/latest"
+    return_content: true
+  register: _muxcore_latest_release
+
+- name: Resolve release version string
+  when: muxcore_local_binary | length == 0
+  ansible.builtin.set_fact:
+    _muxcore_release_tag: >-
+      {{ muxcore_version if muxcore_version != 'latest'
+         else _muxcore_latest_release.json.tag_name }}
+    _muxcore_release_version: >-
+      {{ (muxcore_version if muxcore_version != 'latest'
+          else _muxcore_latest_release.json.tag_name) | regex_replace('^v', '') }}
+
+- name: Build release download URL
+  when: muxcore_local_binary | length == 0
+  ansible.builtin.set_fact:
+    _muxcore_release_url: >-
+      https://github.com/{{ muxcore_github_owner }}/{{ muxcore_github_repo }}
+      /releases/download/{{ _muxcore_release_tag }}
+      /muxcored_{{ _muxcore_release_version }}_{{ muxcore_os | capitalize }}_{{ muxcore_arch }}.tar.gz
+
+- name: Download muxcored release archive
+  when: muxcore_local_binary | length == 0
+  ansible.builtin.get_url:
+    url: "{{ _muxcore_release_url }}"
+    dest: /tmp/muxcored.tar.gz
+    mode: "0644"
+
+- name: Extract muxcored binary
+  when: muxcore_local_binary | length == 0
+  ansible.builtin.unarchive:
+    src: /tmp/muxcored.tar.gz
+    dest: /tmp/
+    remote_src: true
+
+- name: Install muxcored binary from release
+  when: muxcore_local_binary | length == 0
+  ansible.builtin.copy:
+    src: /tmp/muxcored
+    dest: "{{ muxcore_binary_path }}"
+    mode: "0755"
+    owner: root
+    group: root
+    remote_src: true

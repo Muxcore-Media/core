@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package muxcore.audit.v1;
+
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/audit/v1;auditv1";
+
+// AuditService provides query and export access to the core audit log.
+// Admin tools use this to browse, search, and verify audit trails.
+service AuditService {
+  // Query returns audit entries matching the given filter.
+  rpc Query(AuditQueryRequest) returns (AuditQueryResponse);
+
+  // Export streams all audit entries matching the filter in the
+  // requested format. The stream sends chunks of entries rather than
+  // a single large response, enabling export of terabytes-scale logs.
+  rpc Export(AuditExportRequest) returns (stream AuditExportChunk);
+
+  // VerifyChain performs a standalone hash-chain integrity check
+  // over the audit log in the given time range. Returns verification
+  // results without exposing entry content.
+  rpc VerifyChain(AuditVerifyChainRequest) returns (AuditVerifyChainResponse);
+}
+
+message AuditQueryRequest {
+  // actor filters by actor ID (user, system, or module). Empty matches all.
+  string actor = 1;
+  // action filters by action string. Empty matches all.
+  string action = 2;
+  // resource filters by resource string. Empty matches all.
+  string resource = 3;
+  // trace_id filters by trace ID. Empty matches all.
+  string trace_id = 4;
+  // from_time limits results to entries after this timestamp (RFC3339).
+  string from_time = 5;
+  // to_time limits results to entries before this timestamp (RFC3339).
+  string to_time = 6;
+  // verify_chain, when true, validates the hash chain of returned entries.
+  bool verify_chain = 7;
+  // max_results caps the number of returned entries. 0 means no limit.
+  int32 max_results = 8;
+}
+
+message AuditEntryProto {
+  string id = 1;
+  int64 timestamp = 2;
+  string actor = 3;
+  string action = 4;
+  string resource = 5;
+  string resource_id = 6;
+  map<string, string> details = 7;
+  string trace_id = 8;
+  string node_id = 9;
+  string prev_entry_hash = 10;
+  string signature = 11;
+}
+
+message AuditQueryResponse {
+  repeated AuditEntryProto entries = 1;
+  int32 total = 2;
+}
+
+message AuditExportRequest {
+  // format is "json" or "csv". Defaults to "json".
+  string format = 1;
+  // actor, action, resource, from_time, to_time act as filters.
+  string actor = 2;
+  string action = 3;
+  string resource = 4;
+  string from_time = 5;
+  string to_time = 6;
+}
+
+message AuditExportChunk {
+  bytes data = 1;
+  // sequence is the chunk number (0-based) for reassembly verification.
+  int32 sequence = 2;
+  // complete is true for the final chunk.
+  bool complete = 3;
+}
+
+message AuditVerifyChainRequest {
+  // from_time is the start of the range to verify (RFC3339).
+  string from_time = 1;
+  // to_time is the end of the range to verify (RFC3339).
+  string to_time = 2;
+}
+
+message AuditVerifyChainResponse {
+  bool valid = 1;
+  int32 total_entries = 2;
+  repeated string broken_links = 3;
+  string first_broken_at = 4;
+}

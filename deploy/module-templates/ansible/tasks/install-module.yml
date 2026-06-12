@@ -1,0 +1,72 @@
+---
+# Install a MuxCore module as a systemd service.
+#
+# Example usage in a playbook:
+#
+# - name: Deploy module
+#   ansible.builtin.include_role:
+#     name: install-muxcore-module
+#   vars:
+#     module_binary_name: my-module
+#     module_id: my-module
+#     core_grpc_addr: 127.0.0.1:9090
+#     module_config:
+#       api_key: "abc123"
+
+- name: Create muxcore user
+  ansible.builtin.user:
+    name: "{{ module_user }}"
+    system: true
+    create_home: false
+
+- name: Create module env directory
+  ansible.builtin.file:
+    path: "/etc/muxcore/modules/{{ module_id }}"
+    state: directory
+    owner: "{{ module_user }}"
+    group: "{{ module_group }}"
+    mode: "0750"
+
+- name: Install module binary
+  ansible.builtin.copy:
+    src: "{{ module_local_binary }}"
+    dest: "{{ module_binary_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: module_local_binary | length > 0
+
+- name: Download module binary
+  ansible.builtin.get_url:
+    url: "{{ module_download_url }}"
+    dest: "{{ module_binary_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: module_download_url | length > 0
+
+- name: Write module env file
+  ansible.builtin.template:
+    src: muxcore-module.env.j2
+    dest: "/etc/muxcore/modules/{{ module_id }}/env"
+    owner: "{{ module_user }}"
+    group: "{{ module_group }}"
+    mode: "0600"
+  notify: restart muxcore module
+  when: module_config | length > 0
+
+- name: Install systemd service
+  ansible.builtin.template:
+    src: muxcore-module@.service.j2
+    dest: "/etc/systemd/system/muxcore-module@.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart muxcore module
+
+- name: Enable and start module
+  ansible.builtin.systemd:
+    name: "muxcore-module@{{ module_id }}"
+    enabled: true
+    state: started
+    daemon_reload: true

@@ -30,14 +30,14 @@ Acknowledgment within **72 hours**. Target patch: **7 days** critical, **30 days
 - **Cluster discovery**: Join token authentication via gRPC metadata (constant-time comparison)
 - **Storage**: Key sanitization (path traversal prevention), max object size enforcement (100MB), capability-based access control via CallPolicyProvider
 - **Event bus**: Per-handler timeouts (30s), structured logging, source node validation, deny-by-default publish policy with capability enforcement via PublishPolicyProvider
-- **Module capability enforcement**: Built-in call policy (mesh routing + storage access) and publish policy (event dispatch), both backed by the module registry. Capabilities are soft-enforced by default; set `MUXCORE_STRICT_CALL_POLICY=true` for hard denial.
+- **Module capability enforcement**: Built-in call policy (mesh routing + storage access) and publish policy (event dispatch), both backed by the module registry. Deny-by-default: all inter-module calls and event publications are denied until a policy module is deployed.
 - **Config**: Environment variable overrides with validation, seed node address validation, TLS cert validation at boot
 - **Docker**: Non-root user, credential file exclusion from builds, HEALTHCHECK; read-only root filesystem and capability dropping applied via docker-compose.yml
 - **CI/CD**: Read-only GITHUB_TOKEN, actions pinned by commit SHA, verified binary downloads with SHA256 checksums, govulncheck at pinned version, fuzz testing
+- **RBAC enforcement layer**: Authorizer interface is enforced at the HTTP API and gRPC layers. The core provides the enforcement framework — the policy engine (role definitions, permission-to-role mapping, user-to-role assignment) is provided by an auth module via `SetAuthorizer()`/`SetIdentityProvider()`.
 
 ### In Progress
 
-- **RBAC enforcement**: Authorizer interface is defined and enforced at the HTTP API layer. gRPC interceptor supports configurable Authorizer+IdentityProvider enforcement via `AuthInterceptor.SetAuthorizer()`/`SetIdentityProvider()` — enforcement activates when an auth module registers both providers.
 - **Auth failure rate limiting**: Per-IP brute-force protection with fixed 1-minute backoff after 5 failures
 
 ### Completed Since Last Audit

@@ -2,6 +2,7 @@ package grpcmesh
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/callerid"
@@ -9,6 +10,7 @@ import (
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -21,14 +23,15 @@ type WALReplayer interface {
 
 // EventServer implements the EventService gRPC service.
 // It relays events between nodes when NATS is not in use.
+// Authentication is required for all operations.
 type EventServer struct {
 	eventsv1.UnimplementedEventServiceServer
 	bus         contracts.EventBus
 	walReplayer WALReplayer
-	requireAuth bool
 }
 
 // NewEventServer creates an event relay gRPC server.
+// Authentication is required for all operations.
 func NewEventServer(bus contracts.EventBus) *EventServer {
 	return &EventServer{bus: bus}
 }
@@ -39,22 +42,19 @@ func (s *EventServer) SetWALReplayer(r WALReplayer) {
 	s.walReplayer = r
 }
 
-// SetRequireAuth controls whether Subscribe and Publish require an
-// authenticated caller (non-empty x-caller-id in context). When true,
-// unauthenticated requests receive codes.Unauthenticated.
-func (s *EventServer) SetRequireAuth(require bool) {
-	s.requireAuth = require
-}
-
 func (s *EventServer) checkAuth(ctx context.Context) error {
-	if !s.requireAuth {
+	id := callerid.Get(ctx)
+	if id != "" {
 		return nil
 	}
-	if callerid.Get(ctx) == "" {
-		return status.Error(codes.Unauthenticated,
-			"events: authentication required — set MUXCORE_GRPC_REQUIRE_EVENTS_AUTH=false or deploy an auth module")
+	// Fallback: check gRPC metadata directly for caller identity.
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if ids := md.Get("x-caller-id"); len(ids) > 0 && ids[0] != "" {
+			return nil
+		}
 	}
-	return nil
+	return status.Error(codes.PermissionDenied,
+		"events: authentication required")
 }
 
 // RegisterWithGRPC registers this server with a gRPC server.
@@ -70,6 +70,9 @@ func (s *EventServer) Publish(ctx context.Context, req *eventsv1.PublishRequest)
 		return nil, err
 	}
 	pb := req.GetEvent()
+	if pb == nil {
+		return nil, status.Error(codes.InvalidArgument, "event is required")
+	}
 	if len(pb.GetPayload()) > maxEventPayloadSize {
 		return nil, status.Errorf(codes.InvalidArgument, "event payload exceeds maximum size %d bytes", maxEventPayloadSize)
 	}
@@ -112,26 +115,63 @@ func (s *EventServer) Subscribe(req *eventsv1.SubscribeRequest, stream eventsv1.
 	}
 	ctx := stream.Context()
 
+	// Serialize all stream.Send calls through a single channel + goroutine.
+	// gRPC streams require that Send be called by at most one goroutine at a
+	// time; without serialization, concurrent sends from multiple bus
+	// subscriptions race and trigger "transport: SendHeader called multiple times".
+	type pbEvent struct {
+		event contracts.Event
+		done  chan error
+	}
+	ch := make(chan pbEvent, 64)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("events subscribe send panic recovered", "panic", r)
+			}
+		}()
+		for pe := range ch {
+			pb := &eventsv1.Event{
+				Id:        pe.event.ID,
+				Type:      pe.event.Type,
+				Source:    pe.event.Source,
+				Payload:   pe.event.Payload,
+				Metadata:  pe.event.Metadata,
+				Timestamp: pe.event.Timestamp.Unix(),
+			}
+			select {
+			case pe.done <- stream.Send(pb):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	// Collect cancel funcs so all subscriptions are cleaned up when the stream ends.
 	cancels := make([]func(), 0, len(req.GetEventTypes()))
 	defer func() {
 		for _, cancel := range cancels {
 			cancel()
 		}
+		close(ch)
 	}()
 
 	for _, eventType := range req.GetEventTypes() {
 		eventType := eventType // capture
 		handler := func(ctx context.Context, event contracts.Event) error {
-			pb := &eventsv1.Event{
-				Id:        event.ID,
-				Type:      event.Type,
-				Source:    event.Source,
-				Payload:   event.Payload,
-				Metadata:  event.Metadata,
-				Timestamp: event.Timestamp.Unix(),
+			done := make(chan error, 1)
+			select {
+			case ch <- pbEvent{event: event, done: done}:
+			case <-ctx.Done():
+				return ctx.Err()
 			}
-			return stream.Send(pb)
+			select {
+			case err := <-done:
+				return err
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 		cancel, err := s.bus.Subscribe(ctx, eventType, handler)
 		if err != nil {

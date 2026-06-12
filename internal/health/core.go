@@ -7,6 +7,7 @@ package health
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -38,6 +39,10 @@ func New() *CoreHealth {
 // RegisterProbe adds a named health probe.
 // Panics if a probe with the same name is already registered.
 func (ch *CoreHealth) RegisterProbe(name string, fn Probe) {
+	if fn == nil {
+		slog.Warn("health: nil probe function", "name", name)
+		return
+	}
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 	if _, exists := ch.probes[name]; exists {
@@ -80,7 +85,14 @@ func (ch *CoreHealth) Check(ctx context.Context) map[string]error {
 		go func(name string, p Probe) {
 			probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
-			results <- result{name: name, err: p(probeCtx)}
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						results <- result{name: name, err: fmt.Errorf("probe panic: %v", r)}
+					}
+				}()
+				results <- result{name: name, err: p(probeCtx)}
+			}()
 		}(names[i], probe)
 	}
 

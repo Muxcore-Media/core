@@ -1,0 +1,7 @@
+apiVersion: v2
+name: muxcore-module
+description: A MuxCore sidecar module
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+# TODO: set the correct version and name for the module

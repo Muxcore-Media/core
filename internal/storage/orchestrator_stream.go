@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ func (o *Orchestrator) Stream(ctx context.Context, key string, offset, length in
 	if err := validateKey(key); err != nil {
 		return nil, err
 	}
+	key = namespaceKey(ctx, key)
 	prov, err := o.route(key)
 	if err != nil {
 		return nil, err
@@ -33,6 +35,9 @@ func (o *Orchestrator) Stream(ctx context.Context, key string, offset, length in
 	rc, err := prov.Get(tctx, key)
 	if err != nil {
 		return nil, err
+	}
+	if rc == nil {
+		return nil, fmt.Errorf("stream fallback: provider returned nil reader without error")
 	}
 	defer rc.Close()
 
@@ -59,24 +64,8 @@ func (o *Orchestrator) Stream(ctx context.Context, key string, offset, length in
 	}
 
 	return io.NopCloser(io.NewSectionReader(
-		&byteReader{data: data},
+		bytes.NewReader(data),
 		start,
 		end-start,
 	)), nil
-}
-
-// byteReader implements io.ReaderAt for a byte slice.
-type byteReader struct {
-	data []byte
-}
-
-func (r *byteReader) ReadAt(p []byte, off int64) (int, error) {
-	if off >= int64(len(r.data)) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.data[off:])
-	if n < len(p) {
-		return n, io.EOF
-	}
-	return n, nil
 }

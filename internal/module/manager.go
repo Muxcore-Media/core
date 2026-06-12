@@ -15,14 +15,32 @@ import (
 	"github.com/google/uuid"
 )
 
+var ErrProcessExited = errors.New("process exited")
+
+// auditSem limits concurrent audit goroutines to prevent unbounded bursts.
+var auditSem = make(chan struct{}, 100)
+
+// Restarter is implemented by the sidecar manager to support health-triggered
+// module restarts. The lifecycle Manager uses this to restart unhealthy
+// modules that were spawned as sidecar processes.
+type Restarter interface {
+	RestartModule(ctx context.Context, moduleID string) error
+}
+
 type Manager struct {
-	registry *registry.Registry
-	bus      contracts.EventBus
-	audit    contracts.AuditLogger
+	registry  *registry.Registry
+	bus       contracts.EventBus
+	audit     contracts.AuditLogger
+	restarter Restarter
 }
 
 func NewManager(reg *registry.Registry, bus contracts.EventBus) *Manager {
 	return &Manager{registry: reg, bus: bus}
+}
+
+// SetRestarter attaches a Restarter for health-triggered module restarts.
+func (m *Manager) SetRestarter(r Restarter) {
+	m.restarter = r
 }
 
 // SetAuditLogger attaches an audit logger for recording module lifecycle events.
@@ -79,7 +97,9 @@ func (m *Manager) InitAll(ctx context.Context) error {
 	for _, entry := range order {
 		if _, err := m.registry.ResolveDeps(entry.Info.ID); err != nil {
 			slog.Warn("unresolved dependencies, skipping module", "id", entry.Info.ID, "error", err)
-			m.registry.SetState(entry.Info.ID, contracts.ModuleStateDegraded)
+			if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateDegraded); setErr != nil {
+				slog.Error("failed to set module state", "id", entry.Info.ID, "state", contracts.ModuleStateDegraded, "error", setErr)
+			}
 			m.publishModuleDegraded(entry.Info, err)
 			continue
 		}
@@ -102,7 +122,9 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	for _, entry := range order {
 		if _, err := m.registry.ResolveDeps(entry.Info.ID); err != nil {
 			slog.Warn("unresolved dependencies, skipping module", "id", entry.Info.ID, "error", err)
-			m.registry.SetState(entry.Info.ID, contracts.ModuleStateDegraded)
+			if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateDegraded); setErr != nil {
+				slog.Error("failed to set module state", "id", entry.Info.ID, "state", contracts.ModuleStateDegraded, "error", setErr)
+			}
 			m.publishModuleDegraded(entry.Info, err)
 			continue
 		}
@@ -129,22 +151,78 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	var errs []error
 	for _, entry := range order {
 		slog.Info("stopping module", "id", entry.Info.ID)
-		m.registry.SetState(entry.Info.ID, contracts.ModuleStateStopping)
+		if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateStopping); setErr != nil {
+			slog.Error("failed to set module state", "id", entry.Info.ID, "state", contracts.ModuleStateStopping, "error", setErr)
+		}
 		if err := entry.Module.Stop(ctx); err != nil {
 			slog.Error("error stopping module", "id", entry.Info.ID, "error", err)
 			errs = append(errs, fmt.Errorf("stop %q: %w", entry.Info.ID, err))
 		}
-		m.registry.SetState(entry.Info.ID, contracts.ModuleStateStopped)
+		if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateStopped); setErr != nil {
+			slog.Error("failed to set module state", "id", entry.Info.ID, "state", contracts.ModuleStateStopped, "error", setErr)
+		}
 		m.auditLifecycle("module.stop", entry.Info.ID, nil)
 	}
 	return errors.Join(errs...)
+}
+
+// DefaultHealthCheckInterval is the default interval between health checks.
+const DefaultHealthCheckInterval = 30 * time.Second
+
+// StartHealthCheckLoop periodically checks module health and triggers
+// remediation (restart) for unhealthy sidecar modules.
+func (m *Manager) StartHealthCheckLoop(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = DefaultHealthCheckInterval
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("health check loop panic recovered", "panic", r)
+			}
+		}()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		slog.Info("health check loop started", "interval", interval)
+		for {
+			select {
+			case <-ctx.Done():
+				slog.Info("health check loop stopped")
+				return
+			case <-ticker.C:
+				m.healthCheckAndRemediate(ctx)
+			}
+		}
+	}()
+}
+
+func (m *Manager) healthCheckAndRemediate(ctx context.Context) {
+	unhealthy := m.HealthCheck(ctx)
+	for moduleID, err := range unhealthy {
+		if err == nil {
+			continue
+		}
+		slog.Warn("module unhealthy", "module", moduleID, "error", err)
+		if m.restarter == nil {
+			continue
+		}
+		if err := m.restarter.RestartModule(ctx, moduleID); err != nil {
+			slog.Error("failed to restart unhealthy module",
+				"module", moduleID, "error", err)
+		} else {
+			slog.Info("module restarted after health failure",
+				"module", moduleID)
+		}
+	}
 }
 
 func (m *Manager) HealthCheck(ctx context.Context) map[string]error {
 	results := make(map[string]error)
 	for _, entry := range m.registry.List() {
 		err := entry.Module.Health(ctx)
-		m.registry.SetHealth(entry.Info.ID, err)
+		if setErr := m.registry.SetHealth(entry.Info.ID, err); setErr != nil {
+			slog.Error("failed to set module health", "id", entry.Info.ID, "error", setErr)
+		}
 		results[entry.Info.ID] = err
 		if err != nil {
 			m.auditLifecycle("module.degraded", entry.Info.ID, map[string]string{"error": err.Error()})
@@ -155,7 +233,12 @@ func (m *Manager) HealthCheck(ctx context.Context) map[string]error {
 }
 
 func (m *Manager) initOne(ctx context.Context, entry *registry.Entry) error {
-	m.registry.SetState(entry.Info.ID, contracts.ModuleStateStarting)
+	if entry.State != contracts.ModuleStateRegistered {
+		return nil // already initialized or beyond
+	}
+	if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateStarting); setErr != nil {
+		return fmt.Errorf("set state %s for %q: %w", contracts.ModuleStateStarting, entry.Info.ID, setErr)
+	}
 	if err := entry.Module.Init(ctx); err != nil {
 		return err
 	}
@@ -164,14 +247,24 @@ func (m *Manager) initOne(ctx context.Context, entry *registry.Entry) error {
 }
 
 func (m *Manager) startOne(ctx context.Context, entry *registry.Entry) error {
-	if entry.State == contracts.ModuleStateRunning {
+	switch entry.State {
+	case contracts.ModuleStateRunning:
 		return nil
+	case contracts.ModuleStateRegistered:
+		if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateStarting); setErr != nil {
+			return fmt.Errorf("set state %s for %q: %w", contracts.ModuleStateStarting, entry.Info.ID, setErr)
+		}
+	case contracts.ModuleStateStarting:
+		// Already in starting state (from initOne); proceed to start.
+	default:
+		return fmt.Errorf("start: invalid state %q for %q", entry.State, entry.Info.ID)
 	}
-	m.registry.SetState(entry.Info.ID, contracts.ModuleStateStarting)
 	if err := entry.Module.Start(ctx); err != nil {
 		return err
 	}
-	m.registry.SetState(entry.Info.ID, contracts.ModuleStateRunning)
+	if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateRunning); setErr != nil {
+		slog.Error("failed to set module state", "id", entry.Info.ID, "state", contracts.ModuleStateRunning, "error", setErr)
+	}
 	m.auditLifecycle("module.start", entry.Info.ID, nil)
 	return nil
 }
@@ -232,7 +325,21 @@ func (m *Manager) auditLifecycle(action, moduleID string, details map[string]str
 		details = make(map[string]string)
 	}
 	details["module_id"] = moduleID
+
+	select {
+	case auditSem <- struct{}{}:
+	default:
+		slog.Warn("audit lifecycle: too many concurrent audits, dropping", "action", action)
+		return
+	}
+
 	go func() {
+		defer func() {
+			<-auditSem
+			if r := recover(); r != nil {
+				slog.Error("audit lifecycle panic recovered", "action", action, "module", moduleID, "panic", r)
+			}
+		}()
 		entry := contracts.AuditEntry{
 			ID:        uuid.New().String(),
 			Timestamp: time.Now(),
@@ -296,9 +403,13 @@ func (m *Manager) publishModuleDegraded(info contracts.ModuleInfo, err error) {
 	if m.bus == nil {
 		return
 	}
+	errStr := ""
+	if err != nil {
+		errStr = err.Error()
+	}
 	payload, marshalErr := json.Marshal(contracts.ModuleDegradedPayload{
 		ModuleID: info.ID,
-		Error:    err.Error(),
+		Error:    errStr,
 	})
 	if marshalErr != nil {
 		slog.Error("failed to marshal module.degraded event", "module", info.ID, "error", marshalErr)

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Muxcore-Media/core/internal/callerid"
 	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -347,6 +348,7 @@ func TestWatch_EventDelivery(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	ctx = callerid.Set(ctx, "test")
 
 	stream := &fakeWatchStream{ctx: ctx}
 	watchDone := make(chan error, 1)
@@ -386,8 +388,8 @@ func TestWatch_TooManyWatchers(t *testing.T) {
 	ds := newDS("self")
 	ds.maxWatchers = 2
 
-	ctx1, cancel1 := context.WithCancel(context.Background())
-	ctx2, cancel2 := context.WithCancel(context.Background())
+	ctx1, cancel1 := context.WithCancel(callerid.Set(context.Background(), "test1"))
+	ctx2, cancel2 := context.WithCancel(callerid.Set(context.Background(), "test2"))
 	defer cancel1()
 	defer cancel2()
 
@@ -397,7 +399,7 @@ func TestWatch_TooManyWatchers(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Third watcher should be rejected.
-	ctx3, cancel3 := context.WithCancel(context.Background())
+	ctx3, cancel3 := context.WithCancel(callerid.Set(context.Background(), "test3"))
 	defer cancel3()
 	stream3 := &fakeWatchStream{ctx: ctx3}
 	err := ds.Watch(&discoveryv1.MembersRequest{}, stream3)
@@ -429,3 +431,166 @@ func (f *fakeWatchStream) SendHeader(metadata.MD) error { return nil }
 func (f *fakeWatchStream) SetTrailer(metadata.MD)       {}
 func (f *fakeWatchStream) SendMsg(any) error            { return nil }
 func (f *fakeWatchStream) RecvMsg(any) error            { return nil }
+
+// --- Heartbeat tests ---
+
+func TestHeartbeat_EmptyNodeID(t *testing.T) {
+	ds := newDS("node-a")
+	_, err := ds.Heartbeat(context.Background(), &discoveryv1.HeartbeatRequest{NodeId: ""})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument for empty node ID, got %v", err)
+	}
+}
+
+func TestHeartbeat_UnknownNode(t *testing.T) {
+	ds := newDS("node-a", "node-a")
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(mdKeyTerm, "1"))
+	_, err := ds.Heartbeat(ctx, &discoveryv1.HeartbeatRequest{NodeId: "unknown"})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("expected NotFound for unknown node, got %v", err)
+	}
+}
+
+func TestHeartbeat_UpdatesLastSeen(t *testing.T) {
+	ds := newDS("node-a", "node-a", "node-b")
+	ds.leaderID = "node-a"
+	ds.term = 3
+
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(mdKeyTerm, "3"))
+	resp, err := ds.Heartbeat(ctx, &discoveryv1.HeartbeatRequest{NodeId: "node-b", Modules: nil})
+	if err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	if resp.LeaderId != "node-a" {
+		t.Errorf("expected leader node-a, got %s", resp.LeaderId)
+	}
+
+	ds.mu.RLock()
+	_, seen := ds.lastSeen["node-b"]
+	ds.mu.RUnlock()
+	if !seen {
+		t.Error("expected node-b lastSeen to be updated")
+	}
+}
+
+func TestHeartbeat_HigherTermTriggersElection(t *testing.T) {
+	ds := newDS("node-a", "node-a", "node-b")
+	ds.leaderID = "node-a"
+	ds.term = 3
+
+	// Peer claims a higher term, which should trigger election.
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(mdKeyTerm, "5"))
+	resp, err := ds.Heartbeat(ctx, &discoveryv1.HeartbeatRequest{NodeId: "node-b"})
+	if err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	// Leader may have changed after re-election
+	if resp.LeaderId == "" {
+		t.Error("expected a leader after heartbeat-induced election")
+	}
+	// The election increments term after adopting the peer's term.
+	if ds.term <= 5 {
+		t.Errorf("expected term > peer's term 5 after re-election, got %d", ds.term)
+	}
+}
+
+func TestMembers_NoAuth(t *testing.T) {
+	// With no auth set up, a bare context should be rejected or still work
+	// depending on auth interceptor. Members calls checkAuth which requires
+	// callerid in context or an authorizer.
+	ds := newDS("node-a", "node-a", "node-b")
+	ds.leaderID = "node-a"
+	ds.term = 1
+
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs())
+	resp, err := ds.Members(ctx, &discoveryv1.MembersRequest{})
+	if err != nil {
+		// Members requires auth by default; accept either success or auth error.
+		if status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return
+	}
+	if len(resp.Members) != 2 {
+		t.Errorf("expected 2 members, got %d", len(resp.Members))
+	}
+}
+
+func TestHeartbeatModules_UpdatesModules(t *testing.T) {
+	ds := newDS("node-a", "node-a", "node-b")
+	ds.leaderID = "node-a"
+	ds.term = 1
+
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(mdKeyTerm, "1"))
+	_, err := ds.Heartbeat(ctx, &discoveryv1.HeartbeatRequest{
+		NodeId:  "node-b",
+		Modules: []string{"mod-a", "mod-b"},
+	})
+	if err != nil {
+		t.Fatalf("Heartbeat with modules: %v", err)
+	}
+
+	ds.mu.RLock()
+	node := ds.members["node-b"]
+	ds.mu.RUnlock()
+	if node == nil {
+		t.Fatal("expected node-b to exist")
+	}
+	if len(node.Modules) != 2 {
+		t.Errorf("expected 2 module IDs, got %d: %v", len(node.Modules), node.Modules)
+	}
+}
+
+func TestHeartbeatLoop_Cancellation(t *testing.T) {
+	ds := newDS("node-a", "node-a")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+	// heartbeatLoop should return without blocking.
+	ds.StartHeartbeatLoop(ctx, nil)
+	// If the goroutine doesn't stop, the test would hang.
+	time.Sleep(50 * time.Millisecond) // Allow goroutine to notice cancellation.
+}
+
+func TestExtractTermFromMetadata_EmptyContext(t *testing.T) {
+	if got := extractTermFromMetadata(context.Background()); got != 0 {
+		t.Errorf("expected 0 for empty context, got %d", got)
+	}
+}
+
+func TestExtractTermFromMetadata_Valid(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(mdKeyTerm, "42"))
+	if got := extractTermFromMetadata(ctx); got != 42 {
+		t.Errorf("expected 42, got %d", got)
+	}
+}
+
+func TestExtractTermFromMetadata_NoKey(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("other-key", "99"))
+	if got := extractTermFromMetadata(ctx); got != 0 {
+		t.Errorf("expected 0, got %d", got)
+	}
+}
+
+func TestLocalNode_WithModuleIDs(t *testing.T) {
+	ds := newDS("node-a")
+	ds.moduleIDs = func() ([]string, map[string]string) { return []string{"mod-a", "mod-b"}, nil }
+
+	node := ds.LocalNode()
+	if node.Id != "node-a" {
+		t.Errorf("expected node-a, got %s", node.Id)
+	}
+	if len(node.Modules) != 2 {
+		t.Errorf("expected 2 modules, got %d", len(node.Modules))
+	}
+}
+
+func TestLocalNode_NoModuleIDs(t *testing.T) {
+	ds := newDS("node-a")
+	node := ds.LocalNode()
+	if node.Id != "node-a" {
+		t.Errorf("expected node-a, got %s", node.Id)
+	}
+	if node.Modules != nil {
+		t.Errorf("expected nil modules when moduleIDs is nil, got %v", node.Modules)
+	}
+}

@@ -31,4 +31,15 @@ const (
 	CapabilityScheduler       = "scheduler"
 	CapabilityHealthMonitor   = "health.monitor"
 	CapabilityBackup          = "backup"
+
+	// Worker pool capabilities.
+	CapabilityWorkerPool = "worker.pool"
+	// CapabilityExecutorPrefix is the prefix for executor discovery.
+	// Modules handling task type "download" advertise "executor.download".
+	CapabilityExecutorPrefix = "executor."
+
+	// Auth/security capabilities.
+	CapabilityAuth        = "auth"
+	CapabilityAuthorizer  = "authorizer"
+	CapabilityRateLimiter = "ratelimit"
 )

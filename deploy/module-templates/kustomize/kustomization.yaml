@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# TODO: fill in your module's image and namespace
+
+namespace: muxcore
+
+resources:
+  - deployment.yaml
+
+images:
+  - name: ghcr.io/your-org/your-module
+    newTag: latest

@@ -25,9 +25,11 @@ func NewRegistry() *Registry {
 	}
 }
 
-// RegisterModule adds a module to the mock registry. Pass a nil Module if
-// the test only cares about Info being discoverable.
+// RegisterModule adds a module to the mock registry.
 func (r *Registry) RegisterModule(module contracts.Module) error {
+	if module == nil {
+		return fmt.Errorf("mock: module must not be nil")
+	}
 	info := module.Info()
 	r.mu.Lock()
 	defer r.mu.Unlock()

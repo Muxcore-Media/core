@@ -40,6 +40,9 @@ type NodeInfo struct {
 	HTTPAddr  string
 	Labels    map[string]string
 	ModuleIDs []string
+	// ModuleHealth maps module ID to health status.
+	// Empty string means healthy. Non-empty is the last health check error.
+	ModuleHealth map[string]string
 }
 
 // ClusterEvent is emitted when cluster membership changes.

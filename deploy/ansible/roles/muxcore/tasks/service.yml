@@ -1,0 +1,44 @@
+---
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Enable and start muxcored service
+  ansible.builtin.systemd:
+    name: muxcored
+    enabled: true
+    state: started
+
+- name: Configure firewall
+  when: muxcore_configure_firewall
+  block:
+    - name: Ensure firewall package is available
+      ansible.builtin.package:
+        name: "{{ 'firewalld' if ansible_os_family == 'RedHat' else 'ufw' }}"
+        state: present
+
+    - name: Open firewall ports (firewalld)
+      when: ansible_os_family == 'RedHat'
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        permanent: true
+        state: enabled
+        immediate: true
+      loop: "{{ muxcore_firewall_ports }}"
+
+    - name: Open firewall ports (ufw)
+      when: ansible_os_family == 'Debian'
+      community.general.ufw:
+        rule: allow
+        port: "{{ item.split('/')[0] }}"
+        proto: "{{ item.split('/')[1] | default('tcp') }}"
+      loop: "{{ muxcore_firewall_ports }}"
+
+- name: Wait for muxcored health endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ muxcore_addr.split(':')[-1] }}/health"
+    method: GET
+  register: _muxcore_health
+  until: _muxcore_health.status == 200
+  retries: 10
+  delay: 3

@@ -21,7 +21,7 @@ type ModuleDegradedPayload struct {
 	Error    string `json:"error"`
 }
 
-// EventSchemaVersion is the current schema version for all event payloads.
-// RESERVED: defined for future typed-payload support. Currently the event bus
+// EventSchemaVersion is the schema version for event payloads.
+// Defined for future typed-payload support. Currently the event bus
 // uses raw []byte Payload and this constant is not consumed at runtime.
 const EventSchemaVersion = "v1"

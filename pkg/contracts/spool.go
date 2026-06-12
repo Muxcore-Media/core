@@ -8,6 +8,15 @@ type TagModule struct {
 	Version  string `json:"version"`
 	Required bool   `json:"required"`
 	Checksum string `json:"checksum,omitempty"`
+	// InstanceID differentiates multiple copies of the same module on one
+	// node. When set, the derived module ID becomes "{baseID}-{instanceID}"
+	// instead of just "{baseID}". Allows running two identical modules
+	// with different config (e.g. two torrent downloaders on different ports).
+	InstanceID string `json:"instance_id,omitempty"`
+	// Config is instance-specific configuration passed as environment
+	// variables to the module binary. Each key is prefixed with MUXCORE_CFG_
+	// and set as an env var during spawn.
+	Config map[string]string `json:"config,omitempty"`
 }
 
 // TagDefinition is a curated module preset fetched from a spool.

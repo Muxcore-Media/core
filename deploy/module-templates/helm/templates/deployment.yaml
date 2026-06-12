@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "muxcore-module.name" . }}
+  labels:
+    {{- include "muxcore-module.selectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "muxcore-module.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "muxcore-module.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: module
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: MUXCORE_GRPC_ADDR
+              value: {{ .Values.core.grpcAddr | quote }}
+            - name: MUXCORE_MODULE_ID
+              value: {{ .Values.module.id | quote }}
+            {{- if .Values.core.authToken }}
+            - name: MUXCORE_AUTH_TOKEN
+              value: {{ .Values.core.authToken | quote }}
+            {{- end }}
+            {{- range $key, $value := .Values.config }}
+            - name: MUXCORE_CFG_{{ $key | upper }}
+              value: {{ $value | quote }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

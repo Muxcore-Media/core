@@ -3,12 +3,11 @@ package events
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"log/slog"
 
 	"github.com/Muxcore-Media/core/internal/callerid"
 	"github.com/Muxcore-Media/core/internal/trace"
@@ -19,6 +18,12 @@ import (
 // subscriberBufferSize is the default per-subscriber channel buffer.
 // When full, events are dropped for that subscriber.
 const subscriberBufferSize = 256
+
+// maxSubscribers is the maximum number of concurrent subscriber goroutines.
+// Prevents unbounded goroutine and channel creation (DoS vector).
+// Each subscriber creates 1 goroutine + 1 channel with subscriberBufferSize
+// capacity. 10000 subscribers at 256 slots each = 2.56M events in flight max.
+const maxSubscribers = 10000
 
 // defaultHandlerTimeout is the deadline for each handler invocation.
 const defaultHandlerTimeout = 30 * time.Second
@@ -64,37 +69,92 @@ type MemoryBus struct {
 	// wal is an optional write-ahead log for event persistence and replay.
 	// Set via EnableWAL().
 	wal *WALWriter
-	// moduleTimeouts maps moduleID → per-handler timeout override.
-	moduleTimeouts map[string]time.Duration
 	// closed signals that the bus has been shut down.
 	closed chan struct{}
+	// publishCount counts total successful publishes for metrics.
+	publishCount atomic.Int64
+	// WALReplayTimeout is the per-subscriber timeout for WAL replay during
+	// SubscribeFrom. Zero or negative uses the default of 30s.
+	WALReplayTimeout time.Duration
 }
 
 // NewMemoryBus creates an in-memory event bus.
 func NewMemoryBus() *MemoryBus {
 	return &MemoryBus{
-		sem:            make(chan struct{}, runtime.NumCPU()*2),
-		moduleTimeouts: make(map[string]time.Duration),
-		closed:         make(chan struct{}),
+		sem:    make(chan struct{}, runtime.NumCPU()*2),
+		closed: make(chan struct{}),
 	}
 }
 
-// Close cancels all subscriber worker goroutines and prevents new subscriptions.
+// Close cancels all subscriber worker goroutines, drains remaining events,
+// closes the WAL, and prevents new subscriptions.
 // Safe to call multiple times. After Close, Subscribe/SubscribeModule return an error.
 // Outstanding cancel functions become no-ops after Close.
 func (b *MemoryBus) Close() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	select {
 	case <-b.closed:
+		b.mu.Unlock()
 		return
 	default:
 		close(b.closed)
 	}
-	for _, s := range b.subscribers {
+	subs := make([]*sub, len(b.subscribers))
+	copy(subs, b.subscribers)
+	b.subscribers = nil
+	wal := b.wal
+	b.wal = nil
+	b.mu.Unlock()
+
+	// Drain phase: process remaining events in subscriber channels before
+	// cancelling workers. Gives in-flight events a best-effort chance at
+	// delivery. Uses a short deadline to avoid blocking shutdown.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer drainCancel()
+	var wg sync.WaitGroup
+	for _, s := range subs {
+		wg.Add(1)
+		go func(s *sub) {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("event bus drain handler panic recovered", "panic", r)
+				}
+				wg.Done()
+			}()
+			for {
+				select {
+				case <-drainCtx.Done():
+					return
+				case event, ok := <-s.ch:
+					if !ok {
+						return
+					}
+					handlerCtx, cancel := context.WithTimeout(drainCtx, 2*time.Second)
+					err := s.handler(handlerCtx, event)
+					cancel()
+					if err != nil {
+						slog.Error("event bus drain: handler error",
+							"type", event.Type, "error", err)
+					}
+				default:
+					return
+				}
+			}
+		}(s)
+	}
+	wg.Wait()
+
+	// Cancel subscriber worker goroutines after drain.
+	for _, s := range subs {
 		s.cancel()
 	}
-	b.subscribers = nil
+
+	// Close the WAL to flush buffered writes.
+	if wal != nil {
+		if err := wal.Close(); err != nil {
+			slog.Error("event bus: close WAL", "error", err)
+		}
+	}
 }
 
 // SetAuditLogger configures an audit logger for event bus operations.
@@ -119,20 +179,10 @@ func (b *MemoryBus) SetPublishPolicy(p contracts.PublishPolicyProvider) {
 	b.publishPolicy = p
 }
 
-// PublishPolicy returns the current publish policy, or nil if none.
 func (b *MemoryBus) PublishPolicy() contracts.PublishPolicyProvider {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.publishPolicy
-}
-
-// SetSubscriberTimeout sets a per-module handler timeout override.
-// Modules with tight latency requirements can request shorter timeouts.
-// The timeout applies to handlers registered via SubscribeModule.
-func (b *MemoryBus) SetSubscriberTimeout(moduleID string, timeout time.Duration) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.moduleTimeouts[moduleID] = timeout
 }
 
 // Publish dispatches an event to all matching subscribers.
@@ -159,23 +209,15 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 		return fmt.Errorf("publish denied: no publish policy configured — event %q cannot be dispatched. Deploy a module implementing publish.policy", event.Type)
 	}
 	callerID := callerid.Get(ctx)
-	if rpp, ok := publishPolicy.(contracts.ResourcePublishPolicyProvider); ok {
-		allowed, err := rpp.CanPublishEvent(ctx, callerID, event)
-		if err != nil {
-			return fmt.Errorf("publish policy error for event %q: %w", event.Type, err)
-		}
-		if !allowed {
-			return fmt.Errorf("publish denied: caller %q not authorized to emit %q events", callerID, event.Type)
-		}
-	} else {
-		allowed, err := publishPolicy.CanPublish(ctx, callerID, event.Type)
-		if err != nil {
-			return fmt.Errorf("publish policy error for event %q: %w", event.Type, err)
-		}
-		if !allowed {
-			return fmt.Errorf("publish denied: caller %q not authorized to emit %q events", callerID, event.Type)
-		}
+	allowed, err := checkPublishAllowed(ctx, callerID, event, publishPolicy)
+	if err != nil {
+		return fmt.Errorf("publish policy error for event %q: %w", event.Type, err)
 	}
+	if !allowed {
+		return fmt.Errorf("publish denied: caller %q not authorized to emit %q events", callerID, event.Type)
+	}
+
+	b.publishCount.Add(1)
 
 	b.mu.RLock()
 	subs := make([]*sub, 0, len(b.subscribers))
@@ -200,6 +242,11 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 	// Audit the event publication.
 	if auditLogger != nil {
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("audit publish panic recovered", "event_type", event.Type, "panic", r)
+				}
+			}()
 			entry := contracts.AuditEntry{
 				ID:         uuid.New().String(),
 				Timestamp:  time.Now(),
@@ -227,16 +274,13 @@ func (b *MemoryBus) Publish(ctx context.Context, event contracts.Event) error {
 	for _, s := range subs {
 		select {
 		case s.ch <- event:
-			// Delivered to subscriber channel.
 		case <-publishCtx.Done():
-			// Global publish deadline exceeded — stop dispatching.
 			slog.Warn("event publish deadline exceeded, dropping remaining subscribers",
 				"event_type", event.Type,
 				"event_id", event.ID,
 			)
 			goto done
 		default:
-			// Channel full — drop event for this subscriber.
 			s.dropped.Add(1)
 			slog.Warn("subscriber channel full, dropping event",
 				"event_type", event.Type,
@@ -262,13 +306,7 @@ func (b *MemoryBus) Subscribe(ctx context.Context, eventType string, handler con
 // SubscribeModule registers a handler tagged with a module identifier.
 // Returns a cancel function that removes this subscription.
 func (b *MemoryBus) SubscribeModule(ctx context.Context, moduleID, eventType string, handler contracts.EventHandler) (func(), error) {
-	b.mu.RLock()
-	timeout := defaultHandlerTimeout
-	if t, ok := b.moduleTimeouts[moduleID]; ok {
-		timeout = t
-	}
-	b.mu.RUnlock()
-	return b.subscribeInternal(ctx, moduleID, eventType, handler, timeout)
+	return b.subscribeInternal(ctx, moduleID, eventType, handler, defaultHandlerTimeout)
 }
 
 func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType string, handler contracts.EventHandler, timeout time.Duration) (func(), error) {
@@ -281,10 +319,22 @@ func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType str
 	default:
 	}
 
+	// Enforce subscriber cap to prevent unbounded goroutine and channel
+	// creation (DoS via Subscribe flooding).
+	if len(b.subscribers) >= maxSubscribers {
+		b.mu.Unlock()
+		return func() {}, fmt.Errorf("event bus: maximum subscribers (%d) reached", maxSubscribers)
+	}
+
 	// Audit the subscription if configured.
 	auditLogger := b.audit
 	if auditLogger != nil {
-		go func() { //nolint:gosec // fire-and-forget audit; no request context in goroutine
+		go func() { //nolint:gosec // fire-and-forget audit — no request context to propagate
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("audit subscribe panic recovered", "event_type", eventType, "panic", r)
+				}
+			}()
 			entry := contracts.AuditEntry{
 				ID:        uuid.New().String(),
 				Timestamp: time.Now(),
@@ -296,7 +346,7 @@ func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType str
 				},
 				NodeID: b.nodeID,
 			}
-			if err := auditLogger.Log(context.Background(), entry); err != nil { //nolint:gosec // fire-and-forget audit; no request context in goroutine
+			if err := auditLogger.Log(context.Background(), entry); err != nil {
 				slog.Error("audit log write failed", "event_type", eventType, "error", err)
 			}
 		}()
@@ -338,6 +388,14 @@ func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType str
 // Each handler invocation gets a timeout context. When the subscriber is
 // removed (Unsubscribe/UnsubscribeAll), the worker's context is cancelled.
 func (b *MemoryBus) subscriberWorker(s *sub, timeout time.Duration) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("subscriber worker panic recovered",
+				"module_id", s.moduleID,
+				"panic", r,
+			)
+		}
+	}()
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -355,27 +413,38 @@ func (b *MemoryBus) subscriberWorker(s *sub, timeout time.Duration) {
 
 			start := time.Now()
 
-			handlerCtx, cancel := context.WithTimeout(s.ctx, timeout)
-			if event.TraceID != "" {
-				handlerCtx = trace.WithTraceID(handlerCtx, event.TraceID)
-			}
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("event handler panic recovered",
+							"type", event.Type,
+							"id", event.ID,
+							"module_id", s.moduleID,
+							"panic", r,
+						)
+					}
+					<-b.sem // release semaphore on panic or normal return
+				}()
+				handlerCtx, cancel := context.WithTimeout(s.ctx, timeout)
+				defer cancel()
+				if event.TraceID != "" {
+					handlerCtx = trace.WithTraceID(handlerCtx, event.TraceID)
+				}
 
-			err := s.handler(handlerCtx, event)
-			cancel()
+				err := s.handler(handlerCtx, event)
 
-			<-b.sem // release semaphore
+				s.processed.Add(1)
+				s.totalLatencyNs.Add(int64(time.Since(start)))
 
-			s.processed.Add(1)
-			s.totalLatencyNs.Add(int64(time.Since(start)))
-
-			if err != nil {
-				slog.Error("event handler error",
-					"type", event.Type,
-					"id", event.ID,
-					"module_id", s.moduleID,
-					"error", err,
-				)
-			}
+				if err != nil {
+					slog.Error("event handler error",
+						"type", event.Type,
+						"id", event.ID,
+						"module_id", s.moduleID,
+						"error", err,
+					)
+				}
+			}()
 		}
 	}
 }
@@ -384,10 +453,6 @@ func (b *MemoryBus) subscriberWorker(s *sub, timeout time.Duration) {
 func (b *MemoryBus) UnsubscribeAll(ctx context.Context, moduleID string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
-	if moduleID == "" {
-		return nil
-	}
 
 	filtered := b.subscribers[:0]
 	for _, s := range b.subscribers {
@@ -484,6 +549,11 @@ func (b *MemoryBus) DroppedEvents() int64 {
 	return total
 }
 
+// PublishCount returns the total number of successful publishes.
+func (b *MemoryBus) PublishCount() int64 {
+	return b.publishCount.Load()
+}
+
 // --- Request/reply ---
 
 // Request publishes an event and waits for a reply on ReplyEventType(event.Type).
@@ -523,8 +593,24 @@ func (b *MemoryBus) Request(ctx context.Context, event contracts.Event, timeout 
 	case r := <-ch:
 		return r.event, r.err
 	case <-ctx.Done():
+		// Context cancelled — try to drain a pending reply before giving up
+		// to avoid dropping a reply that arrived before the cancellation.
+		select {
+		case r := <-ch:
+			return r.event, r.err
+		default:
+		}
 		return contracts.Event{}, ctx.Err()
 	case <-timer.C:
 		return contracts.Event{}, fmt.Errorf("request timed out after %s", timeout)
 	}
+}
+
+// checkPublishAllowed delegates to either ResourcePublishPolicyProvider or
+// PublishPolicyProvider depending on which interface the policy implements.
+func checkPublishAllowed(ctx context.Context, callerID string, event contracts.Event, policy contracts.PublishPolicyProvider) (bool, error) {
+	if rpp, ok := policy.(contracts.ResourcePublishPolicyProvider); ok {
+		return rpp.CanPublishEvent(ctx, callerID, event)
+	}
+	return policy.CanPublish(ctx, callerID, event.Type)
 }

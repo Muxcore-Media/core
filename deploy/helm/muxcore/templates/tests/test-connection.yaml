@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "muxcore.fullname" . }}-test-connection"
+  labels:
+    {{- include "muxcore.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: curl
+      image: curlimages/curl:latest
+      command:
+        - curl
+        - -sf
+        - http://{{ include "muxcore.fullname" . }}:{{ .Values.service.port }}/health
+  restartPolicy: Never

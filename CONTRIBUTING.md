@@ -31,7 +31,7 @@ cp .env.example .env
 For local development without TLS:
 
 ```bash
-MUXCORE_INSECURE_DISABLE_TLS=true ./muxcored
+MUXCORE_DEV_TLS_SKIP=true ./muxcored
 ```
 
 ### Install pre-commit hooks
