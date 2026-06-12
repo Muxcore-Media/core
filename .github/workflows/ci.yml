@@ -15,13 +15,30 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5.4.0
         with:
           go-version: "1.26.3"
           cache: false
       - run: go mod verify
       - run: go mod tidy -diff
+      - name: Verify SDK submodules
+        run: |
+          (cd sdk/go/client && go mod verify && go mod tidy -diff)
+          (cd sdk/go/mock && go mod verify && go mod tidy -diff)
+      - name: Check for outdated dependencies
+        continue-on-error: true
+        run: |
+          go install github.com/psampaz/go-mod-outdated@latest
+          echo "::group::Main module outdated deps"
+          go list -u -m -json all | go-mod-outdated --update-style
+          echo "::endgroup::"
+          echo "::group::SDK client outdated deps"
+          (cd sdk/go/client && go list -u -m -json all | go-mod-outdated --update-style || true)
+          echo "::endgroup::"
+          echo "::group::SDK mock outdated deps"
+          (cd sdk/go/mock && go list -u -m -json all | go-mod-outdated --update-style || true)
+          echo "::endgroup::"
 
   lint:
     name: Lint & Static Analysis
@@ -29,8 +46,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5.4.0
         with:
           go-version: "1.26.3"
           cache: false
@@ -42,6 +59,17 @@ jobs:
         run: |
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
       - run: golangci-lint run --timeout 120s ./internal/... ./pkg/... ./cmd/... ./sdk/...
+      - name: Install go-arch-lint
+        run: go install github.com/fe3dback/go-arch-lint@latest
+      - run: go-arch-lint check
+      - name: Protobuf breaking change check
+        uses: bufbuild/buf-action@v1
+        with:
+          version: latest
+          setup_only: false
+          input: proto
+          against: https://github.com/Muxcore-Media/core.git
+          only_breaking: true
 
 
   test:
@@ -50,8 +78,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5.4.0
         with:
           go-version: "1.26.3"
           cache: false
@@ -63,6 +91,21 @@ jobs:
           (cd sdk/go/client && go mod tidy && go test -race -count=1 -timeout 60s ./...)
       - name: Integration tests
         run: go test -tags=integration -race -count=1 -timeout 120s ./internal/integration/...
+      - name: Fuzz tests
+        continue-on-error: true
+        run: |
+          go test -fuzz=FuzzConfigLoad -fuzztime=60s -parallel=1 ./internal/config/...
+          go test -fuzz=FuzzConfigValidate -fuzztime=60s -parallel=1 ./internal/config/...
+          go test -fuzz=FuzzSpoolURLValidation -fuzztime=60s -parallel=1 ./internal/spool/...
+          go test -fuzz=FuzzSpoolTagName -fuzztime=60s -parallel=1 ./internal/spool/...
+          go test -fuzz=FuzzEncodeKeyRoundTrip -fuzztime=60s -parallel=1 ./internal/storage/local/...
+          go test -fuzz=FuzzDecodeKeyNoPanic -fuzztime=60s -parallel=1 ./internal/storage/local/...
+          go test -fuzz=FuzzProtoStorageMessages -fuzztime=60s -parallel=1 ./internal/grpcmesh/...
+          go test -fuzz=FuzzProtoHealthMessages -fuzztime=60s -parallel=1 ./internal/grpcmesh/...
+          go test -fuzz=FuzzProtoEventsMessages -fuzztime=60s -parallel=1 ./internal/grpcmesh/...
+          go test -fuzz=FuzzProtoDiscoveryMessages -fuzztime=60s -parallel=1 ./internal/grpcmesh/...
+          go test -fuzz=FuzzProtoMeshMessages -fuzztime=60s -parallel=1 ./internal/grpcmesh/...
+          go test -fuzz=FuzzProtoModuleRegistrationMessages -fuzztime=60s -parallel=1 ./internal/grpcmesh/...
 
   coverage:
     name: Coverage
@@ -70,14 +113,24 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5.4.0
         with:
           go-version: "1.26.3"
           cache: false
       - run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/... ./cmd/...
+      - name: Check coverage threshold
+        run: |
+          go tool cover -func=coverage.out | awk '/^total:/ {
+            pct = $3 + 0;
+            if (pct < 60) {
+              printf "FAIL: coverage %.1f%% is below threshold 60%%\n", pct;
+              exit 1;
+            }
+            printf "OK: coverage %.1f%% meets threshold 60%%\n", pct;
+          }'
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v7 # v7.0.1
+        uses: actions/upload-artifact@v4 # v4.6.2
         with:
           name: coverage
           path: coverage.out
@@ -88,15 +141,15 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5.4.0
         with:
           go-version: "1.26.3"
           cache: false
       - run: go build -ldflags="-s -w -X github.com/Muxcore-Media/core/internal/version.Version=$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)" -o muxcored ./cmd/muxcored
       - name: Verify binary starts
         run: |
-          MUXCORE_INSECURE_DISABLE_TLS=true ./muxcored --version
+          MUXCORE_DEV_TLS_SKIP=true ./muxcored --version
           echo "Binary smoke-test passed"
 
   provenance:
@@ -110,8 +163,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5.4.0
         with:
           go-version: "1.26.3"
           cache: false
@@ -176,7 +229,7 @@ jobs:
             echo "COSIGN_PRIVATE_KEY not set — skipping attestation"
           fi
       - name: Upload provenance
-        uses: actions/upload-artifact@v7 # v7.0.1
+        uses: actions/upload-artifact@v4 # v4.6.2
         with:
           name: slsa-provenance
           path: provenance.json
@@ -187,7 +240,7 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build Docker image
         run: docker build -t muxcore:ci .
 
@@ -197,12 +250,11 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5.4.0
         with:
           go-version: "1.26.3"
           cache: false
       - run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
       - name: Run govulncheck
-        continue-on-error: true
         run: govulncheck -show verbose ./...
