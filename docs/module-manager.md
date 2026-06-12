@@ -114,8 +114,8 @@ Back-off: 1s → 2s → 4s → 8s → 16s → 30s (capped). After `maxRestartAtt
 Once spawned, the module binary connects to core via the `--muxcore-mesh-addr`
 flag and calls `ModuleRegistration.Register()`. The registration server:
 
-1. Deserialises `info_json` into `contracts.ModuleInfo`.
-2. Applies `min_core_version` from the proto field if not in `info_json`.
+1. Deserialises the structured `ModuleInfo` protobuf field into `contracts.ModuleInfo`.
+2. Applies `min_core_version` from the proto field for version compatibility checks.
 3. Creates a `SidecarProxy` (satisfies `contracts.Module` for the lifecycle manager).
 4. Registers the proxy with the module lifecycle manager (publishes `module.registered`).
 5. Returns `mesh_addr` so the module knows where to call storage, events, etc.
