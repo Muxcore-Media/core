@@ -2,17 +2,23 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
-	"runtime/debug"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/trace"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/google/uuid"
+)
+
+const (
+	headerOrigin = "Origin"
+	headerVary   = "Vary"
 )
 
 // contextKey is used for storing values in request context.
@@ -27,18 +33,27 @@ type RoutePermission struct {
 	Resource string
 }
 
-// GetSession retrieves the authenticated session from the request context.
-func GetSession(r *http.Request) (*contracts.Session, bool) {
+// Session retrieves the authenticated session from the request context.
+func Session(r *http.Request) (*contracts.Session, bool) {
 	session, ok := r.Context().Value(SessionKey).(*contracts.Session)
 	return session, ok
 }
 
 // authFailureRecord tracks authentication failures per IP for brute-force protection.
+// Uses cumulative counts with exponential backoff.
 type authFailureRecord struct {
-	count        int
-	blockedUntil time.Time
-	lastActivity time.Time
+	count         int
+	totalFailures int
+	blockedUntil  time.Time
+	lastActivity  time.Time
 }
+
+const (
+	authFailureThreshold  = 6
+	authBackoffDuration   = 1 * time.Minute
+	authMaxBackoff        = 60 * time.Minute
+	authFailureDecayLimit = 100 // after this many total failures, stay locked permanently
+)
 
 // recoveryMiddleware catches panics in downstream handlers, logs them, and returns 500.
 func recoveryMiddleware(next http.Handler) http.Handler {
@@ -49,7 +64,6 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 					"path", r.URL.Path,
 					"method", r.Method,
 					"error", rec,
-					"stack", string(debug.Stack()),
 				)
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			}
@@ -61,7 +75,7 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 // securityHeadersMiddleware sets standard security headers on all responses.
 // When tlsActive is false, HSTS is omitted — emitting HSTS without TLS causes
 // browsers to refuse plaintext connections for 2 years (CWE-523).
-func securityHeadersMiddleware(next http.Handler, cspHeader string, tlsActive bool) http.Handler {
+func securityHeadersMiddleware(next http.Handler, cspHeader string, tlsActive bool, trustedOrigins []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
@@ -76,8 +90,8 @@ func securityHeadersMiddleware(next http.Handler, cspHeader string, tlsActive bo
 		w.Header().Set("Content-Security-Policy", cspHeader)
 		// CSRF protection: validate Origin header for state-changing methods.
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
-			if origin := r.Header.Get("Origin"); origin != "" && !isAllowedOrigin(origin) {
-				w.Header().Set("Vary", "Origin")
+			if origin := r.Header.Get(headerOrigin); origin != "" && !isAllowedOrigin(origin, trustedOrigins) {
+				w.Header().Set(headerVary, headerOrigin)
 				http.Error(w, "Forbidden", http.StatusForbidden)
 				return
 			}
@@ -89,22 +103,14 @@ func securityHeadersMiddleware(next http.Handler, cspHeader string, tlsActive bo
 // isAllowedOrigin checks whether an Origin header is allowed. By default,
 // only same-origin requests (empty or missing Origin) are trusted. Modules
 // that serve cross-origin browser content can register additional origins
-// via SetTrustedOrigins.
-var trustedOrigins []string
-
-func isAllowedOrigin(origin string) bool {
+// via Server.SetTrustedOrigins.
+func isAllowedOrigin(origin string, trustedOrigins []string) bool {
 	for _, t := range trustedOrigins {
 		if origin == t {
 			return true
 		}
 	}
 	return false
-}
-
-// SetTrustedOrigins configures additional CORS origins for browser-based access.
-// Empty list restricts to same-origin only (secure default).
-func SetTrustedOrigins(origins []string) {
-	trustedOrigins = origins
 }
 
 // auditSem limits concurrent audit goroutines from middleware to prevent
@@ -116,7 +122,12 @@ func spawnFireAndForget(fn func()) {
 	select {
 	case auditSem <- struct{}{}:
 		go func() {
-			defer func() { <-auditSem }()
+			defer func() {
+				<-auditSem
+				if r := recover(); r != nil {
+					slog.Error("audit fire-and-forget panic recovered", "panic", r)
+				}
+			}()
 			fn()
 		}()
 	default:
@@ -127,8 +138,7 @@ func spawnFireAndForget(fn func()) {
 // authMiddleware returns a middleware that validates sessions using the provided function.
 // Requests matching a path in publicPaths are always allowed through without authentication.
 // authFailures and authFailMu are shared with Server.authFailureCleanupLoop for periodic cleanup.
-func authMiddleware(authFn func(r *http.Request) (*contracts.Session, error), auditLogger contracts.AuditLogger, publicPaths map[string]bool, trustedProxies []net.IPNet, authFailures map[string]*authFailureRecord, authFailMu *sync.Mutex) func(http.Handler) http.Handler {
-
+func authMiddleware(authFn func(r *http.Request) (*contracts.Session, error), auditLogger contracts.AuditLogger, publicPaths map[string]bool, trustedProxies []net.IPNet, authFailures map[string]*authFailureRecord, authFailMu *sync.Mutex, totalAuthFailures *atomic.Int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Skip auth for public paths (e.g. /health).
@@ -138,10 +148,14 @@ func authMiddleware(authFn func(r *http.Request) (*contracts.Session, error), au
 			}
 
 			session, err := authFn(r)
-			if err != nil {
+			if err != nil || session == nil {
+				if err == nil {
+					err = fmt.Errorf("authentication returned nil session")
+				}
 				slog.Warn("auth failed", "error", err, "path", r.URL.Path, "remote_addr", r.RemoteAddr)
 				// Audit authentication failure.
 				if auditLogger != nil {
+					traceID := trace.FromContext(r.Context())
 					entry := contracts.AuditEntry{
 						ID:        uuid.New().String(),
 						Timestamp: time.Now(),
@@ -151,17 +165,18 @@ func authMiddleware(authFn func(r *http.Request) (*contracts.Session, error), au
 						Details: map[string]string{
 							"method": r.Method,
 							"ip":     extractClientIP(r, trustedProxies),
-							"error":  err.Error(),
+							"error":  "authentication failed",
 						},
-						TraceID: trace.FromContext(r.Context()),
+						TraceID: traceID,
 					}
 					spawnFireAndForget(func() {
-						if err := auditLogger.Log(r.Context(), entry); err != nil {
+						if err := auditLogger.Log(context.Background(), entry); err != nil {
 							slog.Error("audit log write failed", "path", r.URL.Path, "error", err)
 						}
 					})
 				}
 				// Track failures per IP for brute-force protection
+				// Uses cumulative counts with exponential backoff.
 				ip := extractClientIP(r, trustedProxies)
 				authFailMu.Lock()
 				rec, exists := authFailures[ip]
@@ -171,14 +186,27 @@ func authMiddleware(authFn func(r *http.Request) (*contracts.Session, error), au
 					authFailures[ip] = rec
 				}
 				rec.lastActivity = now
-				if now.After(rec.blockedUntil) {
+				rec.totalFailures++
+
+				// Permanent lockout after excessive total failures.
+				if rec.totalFailures >= authFailureDecayLimit {
+					rec.blockedUntil = now.Add(100 * 365 * 24 * time.Hour) // ~100 years
+				} else if now.After(rec.blockedUntil) {
 					rec.count++
-					if rec.count >= 6 {
-						rec.blockedUntil = now.Add(1 * time.Minute)
+					if rec.count >= authFailureThreshold {
+						// Exponential backoff: double each time, capped at authMaxBackoff.
+						backoff := authBackoffDuration * (1 << min(rec.totalFailures/authFailureThreshold, 6))
+						if backoff > authMaxBackoff {
+							backoff = authMaxBackoff
+						}
+						rec.blockedUntil = now.Add(backoff)
 						rec.count = 0
 					}
 				}
 				blocked := now.Before(rec.blockedUntil)
+				if totalAuthFailures != nil {
+					totalAuthFailures.Add(1)
+				}
 				authFailMu.Unlock()
 				if blocked {
 					writeJSON(w, http.StatusTooManyRequests, map[string]string{
@@ -214,7 +242,7 @@ func authzMiddleware(authz contracts.Authorizer, auditLogger contracts.AuditLogg
 				return
 			}
 
-			session, ok := GetSession(r)
+			session, ok := Session(r)
 			if !ok {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{
 					"error":   "unauthorized",
@@ -226,7 +254,7 @@ func authzMiddleware(authz contracts.Authorizer, auditLogger contracts.AuditLogg
 			// Try ResourceAuthorizer for ABAC support; fall back to flat Can.
 			var allowed bool
 			var err error
-			if ra, ok2 := authz.(contracts.ResourceAuthorizer); ok2 {
+			if ra, ok2 := authz.(contracts.ResourceAuthorizer); ok2 && ra != nil {
 				cleanPath := r.URL.Path
 				allowed, err = ra.CanWithResource(r.Context(), *session, contracts.Action(req.Action),
 					contracts.ResourceDescriptor{Type: req.Resource, ID: cleanPath})
@@ -241,6 +269,7 @@ func authzMiddleware(authz contracts.Authorizer, auditLogger contracts.AuditLogg
 					if err != nil {
 						errStr = err.Error()
 					}
+					traceID := trace.FromContext(r.Context())
 					entry := contracts.AuditEntry{
 						ID:        uuid.New().String(),
 						Timestamp: time.Now(),
@@ -254,10 +283,10 @@ func authzMiddleware(authz contracts.Authorizer, auditLogger contracts.AuditLogg
 							"method":   r.Method,
 							"error":    errStr,
 						},
-						TraceID: trace.FromContext(r.Context()),
+						TraceID: traceID,
 					}
 					spawnFireAndForget(func() {
-						if err := auditLogger.Log(r.Context(), entry); err != nil {
+						if err := auditLogger.Log(context.Background(), entry); err != nil {
 							slog.Error("audit log write failed", "path", r.URL.Path, "error", err)
 						}
 					})
@@ -274,21 +303,29 @@ func authzMiddleware(authz contracts.Authorizer, auditLogger contracts.AuditLogg
 	}
 }
 
-// statusRecorder wraps http.ResponseWriter to capture the HTTP status code.
+// statusRecorder wraps http.ResponseWriter to capture the HTTP status code
+// and track status class counters for metrics.
 type statusRecorder struct {
 	http.ResponseWriter
 	statusCode int
+	statusCnt  *[6]*atomic.Int64
 }
 
 func (sr *statusRecorder) WriteHeader(code int) {
 	sr.statusCode = code
+	if sr.statusCnt != nil {
+		class := code / 100
+		if class >= 1 && class <= 5 && sr.statusCnt[class] != nil {
+			sr.statusCnt[class].Add(1)
+		}
+	}
 	sr.ResponseWriter.WriteHeader(code)
 }
 
 // auditMiddleware logs every authenticated request via the AuditLogger.
 // It is placed after auth/authz in the middleware chain so it has access to
 // the authenticated session. Public paths (e.g. /health) are skipped.
-func auditMiddleware(auditLogger contracts.AuditLogger, nodeID string, publicPaths map[string]bool, trustedProxies []net.IPNet) func(http.Handler) http.Handler {
+func auditMiddleware(auditLogger contracts.AuditLogger, nodeID string, publicPaths map[string]bool, trustedProxies []net.IPNet, statusCnt *[6]*atomic.Int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Skip public paths like /health.
@@ -297,15 +334,14 @@ func auditMiddleware(auditLogger contracts.AuditLogger, nodeID string, publicPat
 				return
 			}
 
-			sr := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+			sr := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK, statusCnt: statusCnt}
 			start := time.Now()
 			next.ServeHTTP(sr, r)
 			duration := time.Since(start)
 
-			// Determine the actor from the authenticated session.
 			actor := "anonymous"
-			session, _ := GetSession(r)
-			if session != nil {
+			session, ok := Session(r)
+			if ok {
 				actor = session.UserID
 			}
 
@@ -324,7 +360,7 @@ func auditMiddleware(auditLogger contracts.AuditLogger, nodeID string, publicPat
 				TraceID: trace.FromContext(r.Context()),
 			}
 
-			if session != nil {
+			if ok {
 				entry.Details["username"] = session.Username
 			}
 

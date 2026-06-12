@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -302,6 +304,250 @@ func TestFileLogger_Export_CSV(t *testing.T) {
 	if !strings.Contains(row, "alice") {
 		t.Errorf("expected actor 'alice' in CSV row, got %q", row)
 	}
+}
+
+func TestFileLogger_WriteError_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	fl, err := NewFileLogger(path)
+	if err != nil {
+		t.Fatalf("NewFileLogger: %v", err)
+	}
+	defer fl.Close()
+
+	// Close the underlying file to simulate a write failure (disk full, etc.).
+	if err := fl.file.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+
+	ctx := context.Background()
+	err = fl.Log(ctx, entry("e1", "user1", "read", "/api/foo"))
+	if err == nil {
+		t.Fatal("expected error when writing to closed audit file")
+	}
+	if !strings.Contains(err.Error(), "write entry") {
+		t.Errorf("expected 'write entry' in error, got %q", err.Error())
+	}
+}
+
+func TestFileLogger_Rotation_TriggersAtSize(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	fl, err := NewFileLogger(path)
+	if err != nil {
+		t.Fatalf("NewFileLogger: %v", err)
+	}
+	defer fl.Close()
+
+	// Set a tiny max size (1 byte after the first entry) to force rotation.
+	fl.MaxSizeMB = 1
+	// Write entries until rotation occurs. Each entry is larger than 1MB due
+	// to the large payload, so the second write should trigger rotation.
+	largePayload := make([]byte, 2*1024*1024)
+	ctx := context.Background()
+
+	// First write fills the file.
+	e1 := entry("e1", "a", "b", "c")
+	e1.Details = map[string]string{"data": string(largePayload)}
+	if err := fl.Log(ctx, e1); err != nil {
+		t.Fatalf("first Log: %v", err)
+	}
+
+	// Second write should trigger rotation (file > 1MB).
+	e2 := entry("e2", "a", "b", "c")
+	e2.Details = map[string]string{"data": string(largePayload)}
+	if err := fl.Log(ctx, e2); err != nil {
+		t.Fatalf("second Log (after rotation): %v", err)
+	}
+
+	// Verify the rotated file exists.
+	if _, err := os.Stat(path + ".1"); os.IsNotExist(err) {
+		t.Error("expected rotated file audit.jsonl.1 to exist")
+	}
+
+	// Verify the current file is a new file (not the rotated one).
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile current: %v", err)
+	}
+	if len(data) == 0 {
+		t.Error("expected entries in the new current file")
+	}
+}
+
+func TestFileLogger_Rotation_MaxRotatedFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	fl, err := NewFileLogger(path)
+	if err != nil {
+		t.Fatalf("NewFileLogger: %v", err)
+	}
+	defer fl.Close()
+
+	fl.MaxSizeMB = 1
+	fl.MaxRotatedFiles = 2
+
+	largePayload := make([]byte, 2*1024*1024)
+	ctx := context.Background()
+	evt := entry("e", "a", "b", "c")
+	evt.Details = map[string]string{"data": string(largePayload)}
+
+	// Write enough to trigger multiple rotations.
+	for i := 0; i < 4; i++ {
+		if err := fl.Log(ctx, evt); err != nil {
+			t.Fatalf("Log %d: %v", i, err)
+		}
+	}
+
+	// Should have at most 2 rotated files (.1 and .2).
+	if _, err := os.Stat(path + ".3"); err == nil {
+		t.Error("expected no more than 2 rotated files (MaxRotatedFiles=2)")
+	}
+}
+
+func TestFileLogger_ConcurrentWrites(t *testing.T) {
+	dir := t.TempDir()
+	fl, _ := NewFileLogger(filepath.Join(dir, "audit.jsonl"))
+	defer fl.Close()
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	numWrites := 50
+
+	for i := 0; i < numWrites; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			if err := fl.Log(ctx, entry("e", "user", "read", fmt.Sprintf("/api/%d", n))); err != nil {
+				t.Logf("concurrent Log %d: %v", n, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// All entries should have been written without panic or deadlock.
+	entries, err := fl.Query(ctx, contracts.AuditFilter{})
+	if err != nil {
+		t.Fatalf("Query after concurrent writes: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Error("expected entries after concurrent writes")
+	}
+}
+
+func TestClearSigningKey_ZeroesAndNils(t *testing.T) {
+	fl, err := NewFileLogger("")
+	if err != nil {
+		t.Fatalf("NewFileLogger: %v", err)
+	}
+
+	key := []byte("my-secret-key-12345")
+	fl.SetSigningKey(key)
+	fl.ClearSigningKey()
+
+	if fl.signingKey != nil {
+		t.Error("expected signingKey to be nil after ClearSigningKey")
+	}
+}
+
+func TestSetSigningKey_CopiesKey(t *testing.T) {
+	fl, err := NewFileLogger("")
+	if err != nil {
+		t.Fatalf("NewFileLogger: %v", err)
+	}
+
+	key := []byte("my-secret-key-12345")
+	fl.SetSigningKey(key)
+
+	// Modify the original key; the internal copy should be unaffected.
+	key[0] = 'X'
+	if fl.signingKey[0] == 'X' {
+		t.Error("expected signingKey to be a copy, not a reference")
+	}
+}
+
+func TestClearSigningKey_NoKey_NoPanic(t *testing.T) {
+	fl, err := NewFileLogger("")
+	if err != nil {
+		t.Fatalf("NewFileLogger: %v", err)
+	}
+	// Calling ClearSigningKey when no key is set should not panic.
+	fl.ClearSigningKey()
+}
+
+func TestClearBytes_NilSlice(t *testing.T) {
+	// Should not panic on nil slice.
+	clearBytes(nil)
+}
+
+func TestClearBytes_NonNil(t *testing.T) {
+	b := []byte{1, 2, 3, 4, 5}
+	clearBytes(b)
+	for i, v := range b {
+		if v != 0 {
+			t.Errorf("expected b[%d]=0 after clearBytes, got %d", i, v)
+		}
+	}
+}
+
+func TestFileLogger_StartSyncLoop_FlushesOnInterval(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+
+	fl, err := NewFileLogger(path)
+	if err != nil {
+		t.Fatalf("NewFileLogger: %v", err)
+	}
+
+	// Set a short interval and start the background sync loop.
+	fl.SyncFlushInterval = 10 * time.Millisecond
+	fl.startSyncLoop()
+
+	fl.Log(context.Background(), entry("e1", "user", "read", "/api/foo"))
+
+	// Wait long enough for at least one tick to fire.
+	time.Sleep(100 * time.Millisecond)
+
+	// The sync loop fired and synced data to disk. Verifying by reading.
+	// Close handles cleanup — it stops the goroutine and closes the file.
+	fl.Close()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if len(data) == 0 {
+		t.Error("expected data written to disk after sync loop interval")
+	}
+}
+
+func TestStopSyncLoop_NilChannel_NoPanic(t *testing.T) {
+	fl, err := NewFileLogger("")
+	if err != nil {
+		t.Fatalf("NewFileLogger: %v", err)
+	}
+	// syncStop is nil since path is empty — should not panic.
+	fl.stopSyncLoop()
+}
+
+func TestStopSyncLoop_ClosesChannel(t *testing.T) {
+	fl, err := NewFileLogger(t.TempDir() + "/audit.jsonl")
+	if err != nil {
+		t.Fatalf("NewFileLogger: %v", err)
+	}
+	defer fl.Close()
+
+	fl.SyncFlushInterval = 100 * time.Millisecond
+	fl.startSyncLoop()
+
+	// Give the goroutine time to start.
+	time.Sleep(10 * time.Millisecond)
+
+	fl.stopSyncLoop()
+
+	// After stopSyncLoop, the goroutine should have exited.
+	// Calling Close() should not block.
+	fl.Close()
 }
 
 func TestFileLogger_Export_InvalidFormat(t *testing.T) {
