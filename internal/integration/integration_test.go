@@ -136,7 +136,7 @@ func TestIntegration_ModuleRegisterAndUnregister(t *testing.T) {
 	h := newHarness(t)
 
 	mod := &stubModule{id: "test-mod", name: "Test Module", version: "1.0.0"}
-	if err := h.modMgr.Register(mod, nil); err != nil {
+	if err := h.modMgr.Register(context.Background(), mod, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -150,7 +150,7 @@ func TestIntegration_ModuleRegisterAndUnregister(t *testing.T) {
 	}
 
 	// Unregister should remove it.
-	if err := h.modMgr.Unregister("test-mod"); err != nil {
+	if err := h.modMgr.Unregister(context.Background(), "test-mod"); err != nil {
 		t.Fatalf("Unregister: %v", err)
 	}
 	if _, err := h.reg.Get("test-mod"); err == nil {
@@ -162,7 +162,7 @@ func TestIntegration_ModuleLifecycle_InitStartStop(t *testing.T) {
 	h := newHarness(t)
 
 	mod := &stubModule{id: "lifecycle-mod", name: "Lifecycle", version: "1.0.0"}
-	if err := h.modMgr.Register(mod, nil); err != nil {
+	if err := h.modMgr.Register(context.Background(), mod, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -232,7 +232,7 @@ func TestIntegration_EventBus_ModuleLifecycleEvents(t *testing.T) {
 	})
 
 	mod := &stubModule{id: "event-mod", name: "Event Mod", version: "1.0.0"}
-	if err := h.modMgr.Register(mod, nil); err != nil {
+	if err := h.modMgr.Register(context.Background(), mod, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -252,7 +252,7 @@ func TestIntegration_StorageOrchestrator_PutGet(t *testing.T) {
 	// Register a mock storage provider.
 	prov := newMemStorage()
 	mod := &storageModule{id: "storage-local", prov: prov}
-	if err := h.modMgr.Register(mod, nil); err != nil {
+	if err := h.modMgr.Register(context.Background(), mod, nil); err != nil {
 		t.Fatalf("Register storage module: %v", err)
 	}
 	if err := h.store.DiscoverStorage(); err != nil {
@@ -287,7 +287,7 @@ func TestIntegration_StorageOrchestrator_Delete(t *testing.T) {
 
 	prov := newMemStorage()
 	mod := &storageModule{id: "storage-del", prov: prov}
-	h.modMgr.Register(mod, nil)
+	h.modMgr.Register(context.Background(), mod, nil)
 	h.store.DiscoverStorage()
 
 	ctx := context.Background()
@@ -338,7 +338,7 @@ func TestIntegration_gRPC_StorageServer(t *testing.T) {
 
 	prov := newMemStorage()
 	mod := &storageModule{id: "storage-grpc", prov: prov}
-	h.modMgr.Register(mod, nil)
+	h.modMgr.Register(context.Background(), mod, nil)
 	h.store.DiscoverStorage()
 
 	// Connect to the gRPC storage server over the wire.
@@ -390,8 +390,8 @@ func TestIntegration_Registry_DependencyOrder(t *testing.T) {
 	a := &stubModule{id: "mod-a", name: "A", version: "1.0.0"}
 	b := &stubModule{id: "mod-b", name: "B", version: "1.0.0"}
 	// B depends on A.
-	h.modMgr.Register(a, nil)
-	h.modMgr.Register(b, []string{"mod-a"})
+	h.modMgr.Register(context.Background(), a, nil)
+	h.modMgr.Register(context.Background(), b, []string{"mod-a"})
 
 	order, err := h.reg.StartupOrder()
 	if err != nil {

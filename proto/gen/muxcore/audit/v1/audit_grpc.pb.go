@@ -22,6 +22,7 @@ const (
 	AuditService_Query_FullMethodName       = "/muxcore.audit.v1.AuditService/Query"
 	AuditService_Export_FullMethodName      = "/muxcore.audit.v1.AuditService/Export"
 	AuditService_VerifyChain_FullMethodName = "/muxcore.audit.v1.AuditService/VerifyChain"
+	AuditService_Log_FullMethodName         = "/muxcore.audit.v1.AuditService/Log"
 )
 
 // AuditServiceClient is the client API for AuditService service.
@@ -41,6 +42,10 @@ type AuditServiceClient interface {
 	// over the audit log in the given time range. Returns verification
 	// results without exposing entry content.
 	VerifyChain(ctx context.Context, in *AuditVerifyChainRequest, opts ...grpc.CallOption) (*AuditVerifyChainResponse, error)
+	// Log writes an entry to the audit log. Used by admin tools and modules
+	// to record user-initiated actions. The caller must provide at least
+	// an actor, action, and resource.
+	Log(ctx context.Context, in *LogRequest, opts ...grpc.CallOption) (*LogResponse, error)
 }
 
 type auditServiceClient struct {
@@ -90,6 +95,16 @@ func (c *auditServiceClient) VerifyChain(ctx context.Context, in *AuditVerifyCha
 	return out, nil
 }
 
+func (c *auditServiceClient) Log(ctx context.Context, in *LogRequest, opts ...grpc.CallOption) (*LogResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LogResponse)
+	err := c.cc.Invoke(ctx, AuditService_Log_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuditServiceServer is the server API for AuditService service.
 // All implementations must embed UnimplementedAuditServiceServer
 // for forward compatibility.
@@ -107,6 +122,10 @@ type AuditServiceServer interface {
 	// over the audit log in the given time range. Returns verification
 	// results without exposing entry content.
 	VerifyChain(context.Context, *AuditVerifyChainRequest) (*AuditVerifyChainResponse, error)
+	// Log writes an entry to the audit log. Used by admin tools and modules
+	// to record user-initiated actions. The caller must provide at least
+	// an actor, action, and resource.
+	Log(context.Context, *LogRequest) (*LogResponse, error)
 	mustEmbedUnimplementedAuditServiceServer()
 }
 
@@ -125,6 +144,9 @@ func (UnimplementedAuditServiceServer) Export(*AuditExportRequest, grpc.ServerSt
 }
 func (UnimplementedAuditServiceServer) VerifyChain(context.Context, *AuditVerifyChainRequest) (*AuditVerifyChainResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method VerifyChain not implemented")
+}
+func (UnimplementedAuditServiceServer) Log(context.Context, *LogRequest) (*LogResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Log not implemented")
 }
 func (UnimplementedAuditServiceServer) mustEmbedUnimplementedAuditServiceServer() {}
 func (UnimplementedAuditServiceServer) testEmbeddedByValue()                      {}
@@ -194,6 +216,24 @@ func _AuditService_VerifyChain_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuditService_Log_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LogRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).Log(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_Log_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).Log(ctx, req.(*LogRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuditService_ServiceDesc is the grpc.ServiceDesc for AuditService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -208,6 +248,10 @@ var AuditService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "VerifyChain",
 			Handler:    _AuditService_VerifyChain_Handler,
+		},
+		{
+			MethodName: "Log",
+			Handler:    _AuditService_Log_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

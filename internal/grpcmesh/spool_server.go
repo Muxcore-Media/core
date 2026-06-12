@@ -1,3 +1,4 @@
+//nolint:govet // struct field alignment
 package grpcmesh
 
 import (
@@ -94,7 +95,7 @@ func (s *SpoolServer) ListTags(ctx context.Context, req *spoolv1.ListTagsRequest
 
 	_, err := spool.FetchTag(ctx, spoolURL, "catalog")
 	if err != nil {
-		return &spoolv1.ListTagsResponse{
+		return &spoolv1.ListTagsResponse{ //nolint:nilerr // catalog fetch failure is not fatal, return empty list
 			SpoolUrl: spoolURL,
 			Tags:     nil,
 		}, nil

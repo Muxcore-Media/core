@@ -1,3 +1,4 @@
+//nolint:govet // struct field alignment
 package config
 
 import (
@@ -340,7 +341,7 @@ func Load(path string) (*Config, error) { //nolint:gocyclo // config loading has
 		cfg.GRPC.CACertFile = v
 	}
 	if v := os.Getenv("MUXCORE_GRPC_MTLS_ENABLED"); v != "" {
-		cfg.GRPC.MTLSEnabled = strings.ToLower(v) == "true" || v == "1"
+		cfg.GRPC.MTLSEnabled = strings.EqualFold(v, "true") || v == "1"
 	}
 	if v := os.Getenv("MUXCORE_GRPC_MAX_MESSAGE_SIZE_MB"); v != "" {
 		cfg.GRPC.MaxMessageSizeMB = parseInt(v)

@@ -32,7 +32,7 @@ func New(baseDir string) (*Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("local storage: resolve base dir: %w", err)
 	}
-	if err := os.MkdirAll(abs, 0700); err != nil {
+	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return nil, fmt.Errorf("local storage: create base dir: %w", err)
 	}
 	return &Provider{base: abs}, nil
@@ -41,24 +41,60 @@ func New(baseDir string) (*Provider, error) {
 // encodeKey converts a storage key to a safe filesystem path segment.
 // Uses URL-style percent encoding for '/' and other unsafe characters.
 func encodeKey(key string) string {
-	safe := strings.NewReplacer(
-		"/", "%2F",
-		"\\", "%5C",
-		"..", "%2E%2E",
-		"\x00", "%00",
-	).Replace(key)
-	return safe
+	var b strings.Builder
+	b.Grow(len(key) * 3 / 2)
+	for i := 0; i < len(key); i++ {
+		switch {
+		case key[i] == '%':
+			b.WriteString("%25")
+		case key[i] == '/':
+			b.WriteString("%2F")
+		case key[i] == '\\':
+			b.WriteString("%5C")
+		case key[i] == '\x00':
+			b.WriteString("%00")
+		case key[i] == '.' && i+1 < len(key) && key[i+1] == '.':
+			b.WriteString("%2E%2E")
+			i++
+		default:
+			b.WriteByte(key[i])
+		}
+	}
+	return b.String()
 }
 
 // decodeKey reverses encodeKey.
 func decodeKey(encoded string) string {
-	unsafe := strings.NewReplacer(
-		"%2F", "/",
-		"%5C", "\\",
-		"%2E%2E", "..",
-		"%00", "\x00",
-	).Replace(encoded)
-	return unsafe
+	var b strings.Builder
+	b.Grow(len(encoded))
+	for i := 0; i < len(encoded); i++ {
+		if encoded[i] == '%' && i+2 < len(encoded) {
+			switch encoded[i : i+3] {
+			case "%25":
+				b.WriteByte('%')
+			case "%2F":
+				b.WriteByte('/')
+			case "%5C":
+				b.WriteByte('\\')
+			case "%00":
+				b.WriteByte('\x00')
+			case "%2E":
+				if i+5 < len(encoded) && encoded[i:i+6] == "%2E%2E" {
+					b.WriteString("..")
+					i += 5
+					continue
+				}
+				fallthrough
+			default:
+				b.WriteByte('%')
+				continue
+			}
+			i += 2
+		} else {
+			b.WriteByte(encoded[i])
+		}
+	}
+	return b.String()
 }
 
 func (p *Provider) objPath(key string) string {
@@ -77,7 +113,7 @@ func (p *Provider) Put(_ context.Context, key string, data io.Reader, size int64
 	dst := p.objPath(key)
 	// Write to a temp file in the same directory, then rename for atomicity.
 	dir := filepath.Dir(dst)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("local: mkdir: %w", err)
 	}
 	tmp, err := os.CreateTemp(dir, ".tmp-*")
@@ -88,12 +124,12 @@ func (p *Provider) Put(_ context.Context, key string, data io.Reader, size int64
 	cleaned := false
 	defer func() {
 		if !cleaned {
-			os.Remove(tmpName) //nolint:errcheck
+			os.Remove(tmpName) //nolint:errcheck // best effort cleanup
 		}
 	}()
 
 	if _, err := io.Copy(tmp, data); err != nil {
-		tmp.Close() //nolint:errcheck
+		tmp.Close() //nolint:errcheck // best effort close on error path
 		return fmt.Errorf("local: write: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -126,7 +162,7 @@ func (p *Provider) writeMeta(key string, info contracts.ObjectInfo) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p.metaPath(key), data, 0600)
+	return os.WriteFile(p.metaPath(key), data, 0o600)
 }
 
 func (p *Provider) readMeta(key string) (contracts.ObjectInfo, error) {
@@ -234,7 +270,7 @@ func (p *Provider) List(_ context.Context, prefix string) ([]contracts.ObjectInf
 
 	walkFn := func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip unreadable
+			return nil //nolint:nilerr // WalkDir callback returns nil to skip unreadable and continue
 		}
 		if d.IsDir() {
 			return nil
@@ -245,7 +281,7 @@ func (p *Provider) List(_ context.Context, prefix string) ([]contracts.ObjectInf
 		}
 		rel, err := filepath.Rel(p.base, path)
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // WalkDir callback returns nil to skip items with errors
 		}
 		encodedKey := rel
 		if !strings.HasPrefix(encodedKey, encodedPrefix) {
@@ -254,7 +290,7 @@ func (p *Provider) List(_ context.Context, prefix string) ([]contracts.ObjectInf
 		key := decodeKey(encodedKey)
 		info, err := p.readMeta(key)
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // WalkDir callback returns nil to skip items with errors
 		}
 		results = append(results, info)
 		return nil
@@ -283,7 +319,7 @@ func (p *Provider) Stream(_ context.Context, key string, offset, length int64) (
 	}
 	if offset > 0 {
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, fmt.Errorf("local: seek %q: %w", key, err)
 		}
 	}

@@ -1,3 +1,4 @@
+//nolint:govet // struct field alignment
 package grpcmesh
 
 import (
@@ -58,7 +59,7 @@ type tokenRecord struct {
 // If the CA doesn't exist, generates one.
 // dir: path like "<data-dir>/muxcore/ca"
 func NewCertAuthority(dir string) (*CertAuthority, error) {
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("certauth: create dir %s: %w", dir, err)
 	}
 
@@ -94,11 +95,11 @@ func (ca *CertAuthority) Close() {
 }
 
 func (ca *CertAuthority) loadCA(certPath, keyPath string) error {
-	certPEM, err := os.ReadFile(certPath)
+	certPEM, err := os.ReadFile(certPath) //nolint:gosec // path is from CA data dir
 	if err != nil {
 		return err
 	}
-	keyPEM, err := os.ReadFile(keyPath)
+	keyPEM, err := os.ReadFile(keyPath) //nolint:gosec // path is from CA data dir
 	if err != nil {
 		return err
 	}
@@ -168,11 +169,11 @@ func (ca *CertAuthority) generateCA(certPath, keyPath string) error {
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
-	if err := os.WriteFile(certPath, certPEM, 0600); err != nil {
-		return err
+	if err2 := os.WriteFile(certPath, certPEM, 0o600); err2 != nil {
+		return err2
 	}
-	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
-		return err
+	if err2 := os.WriteFile(keyPath, keyPEM, 0o600); err2 != nil {
+		return err2
 	}
 
 	cert, err := x509.ParseCertificate(certDER)
@@ -243,8 +244,8 @@ func (ca *CertAuthority) IssueModuleCert(moduleID string, ips []net.IP, dnsNames
 
 // IssueModuleCertForDir writes cert and key files to the given directory.
 // Returns (certPath, keyPath, error).
-func (ca *CertAuthority) IssueModuleCertForDir(moduleID string, dir string) (string, string, error) {
-	if err := os.MkdirAll(dir, 0700); err != nil {
+func (ca *CertAuthority) IssueModuleCertForDir(moduleID, dir string) (string, string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", "", fmt.Errorf("create cert dir for %s: %w", moduleID, err)
 	}
 
@@ -259,10 +260,10 @@ func (ca *CertAuthority) IssueModuleCertForDir(moduleID string, dir string) (str
 	certPath := filepath.Join(dir, "module.crt")
 	keyPath := filepath.Join(dir, "module.key")
 
-	if err := os.WriteFile(certPath, certPEM, 0600); err != nil {
+	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
 		return "", "", err
 	}
-	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
 		return "", "", err
 	}
 

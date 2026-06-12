@@ -1,3 +1,4 @@
+//nolint:govet // struct field alignment
 package grpcmesh
 
 import (
@@ -198,8 +199,8 @@ func (s *Server) StreamCall(stream meshv1.ModuleMesh_StreamCallServer) error {
 					TraceID: traceID,
 					NodeID:  nodeID,
 				}
-				if err := auditLogger.Log(context.Background(), entry); err != nil {
-					slog.Error("audit log write failed", "error", err)
+				if logErr := auditLogger.Log(context.Background(), entry); logErr != nil {
+					slog.Error("audit log write failed", "error", logErr)
 				}
 			}()
 		}
@@ -248,7 +249,7 @@ func (c *Client) routeToNode(ctx context.Context, member contracts.NodeInfo, tar
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to dial remote node %q at %s: %w", ErrRemoteRoutingUnavailable, member.ID, member.GRPCAddr, err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Propagate caller identity and trace ID via gRPC metadata.
 	callCtx := ctx
@@ -284,7 +285,7 @@ func (c *Client) routeToNode(ctx context.Context, member contracts.NodeInfo, tar
 
 // Client implements contracts.ModuleMeshClient.
 // It routes calls: local modules get in-process dispatch; remote modules go over gRPC.
-type Client struct {
+type Client struct { //nolint:gocritic // type definition placement is intentional for readability
 	server     *Server
 	mu         sync.RWMutex
 	cluster    contracts.Cluster            // optional; when set, cross-node routing becomes available

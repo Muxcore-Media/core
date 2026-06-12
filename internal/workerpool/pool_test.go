@@ -421,7 +421,7 @@ func TestFailNodeTasks_Running(t *testing.T) {
 	})
 	p.UpdateStatus(context.Background(), id, contracts.WorkerTaskStatusRunning, "")
 
-	count := p.FailNodeTasks("node-b")
+	count := p.FailNodeTasks(context.Background(), "node-b")
 	if count != 1 {
 		t.Fatalf("expected 1 failed task, got %d", count)
 	}
@@ -442,7 +442,7 @@ func TestFailNodeTasks_Assigned(t *testing.T) {
 		AssignedNode: "node-b",
 	})
 
-	count := p.FailNodeTasks("node-b")
+	count := p.FailNodeTasks(context.Background(), "node-b")
 	if count != 1 {
 		t.Fatalf("expected 1 failed task, got %d", count)
 	}
@@ -461,7 +461,7 @@ func TestFailNodeTasks_SkipsCompleted(t *testing.T) {
 	})
 	p.UpdateStatus(context.Background(), id, contracts.WorkerTaskStatusCompleted, "")
 
-	count := p.FailNodeTasks("node-b")
+	count := p.FailNodeTasks(context.Background(), "node-b")
 	if count != 0 {
 		t.Errorf("expected 0 failed tasks, got %d", count)
 	}
@@ -474,7 +474,7 @@ func TestFailNodeTasks_SkipsOtherNode(t *testing.T) {
 		AssignedNode: "node-b",
 	})
 
-	count := p.FailNodeTasks("node-c")
+	count := p.FailNodeTasks(context.Background(), "node-c")
 	if count != 0 {
 		t.Errorf("expected 0 failed tasks for unrelated node, got %d", count)
 	}
@@ -482,7 +482,7 @@ func TestFailNodeTasks_SkipsOtherNode(t *testing.T) {
 
 func TestFailNodeTasks_Empty(t *testing.T) {
 	p := New("node-a")
-	count := p.FailNodeTasks("nonexistent")
+	count := p.FailNodeTasks(context.Background(), "nonexistent")
 	if count != 0 {
 		t.Errorf("expected 0, got %d", count)
 	}
@@ -505,7 +505,7 @@ func TestReapStaleTasks_Healthy(t *testing.T) {
 	p.UpdateStatus(context.Background(), id, contracts.WorkerTaskStatusRunning, "")
 	p.Heartbeat(context.Background(), id)
 
-	p.reapStaleTasks()
+	p.reapStaleTasks(context.Background())
 
 	task, _ := p.Status(context.Background(), id)
 	if task.Status != contracts.WorkerTaskStatusRunning {
@@ -525,7 +525,7 @@ func TestReapStaleTasks_Stale(t *testing.T) {
 	// Wait for the heartbeat to go stale.
 	time.Sleep(5 * time.Millisecond)
 
-	p.reapStaleTasks()
+	p.reapStaleTasks(context.Background())
 
 	task, _ := p.Status(context.Background(), id)
 	if task.Status != contracts.WorkerTaskStatusFailed {
@@ -544,7 +544,7 @@ func TestReapStaleTasks_SkipsPending(t *testing.T) {
 	})
 	time.Sleep(5 * time.Millisecond)
 
-	p.reapStaleTasks()
+	p.reapStaleTasks(context.Background())
 
 	task, _ := p.Status(context.Background(), id)
 	if task.Status != contracts.WorkerTaskStatusPending {
@@ -563,7 +563,7 @@ func TestReapStaleTasks_Multiple(t *testing.T) {
 	// id3 stays pending
 
 	time.Sleep(5 * time.Millisecond)
-	p.reapStaleTasks()
+	p.reapStaleTasks(context.Background())
 
 	t1, _ := p.Status(context.Background(), id1)
 	t2, _ := p.Status(context.Background(), id2)
