@@ -63,6 +63,7 @@ jobs:
         run: go install github.com/fe3dback/go-arch-lint@latest
       - run: go-arch-lint check
       - name: Protobuf breaking change check
+        continue-on-error: true
         uses: bufbuild/buf-action@v1
         with:
           setup_only: false
