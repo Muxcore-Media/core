@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package muxcore.database.v1;
+
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/database/v1;databasev1";
+
+// DatabaseService is implemented by sidecar modules that provide database
+// access (e.g., database-sqlite, database-postgres). Core discovers these
+// modules by the "database" capability.
+service DatabaseService {
+  // Exec runs a statement that modifies data (INSERT, UPDATE, DELETE, DDL).
+  rpc Exec(ExecRequest) returns (ExecResponse);
+
+  // Query runs a read query and returns rows as JSON.
+  rpc Query(QueryRequest) returns (QueryResponse);
+
+  // Transaction runs multiple statements atomically.
+  rpc Transaction(TransactionRequest) returns (TransactionResponse);
+
+  // Migrate applies ordered schema migrations.
+  rpc Migrate(MigrateRequest) returns (MigrateResponse);
+
+  // Rollback reverts schema migrations down to a target version.
+  rpc Rollback(RollbackRequest) returns (RollbackResponse);
+}
+
+message ExecRequest {
+  string query = 1;
+  repeated Value args = 2;
+}
+
+message ExecResponse {
+  // rows_affected is the number of rows modified.
+  int64 rows_affected = 1;
+}
+
+message QueryRequest {
+  string query = 1;
+  repeated Value args = 2;
+}
+
+message QueryResponse {
+  // columns is the ordered list of column names in the result set.
+  repeated string columns = 1;
+  // rows is the result set, each element is a list of values in column order.
+  repeated Row rows = 2;
+  // count is the number of rows returned.
+  int32 count = 3;
+}
+
+message Row {
+  repeated Value values = 1;
+}
+
+message Value {
+  oneof kind {
+    string string_val = 1;
+    int64 int_val = 2;
+    double float_val = 3;
+    bool bool_val = 4;
+    bytes bytes_val = 5;
+    bool null_val = 6;
+  }
+}
+
+message TransactionRequest {
+  repeated Statement statements = 1;
+}
+
+message Statement {
+  string query = 1;
+  repeated Value args = 2;
+}
+
+message TransactionResponse {
+  string status = 1;
+}
+
+message Migration {
+  int32 version = 1;
+  string name = 2;
+  string up_sql = 3;
+  string down_sql = 4;
+}
+
+message MigrateRequest {
+  repeated Migration migrations = 1;
+}
+
+message MigrateResponse {
+  string status = 1;
+}
+
+message RollbackRequest {
+  int32 target_version = 1;
+}
+
+message RollbackResponse {
+  string status = 1;
+}

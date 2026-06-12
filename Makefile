@@ -79,7 +79,10 @@ proto:
 		proto/muxcore/module/v1/*.proto \
 		proto/muxcore/spool/v1/*.proto \
 		proto/muxcore/lifecycle/v1/*.proto \
-		proto/muxcore/audit/v1/*.proto
+		proto/muxcore/audit/v1/*.proto \
+		proto/muxcore/secrets/v1/*.proto \
+		proto/muxcore/cache/v1/*.proto \
+		proto/muxcore/database/v1/*.proto
 
 ci: lint-all test-all build build-modules
 

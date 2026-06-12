@@ -1,0 +1,142 @@
+syntax = "proto3";
+
+package muxcore.cache.v1;
+
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/cache/v1;cachev1";
+
+// CacheService is implemented by sidecar modules that provide distributed
+// caching (e.g., cache-redis, cache-valkey). Core discovers these modules
+// by the "cache" capability.
+service CacheService {
+  // Get retrieves a value by key. Returns NOT_FOUND if the key does not exist.
+  rpc Get(GetCacheRequest) returns (GetCacheResponse);
+
+  // Set stores a value with an optional TTL. Zero ttl_seconds means no expiration.
+  rpc Set(SetCacheRequest) returns (SetCacheResponse);
+
+  // Delete removes one or more keys.
+  rpc Delete(DeleteCacheRequest) returns (DeleteCacheResponse);
+
+  // Exists checks whether a key exists.
+  rpc Exists(ExistsCacheRequest) returns (ExistsCacheResponse);
+
+  // Incr atomically increments a key by delta and returns the new value.
+  rpc Incr(IncrCacheRequest) returns (IncrCacheResponse);
+
+  // CompareAndSwap atomically replaces old_value with new_value at key.
+  rpc CompareAndSwap(CompareAndSwapCacheRequest) returns (CompareAndSwapCacheResponse);
+
+  // Lock acquires a distributed lock on a key.
+  rpc Lock(LockCacheRequest) returns (LockCacheResponse);
+
+  // Unlock releases a previously acquired distributed lock.
+  rpc Unlock(UnlockCacheRequest) returns (UnlockCacheResponse);
+
+  // Publish sends a message on a pub/sub channel.
+  rpc Publish(PublishCacheRequest) returns (PublishCacheResponse);
+
+  // Subscribe receives messages published on a channel.
+  rpc Subscribe(SubscribeCacheRequest) returns (stream SubscribeCacheResponse);
+}
+
+message GetCacheRequest {
+  string key = 1;
+}
+
+message GetCacheResponse {
+  string key = 1;
+  // value is the cached data. Empty if not found.
+  bytes value = 2;
+  // found indicates whether the key existed.
+  bool found = 3;
+}
+
+message SetCacheRequest {
+  string key = 1;
+  bytes value = 2;
+  // ttl_seconds is the time-to-live in seconds. 0 means no expiration.
+  int64 ttl_seconds = 3;
+}
+
+message SetCacheResponse {
+  string status = 1;
+}
+
+message DeleteCacheRequest {
+  repeated string keys = 1;
+}
+
+message DeleteCacheResponse {
+  // deleted is the number of keys that were removed.
+  int32 deleted = 1;
+}
+
+message ExistsCacheRequest {
+  string key = 1;
+}
+
+message ExistsCacheResponse {
+  bool exists = 1;
+}
+
+message IncrCacheRequest {
+  string key = 1;
+  int64 delta = 2;
+}
+
+message IncrCacheResponse {
+  int64 value = 1;
+}
+
+message CompareAndSwapCacheRequest {
+  string key = 1;
+  bytes old_value = 2;
+  bytes new_value = 3;
+}
+
+message CompareAndSwapCacheResponse {
+  bool swapped = 1;
+}
+
+message LockCacheRequest {
+  string key = 1;
+  // ttl_seconds is the lock TTL in seconds. A zero or negative value uses
+  // a default of 30 seconds.
+  int64 ttl_seconds = 2;
+}
+
+message LockCacheResponse {
+  string key = 1;
+  // token must be provided to Unlock. Implementation-specific.
+  string token = 2;
+  // acquired is true if the lock was successfully acquired.
+  bool acquired = 3;
+}
+
+message UnlockCacheRequest {
+  string key = 1;
+  // token from the Lock response.
+  string token = 2;
+}
+
+message UnlockCacheResponse {
+  string status = 1;
+}
+
+message PublishCacheRequest {
+  string channel = 1;
+  bytes message = 2;
+}
+
+message PublishCacheResponse {
+  int32 receivers = 1;
+}
+
+message SubscribeCacheRequest {
+  string channel = 1;
+}
+
+message SubscribeCacheResponse {
+  string channel = 1;
+  bytes message = 2;
+}
