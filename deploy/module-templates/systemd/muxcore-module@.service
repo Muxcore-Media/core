@@ -1,0 +1,44 @@
+# systemd service template for a MuxCore sidecar module.
+#
+# Install:
+#   sudo cp muxcore-module@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now muxcore-module@my-module.service
+#
+# The module ID is derived from the instance name (the part after @).
+# Environment variables go in /etc/muxcore/modules/<instance>/env.
+#
+# TODO: replace /usr/local/bin/module with the actual module binary path.
+
+[Unit]
+Description=MuxCore module (%i)
+Documentation=https://github.com/Muxcore-Media/core
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=muxcore
+Group=muxcore
+# Environment file — set MUXCORE_GRPC_ADDR, MUXCORE_MODULE_ID, MUXCORE_CFG_*
+EnvironmentFile=-/etc/muxcore/modules/%i/env
+ExecStart=/usr/local/bin/module
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+MemoryDenyWriteExecute=true
+LockPersonality=true
+RestrictRealtime=true
+
+# TODO: adjust capabilities if the module needs specific ones
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

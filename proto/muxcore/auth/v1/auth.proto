@@ -1,0 +1,276 @@
+syntax = "proto3";
+
+package muxcore.auth.v1;
+
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/auth/v1;authv1";
+
+// AuthService is implemented by sidecar modules that provide authentication,
+// authorization, and identity extraction. Core discovers these modules by
+// capability and delegates requests to them via gRPC.
+service AuthService {
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+  rpc Revoke(RevokeRequest) returns (RevokeResponse);
+  rpc Can(CanRequest) returns (CanResponse);
+  rpc ExtractIdentity(ExtractIdentityRequest) returns (ExtractIdentityResponse);
+
+  // TOTP two-factor authentication management.
+  rpc EnableTOTP(EnableTOTPRequest) returns (EnableTOTPResponse);
+  rpc DisableTOTP(DisableTOTPRequest) returns (DisableTOTPResponse);
+  rpc TOTPStatus(TOTPStatusRequest) returns (TOTPStatusResponse);
+  rpc VerifyTOTPSetup(VerifyTOTPSetupRequest) returns (VerifyTOTPSetupResponse);
+
+  // User management (admin only).
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc SetPassword(SetPasswordRequest) returns (SetPasswordResponse);
+  rpc SetRoles(SetRolesRequest) returns (SetRolesResponse);
+
+  // API token management.
+  rpc CreateAPIToken(CreateAPITokenRequest) returns (CreateAPITokenResponse);
+  rpc ListAPITokens(ListAPITokensRequest) returns (ListAPITokensResponse);
+  rpc DeleteAPIToken(DeleteAPITokenRequest) returns (DeleteAPITokenResponse);
+
+  // WebAuthn credential management (admin).
+  rpc ListWebAuthnCredentials(ListWebAuthnCredentialsRequest) returns (ListWebAuthnCredentialsResponse);
+  rpc DeleteWebAuthnCredential(DeleteWebAuthnCredentialRequest) returns (DeleteWebAuthnCredentialResponse);
+  rpc BeginAdminRegistration(BeginAdminRegistrationRequest) returns (BeginAdminRegistrationResponse);
+  rpc CompleteAdminRegistration(CompleteAdminRegistrationRequest) returns (CompleteAdminRegistrationResponse);
+}
+
+message AuthenticateRequest {
+  string credential_type = 1;
+  bytes credential_data = 2;
+}
+
+message AuthenticateResponse {
+  bool authenticated = 1;
+  string session_token = 2;
+  string partial_token = 3;
+  bool requires_2fa = 4;
+  repeated string available_methods = 5;
+  string user_id = 6;
+  string username = 7;
+  repeated string roles = 8;
+  repeated string permissions = 9;
+  string error = 10;
+}
+
+message ValidateRequest {
+  string token = 1;
+}
+
+message ValidateResponse {
+  bool valid = 1;
+  string user_id = 2;
+  string username = 3;
+  repeated string roles = 4;
+  repeated string permissions = 5;
+  string error = 6;
+}
+
+message RevokeRequest {
+  string token = 1;
+}
+
+message RevokeResponse {}
+
+message CanRequest {
+  string user_id = 1;
+  string action = 2;
+  string resource = 3;
+}
+
+message CanResponse {
+  bool allowed = 1;
+  string reason = 2;
+}
+
+message ExtractIdentityRequest {
+  string token = 1;
+  string caller_id = 2;
+}
+
+message ExtractIdentityResponse {
+  bool found = 1;
+  string id = 2;
+  string kind = 3;
+  repeated string roles = 4;
+  string error = 5;
+}
+
+message EnableTOTPRequest {
+  string user_id = 1;
+}
+
+message EnableTOTPResponse {
+  string secret = 1;        // base32-encoded TOTP secret
+  string qr_code_url = 2;   // otpauth:// URL for QR code
+  string error = 3;
+}
+
+message DisableTOTPRequest {
+  string user_id = 1;
+}
+
+message DisableTOTPResponse {
+  string error = 1;
+}
+
+message TOTPStatusRequest {
+  string user_id = 1;
+}
+
+message TOTPStatusResponse {
+  bool enabled = 1;
+  string verified_at = 2;
+}
+
+message VerifyTOTPSetupRequest {
+  string user_id = 1;
+  string totp_code = 2;
+}
+
+message VerifyTOTPSetupResponse {
+  bool verified = 1;
+  string error = 2;
+}
+
+message CreateUserRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message CreateUserResponse {
+  string user_id = 1;
+  string error = 2;
+}
+
+message DeleteUserRequest {
+  string user_id = 1;
+}
+
+message DeleteUserResponse {
+  string error = 1;
+}
+
+message ListUsersRequest {}
+
+message UserInfo {
+  string id = 1;
+  string username = 2;
+  repeated string roles = 3;
+  bool totp_enabled = 4;
+}
+
+message ListUsersResponse {
+  repeated UserInfo users = 1;
+}
+
+message SetPasswordRequest {
+  string user_id = 1;
+  string password = 2;
+}
+
+message SetPasswordResponse {
+  string error = 1;
+}
+
+message SetRolesRequest {
+  string user_id = 1;
+  repeated string roles = 2;
+}
+
+message SetRolesResponse {
+  string error = 1;
+}
+
+message CreateAPITokenRequest {
+  string user_id = 1;
+  string name = 2;
+  repeated string scopes = 3;
+}
+
+message APITokenInfo {
+  string id = 1;
+  string name = 2;
+  string prefix = 3;
+  repeated string scopes = 4;
+  string created_at = 5;
+}
+
+message CreateAPITokenResponse {
+  string token = 1;      // full raw token — only returned on creation
+  string token_id = 2;
+  string error = 3;
+}
+
+message ListAPITokensRequest {
+  string user_id = 1;
+}
+
+message ListAPITokensResponse {
+  repeated APITokenInfo tokens = 1;
+}
+
+message DeleteAPITokenRequest {
+  string token_id = 1;
+}
+
+message DeleteAPITokenResponse {
+  string error = 1;
+}
+
+// --- WebAuthn credential management ---
+
+message WebAuthnCredentialInfo {
+  string id = 1;
+  string credential_type = 2;
+  string transports = 3;
+  string aaguid = 4;
+  string created_at = 5;
+  string last_used_at = 6;
+}
+
+message ListWebAuthnCredentialsRequest {
+  string session_token = 1;
+  string user_id = 2;
+}
+
+message ListWebAuthnCredentialsResponse {
+  repeated WebAuthnCredentialInfo credentials = 1;
+  string error = 2;
+}
+
+message DeleteWebAuthnCredentialRequest {
+  string session_token = 1;
+  string user_id = 2;
+  string credential_id = 3;
+}
+
+message DeleteWebAuthnCredentialResponse {
+  string error = 1;
+}
+
+message BeginAdminRegistrationRequest {
+  string session_token = 1;
+  string user_id = 2;
+}
+
+message BeginAdminRegistrationResponse {
+  bytes options_json = 1;     // JSON WebAuthn creation options
+  string challenge = 2;       // extracted challenge for session lookup
+  string error = 3;
+}
+
+message CompleteAdminRegistrationRequest {
+  string session_token = 1;
+  string user_id = 2;
+  string challenge = 3;
+  bytes credential_response_json = 4;  // JSON from navigator.credentials.create()
+}
+
+message CompleteAdminRegistrationResponse {
+  string error = 1;
+}

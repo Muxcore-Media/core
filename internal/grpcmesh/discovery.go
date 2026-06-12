@@ -64,21 +64,19 @@ type DiscoveryServer struct {
 	stopCh            chan struct{}
 	reg               *registry.Registry
 	joinToken         string
-	// moduleIDs returns the current list of module IDs running on this node.
-	moduleIDs func() []string
+	// moduleIDs returns the current list of module IDs running on this node,
+	// and a map of module ID to health status (empty = healthy).
+	moduleIDs func() ([]string, map[string]string)
 	// dialOpts are gRPC dial options used by the heartbeat sender to connect
 	// to peer nodes. Set via StartHeartbeatLoop or left nil.
 	dialOpts []grpc.DialOption
 	// connPool is an optional gRPC connection pool for heartbeat efficiency.
 	// When set, heartbeats reuse connections instead of creating new ones.
 	connPool *ConnPool
-	// requireAuth gates query methods (FindByCapability/FindByRole/Resolve/
-	// Members/Watch) behind caller authentication. When false (default),
-	// these methods are open. When true, requests without a caller identity
-	// in context are rejected with codes.Unauthenticated.
-	requireAuth bool
 	// maxWatchers is the maximum number of concurrent Watch streams. Default 100.
 	maxWatchers int
+	// closeOnce guards stopCh against double-close panics.
+	closeOnce sync.Once
 }
 
 // SetMaxWatchers configures the maximum number of concurrent Watch streams.
@@ -96,35 +94,20 @@ func (s *DiscoveryServer) SetConnPool(p *ConnPool) {
 	s.connPool = p
 }
 
-// SetRequireAuth controls whether discovery query methods require an
-// authenticated caller. When true, Watch/Members/FindBy* return
-// Unauthenticated for requests with no caller identity.
-func (s *DiscoveryServer) SetRequireAuth(require bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.requireAuth = require
-}
-
-// checkAuth returns an error if requireAuth is set and the caller has no
-// identity in context (no x-caller-id metadata and no mTLS identity).
+// checkAuth returns an error if the caller has no identity in context
+// (no x-caller-id metadata and no mTLS identity).
 func (s *DiscoveryServer) checkAuth(ctx context.Context) error {
-	s.mu.RLock()
-	requireAuth := s.requireAuth
-	s.mu.RUnlock()
-	if !requireAuth {
-		return nil
-	}
 	callerID := callerid.Get(ctx)
 	if callerID == "" {
 		return status.Error(codes.Unauthenticated,
-			"discovery: authentication required — set MUXCORE_GRPC_REQUIRE_DISCOVERY_AUTH=false or deploy an auth module")
+			"discovery: authentication required")
 	}
 	return nil
 }
 
 // NewDiscoveryServer creates a discovery server. The leader is initially empty;
 // it is set when the first node joins or when this node forms a cluster.
-func NewDiscoveryServer(nodeID, grpcAddr, httpAddr, joinToken string, moduleIDs func() []string) *DiscoveryServer {
+func NewDiscoveryServer(nodeID, grpcAddr, httpAddr, joinToken string, moduleIDs func() ([]string, map[string]string)) *DiscoveryServer {
 	ds := &DiscoveryServer{
 		nodeID:            nodeID,
 		grpcAddr:          grpcAddr,
@@ -140,6 +123,15 @@ func NewDiscoveryServer(nodeID, grpcAddr, httpAddr, joinToken string, moduleIDs 
 		joinToken:         joinToken,
 		moduleIDs:         moduleIDs,
 	}
+	// Register the local node so it's visible in Members() even without
+	// cluster seed nodes. In single-node mode this is the only member.
+	ds.members[nodeID] = &discoveryv1.NodeInfo{
+		Id:       nodeID,
+		GrpcAddr: grpcAddr,
+		HttpAddr: httpAddr,
+	}
+	ds.leaderID = nodeID
+	ds.term = 1
 	go ds.evictLoop()
 	go ds.joinCleanupLoop()
 	return ds
@@ -267,6 +259,7 @@ func (s *DiscoveryServer) Join(ctx context.Context, req *discoveryv1.JoinRequest
 		Members:   memberList,
 		LeaderId:  leaderID,
 		ClusterId: s.clusterID,
+		Term:      currentTerm,
 	}
 
 	// Propagate term via gRPC response metadata.
@@ -293,7 +286,7 @@ func (s *DiscoveryServer) Leave(ctx context.Context, req *discoveryv1.LeaveReque
 		s.electLeaderLocked()
 	}
 
-	if existed && node != nil {
+	if existed {
 		event := &discoveryv1.ClusterEvent{
 			Type:     discoveryv1.ClusterEvent_TYPE_NODE_LEFT,
 			Node:     node,
@@ -337,11 +330,20 @@ func (s *DiscoveryServer) Heartbeat(ctx context.Context, req *discoveryv1.Heartb
 
 	s.lastSeen[nodeID] = time.Now()
 
-	if node, exists := s.members[nodeID]; exists && len(req.GetModules()) > 0 {
+	node, exists := s.members[nodeID]
+	if exists && len(req.GetModules()) > 0 {
 		node.Modules = req.GetModules()
 	}
+	if exists && len(req.GetModuleHealth()) > 0 {
+		if node.ModuleHealth == nil {
+			node.ModuleHealth = make(map[string]string, len(req.GetModuleHealth()))
+		}
+		for k, v := range req.GetModuleHealth() {
+			node.ModuleHealth[k] = v
+		}
+	}
 
-	if _, exists := s.members[nodeID]; !exists {
+	if !exists {
 		return nil, status.Error(codes.NotFound, "unknown node ID — join the cluster before sending heartbeats")
 	}
 
@@ -366,6 +368,7 @@ func (s *DiscoveryServer) Heartbeat(ctx context.Context, req *discoveryv1.Heartb
 
 	resp := &discoveryv1.HeartbeatResponse{
 		LeaderId: leaderID,
+		Term:     currentTerm,
 	}
 
 	// Propagate term via gRPC response metadata.
@@ -452,7 +455,9 @@ func (s *DiscoveryServer) LocalNode() *discoveryv1.NodeInfo {
 		HttpAddr: s.httpAddr,
 	}
 	if s.moduleIDs != nil {
-		node.Modules = s.moduleIDs()
+		ids, health := s.moduleIDs()
+		node.Modules = ids
+		node.ModuleHealth = health
 	}
 	return node
 }
@@ -469,6 +474,11 @@ func (s *DiscoveryServer) StartHeartbeatLoop(ctx context.Context, dialOpts []grp
 }
 
 func (s *DiscoveryServer) heartbeatLoop(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("discovery heartbeat loop panic recovered", "panic", r)
+		}
+	}()
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
@@ -498,14 +508,14 @@ func (s *DiscoveryServer) sendHeartbeats(ctx context.Context) {
 		peers = append(peers, peer{id: m.GetId(), addr: m.GetGrpcAddr()})
 	}
 	var moduleIDs []string
+	var moduleHealth map[string]string
 	if s.moduleIDs != nil {
-		moduleIDs = s.moduleIDs()
+		moduleIDs, moduleHealth = s.moduleIDs()
 	}
 	currentTerm := s.term
-	s.mu.RUnlock()
-
-	// Use connection pool if available for heartbeat efficiency.
 	pool := s.connPool
+	dialOpts := s.dialOpts
+	s.mu.RUnlock()
 
 	for _, p := range peers {
 		dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -520,7 +530,7 @@ func (s *DiscoveryServer) sendHeartbeats(ctx context.Context) {
 		if pool != nil {
 			conn, dialErr = pool.Get(p.addr)
 		} else {
-			conn, dialErr = grpc.NewClient(p.addr, s.dialOpts...)
+			conn, dialErr = grpc.NewClient(p.addr, dialOpts...)
 		}
 		if dialErr != nil {
 			slog.Warn("heartbeat: dial peer", "peer", p.id, "addr", p.addr, "error", dialErr)
@@ -530,8 +540,10 @@ func (s *DiscoveryServer) sendHeartbeats(ctx context.Context) {
 		client := discoveryv1.NewDiscoveryServiceClient(conn)
 		var respHeader metadata.MD
 		resp, err := client.Heartbeat(dialCtx, &discoveryv1.HeartbeatRequest{
-			NodeId:  s.nodeID,
-			Modules: moduleIDs,
+			NodeId:       s.nodeID,
+			Modules:      moduleIDs,
+			ModuleHealth: moduleHealth,
+			Term:         currentTerm,
 		}, grpc.Header(&respHeader))
 		if err != nil {
 			slog.Warn("heartbeat: rpc failed", "peer", p.id, "error", err)
@@ -578,6 +590,11 @@ func (s *DiscoveryServer) sendHeartbeats(ctx context.Context) {
 
 // evictLoop periodically scans for dead nodes and evicts them.
 func (s *DiscoveryServer) evictLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("discovery evict loop panic recovered", "panic", r)
+		}
+	}()
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -592,6 +609,11 @@ func (s *DiscoveryServer) evictLoop() {
 
 // joinCleanupLoop periodically purges stale join attempt records.
 func (s *DiscoveryServer) joinCleanupLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("discovery join cleanup loop panic recovered", "panic", r)
+		}
+	}()
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	for {
@@ -634,7 +656,7 @@ func (s *DiscoveryServer) evictDeadNodes() {
 			s.votedFor = ""
 			leaderEvicted = true
 		}
-		if existed && node != nil {
+		if existed {
 			event := &discoveryv1.ClusterEvent{
 				Type:     discoveryv1.ClusterEvent_TYPE_NODE_LEFT,
 				Node:     node,
@@ -747,7 +769,10 @@ func (s *DiscoveryServer) MembersSnapshot() []*discoveryv1.NodeInfo {
 	return members
 }
 
-// Close cleanly stops the eviction goroutine.
+// Close cleanly stops the eviction and heartbeat goroutines.
+// Safe to call multiple times.
 func (s *DiscoveryServer) Close() {
-	close(s.stopCh)
+	s.closeOnce.Do(func() {
+		close(s.stopCh)
+	})
 }

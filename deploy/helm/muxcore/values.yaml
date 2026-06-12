@@ -1,0 +1,161 @@
+# -- Number of replicas to run.
+replicaCount: 1
+
+image:
+  # -- Image repository.
+  repository: ghcr.io/muxcore-media/muxcored
+  # -- Overrides the image tag. Defaults to Chart.appVersion.
+  tag: ""
+  # -- Image pull policy.
+  pullPolicy: IfNotPresent
+
+# -- Image pull secrets for private registries.
+imagePullSecrets: []
+
+# -- Override the chart name used in resource names.
+nameOverride: ""
+# -- Override the full name used in resource names.
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a service account.
+  create: true
+  # -- Annotations for the service account.
+  annotations: {}
+  # -- Override the service account name.
+  name: ""
+
+# -- Annotations to add to all pods.
+podAnnotations: {}
+# -- Labels to add to all pods.
+podLabels: {}
+
+# -- Pod security context.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container security context.
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+    add:
+      - NET_BIND_SERVICE
+
+service:
+  # -- Service type (ClusterIP, NodePort, LoadBalancer).
+  type: ClusterIP
+  # -- Service port.
+  port: 8080
+
+ingress:
+  # -- Enable ingress.
+  enabled: false
+  # -- Ingress class name.
+  className: ""
+  # -- Ingress annotations.
+  annotations: {}
+  # -- Ingress hostname.
+  hostname: muxcore.local
+  # -- Ingress TLS configuration.
+  tls: []
+  #   - hosts:
+  #       - muxcore.local
+  #     secretName: muxcore-tls
+
+resources:
+  # -- Resource requests.
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  # -- Resource limits.
+  limits:
+    cpu: 1
+    memory: 512Mi
+
+muxcore:
+  # -- HTTP listen address (e.g. :8080 or 0.0.0.0:8080).
+  addr: ":8080"
+  # -- Spool tag for module loading (e.g. default, or empty for bare loom).
+  tag: default
+  # -- Log level (debug, info, warn, error).
+  logLevel: info
+  # -- Log format (text, json).
+  logFormat: text
+  # -- Inline muxcore.json configuration (overrides env-based settings).
+  config: {}
+  # -- Additional environment variables for the muxcored container.
+  extraEnv: []
+  # - name: MUXCORE_AUDIT_PATH
+  #   value: /app/data/audit.jsonl
+  # - name: MUXCORE_EVENT_JOURNAL_PATH
+  #   value: /app/data/events
+  # - name: MUXCORE_CLUSTER_JOIN_TOKEN
+  #   valueFrom:
+  #     secretKeyRef:
+  #       name: muxcore-secrets
+  #       key: join-token
+
+# -- Secrets to create from literal values or existing files.
+secrets:
+  # -- TLS certificate for the HTTP server.
+  tls:
+    enabled: false
+    # cert: |
+    #   -----BEGIN CERTIFICATE-----
+    #   ...
+    # key: |
+    #   -----BEGIN PRIVATE KEY-----
+    #   ...
+  # -- Join token for cluster membership.
+  joinToken: ""
+
+persistence:
+  # -- Enable persistent storage for /app/data.
+  enabled: true
+  # -- Storage class for the PVC (empty string uses default).
+  storageClass: ""
+  # -- Access modes for the PVC.
+  accessMode: ReadWriteOnce
+  # -- Storage size to request.
+  size: 10Gi
+  # -- Existing PVC name (overrides creating a new one).
+  existingClaim: ""
+
+# -- Prometheus ServiceMonitor configuration.
+prometheus:
+  serviceMonitor:
+    # -- Enable Prometheus ServiceMonitor.
+    enabled: false
+    # -- Scrape interval.
+    interval: 30s
+    # -- Scrape timeout.
+    scrapeTimeout: 10s
+    # -- Additional labels for the ServiceMonitor.
+    labels: {}
+
+autoscaling:
+  # -- Enable horizontal pod autoscaling.
+  enabled: false
+  # -- Minimum replicas.
+  minReplicas: 1
+  # -- Maximum replicas.
+  maxReplicas: 5
+  # -- Target CPU utilization percentage.
+  targetCPUUtilizationPercentage: 80
+  # -- Target memory utilization percentage.
+  targetMemoryUtilizationPercentage: ""
+
+# -- Node selector labels.
+nodeSelector: {}
+# -- Pod tolerations.
+tolerations: []
+# -- Pod affinity rules.
+affinity: {}

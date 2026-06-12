@@ -1,0 +1,23 @@
+# Security政策
+# https://www.rfc-editor.org/rfc/rfc9116
+
+# Contact via GitHub Security Advisories
+Contact: https://github.com/Muxcore-Media/core/security/advisories/new
+
+# Security policy document
+Policy: https://github.com/Muxcore-Media/core/blob/master/SECURITY.md
+
+# Audit report
+Policy: https://github.com/Muxcore-Media/core/blob/master/SECURITY-AUDIT-2026-05-27.md
+
+# Preferred languages: en
+Preferred-Languages: en
+
+# Encryption (where applicable)
+# Encryption: https://keybase.io/muxcore/pgp_keys.asc
+
+# Canonical URL
+Canonical: https://github.com/Muxcore-Media/core/.well-known/security.txt
+
+# Expires: 2027-06-08T00:00:00.000Z
+Expires: 2027-06-08T00:00:00.000Z

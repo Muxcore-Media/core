@@ -16,6 +16,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -68,7 +69,7 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	os.Setenv("MUXCORE_INSECURE_DISABLE_TLS", "true")
+	os.Setenv("MUXCORE_DEV_TLS_SKIP", "true")
 
 	cfg := config.Default()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -313,7 +314,7 @@ func TestIntegration_Health_CoreProbes(t *testing.T) {
 	coreH := health.New()
 	coreH.RegisterProbe("event_bus", func(ctx context.Context) error {
 		if h.bus.SubscriberCount() < 0 {
-			return fmt.Errorf("bus not initialised")
+			return fmt.Errorf("bus not initialized")
 		}
 		return nil
 	})
@@ -417,6 +418,110 @@ func TestIntegration_Registry_DependencyOrder(t *testing.T) {
 	}
 }
 
+// TestIntegration_ConfigReload_SafeChanges verifies that the config reload
+// mechanism detects safe changes (log level, audit path, seed nodes) and
+// marks them correctly via the ChangedFields struct.
+func TestIntegration_ConfigReload_SafeChanges(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "muxcore.json")
+
+	// Write initial config.
+	initial := `{"server":{"addr":":8080"},"log":{"level":"info","format":"text"}}`
+	if err := os.WriteFile(path, []byte(initial), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("initial Load: %v", err)
+	}
+
+	// Write updated config with safe changes.
+	updated := `{"server":{"addr":":8080"},"log":{"level":"debug","format":"json"}}`
+	if err := os.WriteFile(path, []byte(updated), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := config.Reload(cfg, path)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	if !result.Changes.LogLevel {
+		t.Error("expected LogLevel change detected")
+	}
+	if !result.Changes.LogFormat {
+		t.Error("expected LogFormat change detected")
+	}
+	if result.Changes.Unsafe {
+		t.Errorf("expected no unsafe changes, got: %v", result.Changes.UnsafeFields)
+	}
+}
+
+// TestIntegration_ConfigReload_UnsafeChanges verifies that changes requiring
+// a restart (server address, TLS certs, etc.) are correctly flagged as unsafe.
+func TestIntegration_ConfigReload_UnsafeChanges(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "muxcore.json")
+
+	initial := `{"server":{"addr":":8080"},"grpc":{"addr":":9090"}}`
+	if err := os.WriteFile(path, []byte(initial), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("initial Load: %v", err)
+	}
+
+	updated := `{"server":{"addr":":9999"},"grpc":{"addr":":9090"}}`
+	if err := os.WriteFile(path, []byte(updated), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := config.Reload(cfg, path)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	if !result.Changes.Unsafe {
+		t.Fatal("expected unsafe changes (server.addr changed)")
+	}
+	found := false
+	for _, f := range result.Changes.UnsafeFields {
+		if f == "server.addr" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'server.addr' in unsafe fields, got: %v", result.Changes.UnsafeFields)
+	}
+}
+
+// TestIntegration_ConfigReload_DeletedFile verifies that Reload returns a
+// clear error when the config file is deleted between Load and Reload, and
+// does not panic or corrupt the running config.
+func TestIntegration_ConfigReload_DeletedFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "muxcore.json")
+
+	if err := os.WriteFile(path, []byte(`{"server":{"addr":":8080"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("initial Load: %v", err)
+	}
+
+	os.Remove(path)
+
+	_, err = config.Reload(cfg, path)
+	if err == nil {
+		t.Error("expected error when reloading after file deletion")
+	}
+}
+
 // TestIntegration_MeshClient_DenyByDefault verifies that when no call policy
 // module is registered, Client.Call() denies all inter-module calls. This is
 // the core deny-by-default security invariant for the mesh.
@@ -432,6 +537,61 @@ func TestIntegration_MeshClient_DenyByDefault(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no call policy configured") {
 		t.Errorf("expected 'no call policy configured' in error, got: %v", err)
+	}
+}
+
+// TestIntegration_MeshClient_WithPolicy_Succeeds verifies that when a call
+// policy that allows the call is configured, the mesh Call returns the
+// handler's response. This exercises the full allow path: policy check →
+// route to handler → return response.
+func TestIntegration_MeshClient_WithPolicy_Succeeds(t *testing.T) {
+	h := newHarness(t)
+
+	h.meshSrv.RegisterHandler("echo-mod", echoMeshHandler{})
+	h.meshClient.SetCallPolicy(&allowAllCallPolicy{})
+
+	payload := []byte("ping")
+	resp, err := h.meshClient.Call(context.Background(), "echo-mod", "Echo", payload)
+	if err != nil {
+		t.Fatalf("Call with allow policy: %v", err)
+	}
+	if string(resp) != string(payload) {
+		t.Errorf("expected response %q, got %q", payload, resp)
+	}
+}
+
+// TestIntegration_EventBus_RequestReply verifies the request/reply pattern:
+// a subscriber listens on the reply event type, and a publisher sends a request
+// and receives the reply within the timeout.
+func TestIntegration_EventBus_RequestReply(t *testing.T) {
+	h := newHarness(t)
+
+	ctx := context.Background()
+	replyType := contracts.ReplyEventType("test.request")
+	replyPayload := []byte(`"response-data"`)
+
+	// Register a handler that replies to requests on "test.request".
+	_, err := h.bus.Subscribe(ctx, "test.request", func(ctx context.Context, e contracts.Event) error {
+		return h.bus.Publish(ctx, contracts.Event{
+			Type:    replyType,
+			Source:  "",
+			Payload: replyPayload,
+		})
+	})
+	if err != nil {
+		t.Fatalf("Subscribe request handler: %v", err)
+	}
+
+	resp, err := h.bus.Request(ctx, contracts.Event{
+		Type:    "test.request",
+		Source:  "test",
+		Payload: []byte(`"hello"`),
+	}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("Request: %v", err)
+	}
+	if string(resp.Payload) != string(replyPayload) {
+		t.Errorf("expected reply %q, got %q", replyPayload, resp.Payload)
 	}
 }
 

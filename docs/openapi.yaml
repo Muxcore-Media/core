@@ -1,0 +1,327 @@
+openapi: "3.0.3"
+info:
+  title: MuxCore HTTP API
+  description: |
+    HTTP API for MuxCore — a distributed media infrastructure fabric.
+
+    All endpoints (except /health, /version, and optionally /metrics) require
+    authentication and authorization. Auth is delegated to a sidecar module
+    (auth-local) that validates bearer tokens and enforces RBAC.
+
+    The API is served on the address configured by `server.addr` (default :8080).
+    TLS is required in production unless MUXCORE_DEV_TLS_SKIP=true.
+  version: "1.0.0-rc.1"
+  contact:
+    name: MuxCore
+    url: https://github.com/Muxcore-Media/core
+
+servers:
+  - url: /api/v1
+    description: Core API v1
+  - url: /
+    description: Root (health, version, metrics)
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: System health check
+      description: |
+        Returns the overall health status of the core node and all registered
+        modules. Public endpoint — no authentication required.
+
+        When an HX-Request header is present, returns an HTML snippet suitable
+        for HTMX-powered admin UIs instead of JSON.
+      tags:
+        - System
+      parameters:
+        - name: HX-Request
+          in: header
+          required: false
+          schema:
+            type: string
+            enum: ["true"]
+          description: When "true", returns HTML snippet instead of JSON
+      responses:
+        "200":
+          description: System is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok, degraded]
+                    example: ok
+                  time:
+                    type: string
+                    format: date-time
+                    example: "2026-06-10T12:00:00Z"
+                  modules:
+                    type: object
+                    additionalProperties:
+                      type: string
+                      enum: [ok, error]
+                    description: Module health map (omitted when no health checker)
+        "503":
+          description: System is degraded (one or more modules unhealthy)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /version:
+    get:
+      summary: Core version
+      description: Returns the running binary version string. Public endpoint.
+      tags:
+        - System
+      responses:
+        "200":
+          description: Version information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+                    example: "1.0.0-rc.1"
+  /api/v1/tasks:
+    get:
+      summary: List tasks
+      description: Returns a list of worker pool tasks, optionally filtered.
+      tags:
+        - Tasks
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - pending
+              - assigned
+              - running
+              - completed
+              - failed
+              - cancelled
+          description: Filter by task status
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by task type
+        - name: node
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by assigned node ID
+      responses:
+        "200":
+          description: Task list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WorkerTask"
+                  count:
+                    type: integer
+                    description: Number of tasks in this response
+        "500":
+          description: Internal server error
+  /api/v1/tasks/{id}:
+    get:
+      summary: Get task detail
+      description: Returns a single worker task by its ID.
+      tags:
+        - Tasks
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Task ID
+      responses:
+        "200":
+          description: Task detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task:
+                    $ref: "#/components/schemas/WorkerTask"
+        "404":
+          description: Task not found
+  /api/v1/tasks/{id}/cancel:
+    post:
+      summary: Cancel a task
+      description: Cancels a task by ID. Only pending or assigned tasks can be cancelled.
+      tags:
+        - Tasks
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Task ID
+      responses:
+        "200":
+          description: Task cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [cancelled]
+        "409":
+          description: Task cannot be cancelled (wrong state)
+  /api/v1/tasks/{id}/reassign:
+    post:
+      summary: Reassign a task
+      description: Reassigns a task to a different node.
+      tags:
+        - Tasks
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Task ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - node
+              properties:
+                node:
+                  type: string
+                  description: Target node ID
+      responses:
+        "200":
+          description: Task reassigned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [reassigned]
+                  node:
+                    type: string
+                    description: Node the task was reassigned to
+        "400":
+          description: Invalid request (missing or empty node)
+        "409":
+          description: Task cannot be reassigned (wrong state)
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      description: |
+        Prometheus-format metrics. Only available when MUXCORE_METRICS_ENABLE=true.
+        Public endpoint (no auth).
+      tags:
+        - System
+      responses:
+        "200":
+          description: Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+                description: Prometheus exposition format
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: SessionToken
+      description: |
+        Bearer token obtained from the auth-local module's login endpoint.
+        Opaque 64-character hex string (SHA-256 hash of random bytes).
+        Tokens starting with "pt_" are partial (TOTP step-up required).
+        API tokens start with "mct_" and are scoped by permission.
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        time:
+          type: string
+          format: date-time
+        modules:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [ok, error]
+
+    WorkerTask:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique task identifier
+        type:
+          type: string
+          description: Task type (e.g. "download", "transcode")
+        status:
+          type: string
+          enum:
+            - pending
+            - assigned
+            - running
+            - completed
+            - failed
+            - cancelled
+          description: Current task status
+        payload:
+          type: string
+          format: base64
+          description: Task payload (opaque bytes)
+        assigned_node:
+          type: string
+          description: Node assigned to execute this task
+        idempotency_key:
+          type: string
+          description: Key for deduplication
+        max_retries:
+          type: integer
+          description: Maximum number of retry attempts
+        retry_count:
+          type: integer
+          description: Current retry attempt number
+        error:
+          type: string
+          description: Error message if task failed
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time

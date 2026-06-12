@@ -1,0 +1,8 @@
+---
+muxcore_arch_map:
+  x86_64: amd64
+  aarch64: arm64
+  armv7l: arm
+
+muxcore_arch: "{{ muxcore_arch_map[ansible_architecture] | default(ansible_architecture) }}"
+muxcore_os: "{{ 'linux' if ansible_system == 'Linux' else 'darwin' }}"

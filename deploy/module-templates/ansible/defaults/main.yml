@@ -1,0 +1,28 @@
+---
+# MuxCore module Ansible role defaults
+
+# TODO: set the correct module binary name and source
+module_binary_name: my-module
+module_binary_path: /usr/local/bin/{{ module_binary_name }}
+
+# Module identity
+module_id: "{{ module_binary_name }}"
+
+# Core gRPC address
+core_grpc_addr: 127.0.0.1:9090
+
+# Module configuration (MUXCORE_CFG_* vars)
+module_config: {}
+#   api_key: "your-api-key"
+#   max_connections: "10"
+
+# Systemd service
+module_systemd_service_name: "muxcore-module@{{ module_id }}"
+module_user: muxcore
+module_group: muxcore
+
+# Installation source — set one:
+#   module_download_url: "https://github.com/.../releases/.../module"
+#   module_local_binary: "/tmp/{{ module_binary_name }}"
+module_download_url: ""
+module_local_binary: ""

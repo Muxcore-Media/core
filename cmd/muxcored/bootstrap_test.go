@@ -18,7 +18,7 @@ const testAddr = "127.0.0.1:19876"
 const testURL = "http://" + testAddr
 
 func TestBareLoomBoot(t *testing.T) {
-	os.Setenv("MUXCORE_INSECURE_DISABLE_TLS", "true")
+	os.Setenv("MUXCORE_DEV_TLS_SKIP", "true")
 
 	cfg := config.Default()
 	cfg.Server.Addr = testAddr

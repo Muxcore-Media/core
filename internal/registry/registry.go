@@ -166,6 +166,17 @@ func (r *Registry) Discover(ctx context.Context, role string) []contracts.Module
 	return infos
 }
 
+// validTransitions defines the allowed state machine transitions.
+// A nil value means the state is terminal (no transitions allowed).
+var validTransitions = map[contracts.ModuleState][]contracts.ModuleState{
+	contracts.ModuleStateRegistered: {contracts.ModuleStateStarting, contracts.ModuleStateDegraded},
+	contracts.ModuleStateStarting:   {contracts.ModuleStateRunning, contracts.ModuleStateDegraded, contracts.ModuleStateStopping},
+	contracts.ModuleStateRunning:    {contracts.ModuleStateDegraded, contracts.ModuleStateStopping},
+	contracts.ModuleStateDegraded:   {contracts.ModuleStateRunning, contracts.ModuleStateStopping},
+	contracts.ModuleStateStopping:   {contracts.ModuleStateStopped},
+	contracts.ModuleStateStopped:    {}, // terminal — no transitions
+}
+
 func (r *Registry) SetState(id string, state contracts.ModuleState) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -174,9 +185,42 @@ func (r *Registry) SetState(id string, state contracts.ModuleState) error {
 	if !ok {
 		return fmt.Errorf("module %q not found", id)
 	}
+
+	// Allow any transition from an empty/zero state (initial registration)
+	if entry.State != "" {
+		allowed, ok := validTransitions[entry.State]
+		if !ok {
+			return fmt.Errorf("invalid transition from %q to %q: source state unknown", entry.State, state)
+		}
+		valid := false
+		for _, s := range allowed {
+			if s == state {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return fmt.Errorf("invalid transition from %q to %q", entry.State, state)
+		}
+	}
+
 	entry.State = state
 	slog.Debug("registry: module state changed", "id", id, "state", string(state))
 	return nil
+}
+
+// Health returns the health error for the given module ID.
+// Returns nil if the module is healthy, wraps contracts.ErrNotFound
+// if the module is not registered, or returns the module's health error.
+func (r *Registry) Health(id string) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	entry, ok := r.modules[id]
+	if !ok {
+		return fmt.Errorf("module %q not found: %w", id, contracts.ErrNotFound)
+	}
+	return entry.Health
 }
 
 func (r *Registry) SetHealth(id string, err error) error {

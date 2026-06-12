@@ -11,19 +11,63 @@ service ModuleRegistration {
   rpc Register(RegisterRequest) returns (RegisterResponse);
   // Unregister is called by a sidecar module binary at shutdown.
   rpc Unregister(UnregisterRequest) returns (UnregisterResponse);
+
+  // BootstrapRegister is called by external modules (not spawned by core)
+  // to obtain a signed client certificate using a one-time bootstrap token.
+  // The module presents its token and a CSR; core validates the token and
+  // returns a signed certificate. The module then reconnects with mTLS.
+  rpc BootstrapRegister(BootstrapRegisterRequest) returns (BootstrapRegisterResponse);
+}
+
+// BootstrapRegisterRequest is sent by an external module to obtain a
+// signed client certificate using a one-time bootstrap token.
+message BootstrapRegisterRequest {
+  // token is the one-time bootstrap token (mct_<version>_<module>_<hex>).
+  string token = 1;
+  // module_id the module claims as its identity.
+  string module_id = 2;
+}
+
+// BootstrapRegisterResponse returns the signed certificate and key on success.
+message BootstrapRegisterResponse {
+  // accepted indicates whether the certificate was issued.
+  bool accepted = 1;
+  // error contains a human-readable error message if not accepted.
+  string error = 2;
+  // signed_cert is the PEM-encoded signed certificate.
+  string signed_cert = 3;
+  // key_pem is the PEM-encoded private key for the certificate.
+  string key_pem = 4;
+  // ca_cert is the PEM-encoded CA certificate (for client to verify server).
+  string ca_cert = 5;
 }
 
 // RegisterRequest is sent by a sidecar module binary to register itself.
 message RegisterRequest {
   // module_id uniquely identifies the module.
   string module_id = 1;
-  // info_json is a JSON-serialized ModuleInfo describing the module.
-  bytes info_json = 2;
+  // (field number 2 was previously used for the deprecated info_json field)
   // mesh_addr is the module's own gRPC listen address for lifecycle calls.
   string mesh_addr = 3;
   // min_core_version is the minimum core version required by this module (SemVer).
   // Empty means compatible with any version. Core rejects incompatible modules.
   string min_core_version = 4;
+  // module_info is the structured module metadata.
+  ModuleInfo module_info = 5;
+}
+
+// ModuleInfo describes a module's identity and capabilities during registration.
+message ModuleInfo {
+  string id = 1;
+  string name = 2;
+  string version = 3;
+  repeated string roles = 4;
+  string description = 5;
+  string author = 6;
+  repeated string capabilities = 7;
+  repeated string depends_on = 8;
+  string min_core_version = 9;
+  string http_addr = 10;
 }
 
 // RegisterResponse is returned after a registration attempt.

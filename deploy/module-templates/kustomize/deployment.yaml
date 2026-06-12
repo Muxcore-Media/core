@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: muxcore-module
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: muxcore-module
+  template:
+    metadata:
+      labels:
+        app: muxcore-module
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: module
+          # TODO: replace with your module's image
+          image: ghcr.io/your-org/your-module:latest
+          env:
+            # TODO: set the correct core gRPC address
+            - name: MUXCORE_GRPC_ADDR
+              value: "muxcore:9090"
+            - name: MUXCORE_MODULE_ID
+              value: "my-module"
+            # Add MUXCORE_CFG_* vars here as needed
+            # - name: MUXCORE_CFG_API_KEY
+            #   value: "your-api-key"
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi

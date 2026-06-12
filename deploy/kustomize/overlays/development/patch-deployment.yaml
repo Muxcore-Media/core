@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: muxcore
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: muxcore
+          resources:
+            requests:
+              cpu: 100m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          env:
+            - name: MUXCORE_LOG_LEVEL
+              value: debug
+            - name: MUXCORE_LOG_FORMAT
+              value: text

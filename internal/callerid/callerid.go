@@ -12,11 +12,17 @@ type key struct{}
 // Set returns a context carrying the given module ID as the caller.
 // Called by the gRPC auth interceptor after verifying the connection identity.
 func Set(ctx context.Context, moduleID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return context.WithValue(ctx, key{}, moduleID)
 }
 
 // Get extracts the caller module ID from context. Returns "" if not set.
 func Get(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
 	if id, ok := ctx.Value(key{}).(string); ok {
 		return id
 	}

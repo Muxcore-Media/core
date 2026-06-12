@@ -12,6 +12,15 @@
 //
 //	modules, err := c.Discovery.FindByCapability(ctx, "storage")
 //	rc, err := c.Storage.Get(ctx, "media/movie.mkv")
+//
+// For failover across multiple core instances, use DialWithAddrs or
+// WithFallbackAddrs:
+//
+//	c, err := client.Dial("core1:9090", client.WithFallbackAddrs("core2:9090", "core3:9090"))
+//
+// When the primary connection enters TransientFailure, the client
+// automatically tries fallback addresses in order with exponential backoff
+// and replaces the underlying gRPC connection transparently.
 package client
 
 import (
@@ -19,20 +28,55 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"sync"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials/insecure"
 
 	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
 	healthv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/health/v1"
 	meshv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/mesh/v1"
 	storagev1 "github.com/Muxcore-Media/core/proto/gen/muxcore/storage/v1"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
+
+// Default reconnect parameters.
+const (
+	defaultReconnectBackoff  = 1 * time.Second
+	defaultMaxReconnectDelay = 30 * time.Second
+	// defaultMaxMsgBytes is the default client-side gRPC message size limit (32MB).
+	// Matches the server-side default. Prevents unbounded memory allocation.
+	defaultMaxMsgBytes = 32 * 1024 * 1024
+)
+
+// ReconnectOptions configures the automatic reconnection behaviour.
+type ReconnectOptions struct {
+	// InitialBackoff is the delay before the first reconnect attempt.
+	// Default 1s.
+	InitialBackoff time.Duration
+	// MaxDelay caps the exponential backoff. Default 30s.
+	MaxDelay time.Duration
+	// OnReconnect is called after a successful reconnection to a new address.
+	OnReconnect func(addr string)
+}
 
 // Client is the top-level handle for a connection to muxcored.
 // All service clients are pre-initialized on Dial; use them directly.
+// When configured with multiple addresses, a background reconnect loop
+// monitors the connection and transparently replaces it on failure.
 type Client struct {
-	conn      *grpc.ClientConn
+	mu            sync.Mutex
+	conn          *grpc.ClientConn
+	currentAddr   string
+	addrs         []string
+	grpcOpts      []grpc.DialOption
+	reconnectOpts ReconnectOptions
+	ctx           context.Context
+	cancel        context.CancelFunc
+
 	Discovery *DiscoveryClient
 	Events    *EventsClient
 	Storage   *StorageClient
@@ -44,7 +88,9 @@ type Client struct {
 type Option func(*dialOptions)
 
 type dialOptions struct {
-	grpcOpts []grpc.DialOption
+	grpcOpts      []grpc.DialOption
+	addrs         []string
+	reconnectOpts ReconnectOptions
 }
 
 // WithInsecure disables TLS. Use only for local development.
@@ -61,30 +107,226 @@ func WithGRPCOption(opt grpc.DialOption) Option {
 	}
 }
 
+// WithFallbackAddrs sets additional core gRPC addresses to try when the
+// primary connection fails. The primary address is the one passed to Dial().
+// When connected to a fallback, the client continues to monitor the
+// connection and will try earlier addresses again on the next failure.
+func WithFallbackAddrs(addrs ...string) Option {
+	return func(o *dialOptions) {
+		o.addrs = append(o.addrs, addrs...)
+	}
+}
+
+// WithReconnect configures reconnection parameters.
+// If not called, defaults are used (1s initial backoff, 30s max delay).
+func WithReconnect(initialBackoff, maxDelay time.Duration) Option {
+	return func(o *dialOptions) {
+		o.reconnectOpts.InitialBackoff = initialBackoff
+		o.reconnectOpts.MaxDelay = maxDelay
+	}
+}
+
+// WithOnReconnect sets a callback invoked after each successful
+// reconnection. The callback receives the address of the new core.
+func WithOnReconnect(fn func(addr string)) Option {
+	return func(o *dialOptions) {
+		o.reconnectOpts.OnReconnect = fn
+	}
+}
+
+// applyDefaults fills zero-valued reconnect options.
+func applyDefaults(opts *ReconnectOptions) {
+	if opts.InitialBackoff <= 0 {
+		opts.InitialBackoff = defaultReconnectBackoff
+	}
+	if opts.MaxDelay <= 0 {
+		opts.MaxDelay = defaultMaxReconnectDelay
+	}
+}
+
+// initServiceClients creates all five gRPC service clients from a connection.
+func initServiceClients(conn *grpc.ClientConn) (*DiscoveryClient, *EventsClient, *StorageClient, *HealthClient, *MeshClient) {
+	return &DiscoveryClient{discoveryv1.NewDiscoveryServiceClient(conn)},
+		&EventsClient{eventsv1.NewEventServiceClient(conn)},
+		&StorageClient{storagev1.NewStorageServiceClient(conn)},
+		&HealthClient{healthv1.NewHealthServiceClient(conn)},
+		&MeshClient{meshv1.NewModuleMeshClient(conn)}
+}
+
 // Dial connects to a muxcored gRPC endpoint and returns a Client.
 // The caller must call Close() when done.
+// The address is the primary; use WithFallbackAddrs for failover addresses.
 func Dial(addr string, opts ...Option) (*Client, error) {
+	return DialWithAddrs([]string{addr}, opts...)
+}
+
+// DialWithAddrs connects to a muxcored gRPC endpoint with full failover
+// support. The first address is the primary; subsequent addresses are
+// fallbacks tried in order on connection failure.
+//
+// If only one address is supplied, the client still runs a reconnect loop
+// that re-dials the same address on transient failure (useful for short
+// core restarts).
+//
+// The caller must call Close() when done.
+func DialWithAddrs(addrs []string, opts ...Option) (*Client, error) {
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("client: at least one address is required")
+	}
+
 	do := &dialOptions{}
 	for _, o := range opts {
 		o(do)
 	}
-	conn, err := grpc.NewClient(addr, do.grpcOpts...)
+
+	// Merge addresses: the first DialWithAddrs arg is primary, WithFallbackAddrs
+	// args are additional fallbacks.
+	allAddrs := make([]string, 0, len(addrs)+len(do.addrs))
+	allAddrs = append(allAddrs, addrs...)
+	allAddrs = append(allAddrs, do.addrs...)
+
+	applyDefaults(&do.reconnectOpts)
+
+	// Prepend default message size limits so callers can override if needed.
+	msgSizeOpt := grpc.WithDefaultCallOptions(
+		grpc.MaxCallRecvMsgSize(defaultMaxMsgBytes),
+		grpc.MaxCallSendMsgSize(defaultMaxMsgBytes),
+	)
+	do.grpcOpts = append([]grpc.DialOption{msgSizeOpt}, do.grpcOpts...)
+
+	conn, err := grpc.NewClient(allAddrs[0], do.grpcOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("client: dial %s: %w", addr, err)
+		return nil, fmt.Errorf("client: dial %s: %w", allAddrs[0], err)
 	}
-	return &Client{
-		conn:      conn,
-		Discovery: &DiscoveryClient{discoveryv1.NewDiscoveryServiceClient(conn)},
-		Events:    &EventsClient{eventsv1.NewEventServiceClient(conn)},
-		Storage:   &StorageClient{storagev1.NewStorageServiceClient(conn)},
-		Health:    &HealthClient{healthv1.NewHealthServiceClient(conn)},
-		Mesh:      &MeshClient{meshv1.NewModuleMeshClient(conn)},
-	}, nil
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &Client{
+		conn:          conn,
+		currentAddr:   allAddrs[0],
+		addrs:         allAddrs,
+		grpcOpts:      do.grpcOpts,
+		reconnectOpts: do.reconnectOpts,
+		ctx:           ctx,
+		cancel:        cancel,
+	}
+	c.Discovery, c.Events, c.Storage, c.Health, c.Mesh = initServiceClients(conn)
+
+	// Start the reconnect loop if there are fallback addresses or more than one.
+	if len(allAddrs) > 1 {
+		go c.reconnectLoop()
+	}
+
+	return c, nil
 }
 
-// Close closes the underlying gRPC connection.
+// Close closes the underlying gRPC connection and stops the reconnect loop.
+// Safe to call multiple times.
 func (c *Client) Close() error {
+	c.cancel()
 	return c.conn.Close()
+}
+
+// replaceConn atomically swaps the gRPC connection and all service clients.
+// The old connection is closed asynchronously.
+func (c *Client) replaceConn(newConn *grpc.ClientConn, addr string) {
+	disc, ev, stor, hlth, mesh := initServiceClients(newConn)
+
+	c.mu.Lock()
+	oldConn := c.conn
+	c.conn = newConn
+	c.currentAddr = addr
+	c.Discovery = disc
+	c.Events = ev
+	c.Storage = stor
+	c.Health = hlth
+	c.Mesh = mesh
+	c.mu.Unlock()
+
+	slog.Info("client: reconnected to core", "addr", addr)
+
+	// Close the old connection in the background so existing in-flight
+	// RPCs drain gracefully before the underlying transport is torn down.
+	if oldConn != nil {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("client close old conn panic recovered", "panic", r)
+				}
+			}()
+			oldConn.Close()
+		}()
+	}
+}
+
+// reconnectLoop monitors gRPC connection state and attempts to connect to
+// fallback addresses when the current connection enters TransientFailure.
+// Runs until the client context is cancelled (Close is called).
+func (c *Client) reconnectLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("client reconnect loop panic recovered", "panic", r)
+		}
+	}()
+	backoff := c.reconnectOpts.InitialBackoff
+	addrIdx := 0 // index into c.addrs for the next address to try
+
+	for {
+		// Wait for the current connection to fail.
+		if !c.waitForFailure(c.ctx) {
+			return // context cancelled
+		}
+
+		// Move to the next address (round-robin with fallback).
+		addrIdx = (addrIdx + 1) % len(c.addrs)
+		addr := c.addrs[addrIdx]
+
+		slog.Info("client: attempting reconnect", "addr", addr, "backoff", backoff)
+
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+
+		newConn, err := grpc.NewClient(addr, c.grpcOpts...)
+		if err != nil {
+			slog.Warn("client: reconnect failed", "addr", addr, "error", err)
+			backoff *= 2
+			if backoff > c.reconnectOpts.MaxDelay {
+				backoff = c.reconnectOpts.MaxDelay
+			}
+			continue
+		}
+
+		c.replaceConn(newConn, addr)
+		backoff = c.reconnectOpts.InitialBackoff
+
+		if c.reconnectOpts.OnReconnect != nil {
+			c.reconnectOpts.OnReconnect(addr)
+		}
+	}
+}
+
+// waitForFailure blocks until the current connection enters
+// TransientFailure or Shutdown state. Returns false if the context
+// is cancelled (client is closing).
+func (c *Client) waitForFailure(ctx context.Context) bool {
+	state := c.conn.GetState()
+	for state != connectivity.TransientFailure && state != connectivity.Shutdown {
+		if !c.conn.WaitForStateChange(ctx, state) {
+			return false
+		}
+		state = c.conn.GetState()
+	}
+	return true
+}
+
+// CurrentAddr returns the address of the core this client is currently
+// connected to. Useful after reconnection for logging.
+func (c *Client) CurrentAddr() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.currentAddr
 }
 
 // --- Discovery ---
@@ -178,10 +420,18 @@ func (e *EventsClient) Subscribe(ctx context.Context, eventType string) (<-chan 
 
 	ch := make(chan *eventsv1.Event, 64)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("client subscribe stream panic recovered", "panic", r)
+			}
+		}()
 		defer close(ch)
 		for {
 			ev, err := stream.Recv()
 			if err != nil {
+				if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
+					slog.Debug("client subscribe stream ended", "error", err)
+				}
 				return
 			}
 			select {
@@ -240,6 +490,11 @@ func (s *StorageClient) Get(ctx context.Context, key string) (io.ReadCloser, err
 
 	pr, pw := io.Pipe()
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				pw.CloseWithError(fmt.Errorf("client get stream panic: %v", r))
+			}
+		}()
 		for {
 			chunk, err := stream.Recv()
 			if errors.Is(err, io.EOF) {

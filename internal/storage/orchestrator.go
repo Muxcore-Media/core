@@ -7,13 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"log/slog"
-
+	"github.com/Muxcore-Media/core/internal/callerid"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/google/uuid"
 )
@@ -26,12 +27,13 @@ const MaxObjectSize = 100 * 1024 * 1024 // 100 MB
 // capability negotiation and user-defined policies.
 //
 // Per-operation timeouts wrap every provider call so a hung provider cannot
-// block the caller indefinitely. Set via StorageTimeouts, defaulting to
+// block the caller indefinitely. Set via Timeouts, defaulting to
 // 30s reads, 5m writes, 30s deletes.
 type Orchestrator struct {
 	mu            sync.RWMutex
 	registry      contracts.Registry
 	providers     map[string]contracts.StorageProvider
+	tiers         map[string]contracts.StorageTier // provider ID -> tier (empty = default)
 	policies      []RoutingPolicy
 	cache         contracts.CacheLayer
 	audit         contracts.AuditLogger
@@ -39,11 +41,17 @@ type Orchestrator struct {
 	writeTimeout  time.Duration
 	deleteTimeout time.Duration
 	// auditSem limits concurrent audit goroutines to prevent unbounded bursts.
-	auditSem chan struct{}
+	auditSem    chan struct{}
+	putCount    atomic.Int64
+	getCount    atomic.Int64
+	deleteCount atomic.Int64
+	statCount   atomic.Int64
+	listCount   atomic.Int64
+	moveCount   atomic.Int64
 }
 
-// StorageTimeouts holds per-operation deadline durations for the orchestrator.
-type StorageTimeouts struct {
+// Timeouts holds per-operation deadline durations for the orchestrator.
+type Timeouts struct {
 	Read   time.Duration // Get, Exists, Stat, List, Stream
 	Write  time.Duration // Put
 	Delete time.Duration // Delete, Move
@@ -62,6 +70,7 @@ func NewOrchestrator(reg contracts.Registry) *Orchestrator {
 	return &Orchestrator{
 		registry:      reg,
 		providers:     make(map[string]contracts.StorageProvider),
+		tiers:         make(map[string]contracts.StorageTier),
 		readTimeout:   30 * time.Second,
 		writeTimeout:  5 * time.Minute,
 		deleteTimeout: 30 * time.Second,
@@ -71,7 +80,7 @@ func NewOrchestrator(reg contracts.Registry) *Orchestrator {
 
 // SetTimeouts configures per-operation deadlines. Zero values keep the current
 // default. Call before any storage operations begin.
-func (o *Orchestrator) SetTimeouts(t StorageTimeouts) {
+func (o *Orchestrator) SetTimeouts(t Timeouts) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if t.Read > 0 {
@@ -132,11 +141,74 @@ func (o *Orchestrator) AddPolicy(p RoutingPolicy) {
 	o.mu.Unlock()
 }
 
+// DiscoverTiers scans registered storage providers and records which ones
+// implement TieredProvider and at which tier. Call after DiscoverStorage
+// to populate the tier map.
+func (o *Orchestrator) DiscoverTiers() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for id, prov := range o.providers {
+		if tp, ok := prov.(contracts.TieredProvider); ok {
+			o.tiers[id] = tp.Tier()
+		} else {
+			delete(o.tiers, id)
+		}
+	}
+}
+
+// Promote moves an object to a higher storage tier (e.g., cold -> hot).
+// Returns ErrNotImplemented if the provider does not support tiering.
+func (o *Orchestrator) Promote(ctx context.Context, key string) error {
+	if err := validateKey(key); err != nil {
+		return err
+	}
+	key = namespaceKey(ctx, key)
+	prov, err := o.route(key)
+	if err != nil {
+		return err
+	}
+	tp, ok := prov.(contracts.TieredProvider)
+	if !ok {
+		return fmt.Errorf("provider for %q does not support tiering", key)
+	}
+	tctx, cancel := o.withTimeout(ctx, o.writeTimeout)
+	defer cancel()
+	return tp.Promote(tctx, key)
+}
+
+// Relegate moves an object to a lower storage tier (e.g., hot -> cold).
+// Returns ErrNotImplemented if the provider does not support tiering.
+func (o *Orchestrator) Relegate(ctx context.Context, key string) error {
+	if err := validateKey(key); err != nil {
+		return err
+	}
+	key = namespaceKey(ctx, key)
+	prov, err := o.route(key)
+	if err != nil {
+		return err
+	}
+	tp, ok := prov.(contracts.TieredProvider)
+	if !ok {
+		return fmt.Errorf("provider for %q does not support tiering", key)
+	}
+	tctx, cancel := o.withTimeout(ctx, o.writeTimeout)
+	defer cancel()
+	return tp.Relegate(tctx, key)
+}
+
 // SetCache directly sets the cache layer (for testing or forced override).
 func (o *Orchestrator) SetCache(c contracts.CacheLayer) {
 	o.mu.Lock()
 	o.cache = c
 	o.mu.Unlock()
+}
+
+// SetProvider directly registers a storage provider by ID.
+// Used by main.go to register built-in providers (e.g., local filesystem).
+func (o *Orchestrator) SetProvider(id string, prov contracts.StorageProvider) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.providers[id] = prov
 }
 
 // SetAuditLogger attaches an audit logger for recording storage operations.
@@ -164,6 +236,18 @@ func validatePrefix(prefix string) error {
 	return validateKeyOrPrefix(prefix)
 }
 
+// namespaceKey prefixes a storage key with the caller's module ID when the
+// caller is a registered module (extracted from context). This enforces
+// per-module key isolation: modules can only access keys under their own
+// namespace. System-level calls (no caller ID) use the key as-is.
+// The prefix is stripped from internal storage — callers are unaware of it.
+func namespaceKey(ctx context.Context, key string) string {
+	if cid := callerid.Get(ctx); cid != "" && !strings.HasPrefix(key, cid+"/") {
+		return cid + "/" + key
+	}
+	return key
+}
+
 // validateKeyOrPrefix applies the common validation rules shared by
 // validateKey and validatePrefix.
 func validateKeyOrPrefix(s string) error {
@@ -182,6 +266,22 @@ func validateKeyOrPrefix(s string) error {
 	return nil
 }
 
+// providerTierRank returns the tier preference for sorting. Lower rank = preferred.
+func providerTierRank(tier contracts.StorageTier) int {
+	switch tier {
+	case contracts.StorageTierHot:
+		return 0
+	case contracts.StorageTierWarm:
+		return 1
+	case contracts.StorageTierCold:
+		return 2
+	case contracts.StorageTierArchive:
+		return 3
+	default:
+		return 1 // warm-equivalent for providers without a declared tier
+	}
+}
+
 func (o *Orchestrator) route(key string) (contracts.StorageProvider, error) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
@@ -193,12 +293,20 @@ func (o *Orchestrator) route(key string) (contracts.StorageProvider, error) {
 			}
 		}
 	}
-	// Sort provider IDs for deterministic fallback selection
+	// Sort provider IDs for deterministic fallback selection, preferring
+	// higher-tier (lower rank) providers.
 	ids := make([]string, 0, len(o.providers))
 	for id := range o.providers {
 		ids = append(ids, id)
 	}
-	sort.Strings(ids)
+	sort.Slice(ids, func(i, j int) bool {
+		ti := providerTierRank(o.tiers[ids[i]])
+		tj := providerTierRank(o.tiers[ids[j]])
+		if ti != tj {
+			return ti < tj
+		}
+		return ids[i] < ids[j]
+	})
 	if len(ids) > 0 {
 		return o.providers[ids[0]], nil
 	}
@@ -209,22 +317,21 @@ func (o *Orchestrator) route(key string) (contracts.StorageProvider, error) {
 // plus a cancel function the caller must defer. If the parent context already
 // has a shorter deadline, the parent deadline wins (context.WithTimeout is a no-op).
 func (o *Orchestrator) withTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
-	o.mu.RLock()
-	timeout := d
-	o.mu.RUnlock()
-	if timeout <= 0 {
+	if d <= 0 {
 		return ctx, func() {}
 	}
-	return context.WithTimeout(ctx, timeout)
+	return context.WithTimeout(ctx, d)
 }
 
 func (o *Orchestrator) Put(ctx context.Context, key string, data io.Reader, size int64) error {
+	o.putCount.Add(1)
 	if err := validateKey(key); err != nil {
 		return err
 	}
 	if size > MaxObjectSize {
 		return fmt.Errorf("object size %d exceeds maximum %d", size, MaxObjectSize)
 	}
+	key = namespaceKey(ctx, key)
 
 	prov, err := o.route(key)
 	if err != nil {
@@ -246,6 +353,9 @@ func (o *Orchestrator) Put(ctx context.Context, key string, data io.Reader, size
 		}
 	} else {
 		// Size is unknown — read into memory to determine size, capped at MaxObjectSize+1.
+		if data == nil {
+			return fmt.Errorf("storage: data reader is nil")
+		}
 		buf, rerr := io.ReadAll(io.LimitReader(data, MaxObjectSize+1))
 		if rerr != nil {
 			return rerr
@@ -285,9 +395,11 @@ func (o *Orchestrator) Put(ctx context.Context, key string, data io.Reader, size
 }
 
 func (o *Orchestrator) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	o.getCount.Add(1)
 	if err := validateKey(key); err != nil {
 		return nil, err
 	}
+	key = namespaceKey(ctx, key)
 	o.mu.RLock()
 	cache := o.cache
 	o.mu.RUnlock()
@@ -316,9 +428,11 @@ func (o *Orchestrator) Get(ctx context.Context, key string) (io.ReadCloser, erro
 }
 
 func (o *Orchestrator) Delete(ctx context.Context, key string) error {
+	o.deleteCount.Add(1)
 	if err := validateKey(key); err != nil {
 		return err
 	}
+	key = namespaceKey(ctx, key)
 	prov, err := o.route(key)
 	if err != nil {
 		return err
@@ -351,6 +465,7 @@ func (o *Orchestrator) Exists(ctx context.Context, key string) (bool, error) {
 	if err := validateKey(key); err != nil {
 		return false, err
 	}
+	key = namespaceKey(ctx, key)
 	prov, err := o.route(key)
 	if err != nil {
 		return false, err
@@ -361,9 +476,11 @@ func (o *Orchestrator) Exists(ctx context.Context, key string) (bool, error) {
 }
 
 func (o *Orchestrator) Stat(ctx context.Context, key string) (contracts.ObjectInfo, error) {
+	o.statCount.Add(1)
 	if err := validateKey(key); err != nil {
 		return contracts.ObjectInfo{}, err
 	}
+	key = namespaceKey(ctx, key)
 	prov, err := o.route(key)
 	if err != nil {
 		return contracts.ObjectInfo{}, err
@@ -374,12 +491,15 @@ func (o *Orchestrator) Stat(ctx context.Context, key string) (contracts.ObjectIn
 }
 
 func (o *Orchestrator) Move(ctx context.Context, src, dst string) error {
+	o.moveCount.Add(1)
 	if err := validateKey(src); err != nil {
 		return err
 	}
 	if err := validateKey(dst); err != nil {
 		return err
 	}
+	src = namespaceKey(ctx, src)
+	dst = namespaceKey(ctx, dst)
 	prov, err := o.route(src)
 	if err != nil {
 		return err
@@ -395,9 +515,11 @@ func (o *Orchestrator) Move(ctx context.Context, src, dst string) error {
 }
 
 func (o *Orchestrator) List(ctx context.Context, prefix string) ([]contracts.ObjectInfo, error) {
+	o.listCount.Add(1)
 	if err := validatePrefix(prefix); err != nil {
 		return nil, err
 	}
+	prefix = namespaceKey(ctx, prefix)
 	prov, err := o.route(prefix)
 	if err != nil {
 		return nil, err
@@ -413,35 +535,32 @@ func (o *Orchestrator) ProviderCount() int {
 	return len(o.providers)
 }
 
-// StorageProviderInfo describes a registered storage provider for the admin API.
-type StorageProviderInfo struct {
-	ID           string   `json:"id"`
-	Capabilities []string `json:"capabilities"`
-	IsCache      bool     `json:"is_cache"`
+func (o *Orchestrator) PutCount() int64    { return o.putCount.Load() }
+func (o *Orchestrator) Count() int64       { return o.getCount.Load() }
+func (o *Orchestrator) DeleteCount() int64 { return o.deleteCount.Load() }
+func (o *Orchestrator) StatCount() int64   { return o.statCount.Load() }
+func (o *Orchestrator) ListCount() int64   { return o.listCount.Load() }
+func (o *Orchestrator) MoveCount() int64   { return o.moveCount.Load() }
+
+// ProviderInfo describes a registered storage provider for the admin API.
+type ProviderInfo struct {
+	ID           string                `json:"id"`
+	Capabilities []string              `json:"capabilities"`
+	IsCache      bool                  `json:"is_cache"`
+	Tier         contracts.StorageTier `json:"tier,omitempty"`
 }
 
 // ProviderInfo returns metadata for all registered storage providers.
-func (o *Orchestrator) ProviderInfo() []StorageProviderInfo {
+func (o *Orchestrator) ProviderInfo() []ProviderInfo {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 
-	infos := make([]StorageProviderInfo, 0, len(o.providers))
+	infos := make([]ProviderInfo, 0, len(o.providers))
 	for id, prov := range o.providers {
-		info := StorageProviderInfo{ID: id}
-		if _, ok := prov.(contracts.Streamable); ok {
-			info.Capabilities = append(info.Capabilities, "streamable")
-		}
-		if _, ok := prov.(contracts.Seekable); ok {
-			info.Capabilities = append(info.Capabilities, "seekable")
-		}
-		if _, ok := prov.(contracts.Watchable); ok {
-			info.Capabilities = append(info.Capabilities, "watchable")
-		}
-		if _, ok := prov.(contracts.AtomicMovable); ok {
-			info.Capabilities = append(info.Capabilities, "atomic_movable")
-		}
-		if _, ok := prov.(contracts.Hardlinkable); ok {
-			info.Capabilities = append(info.Capabilities, "hardlinkable")
+		info := ProviderInfo{
+			ID:           id,
+			Capabilities: collectCapabilities(prov),
+			Tier:         o.tiers[id],
 		}
 		infos = append(infos, info)
 	}
@@ -449,16 +568,22 @@ func (o *Orchestrator) ProviderInfo() []StorageProviderInfo {
 }
 
 func (o *Orchestrator) CapabilityCheck(ctx context.Context, key string) ([]string, error) {
-	// Empty key is allowed — means "check capabilities of the default provider".
 	if key != "" {
 		if err := validateKey(key); err != nil {
 			return nil, err
 		}
 	}
+	key = namespaceKey(ctx, key)
 	prov, err := o.route(key)
 	if err != nil {
 		return nil, err
 	}
+	return collectCapabilities(prov), nil
+}
+
+// collectCapabilities returns the list of optional capability interfaces
+// that the given storage provider implements.
+func collectCapabilities(prov contracts.StorageProvider) []string {
 	var caps []string
 	if _, ok := prov.(contracts.Streamable); ok {
 		caps = append(caps, "streamable")
@@ -475,7 +600,7 @@ func (o *Orchestrator) CapabilityCheck(ctx context.Context, key string) ([]strin
 	if _, ok := prov.(contracts.Hardlinkable); ok {
 		caps = append(caps, "hardlinkable")
 	}
-	return caps, nil
+	return caps
 }
 
 // auditStorage records a storage operation via the audit logger.
@@ -491,7 +616,12 @@ func (o *Orchestrator) auditStorage(ctx context.Context, action, key string, siz
 	select {
 	case o.auditSem <- struct{}{}:
 		go func() {
-			defer func() { <-o.auditSem }()
+			defer func() {
+				<-o.auditSem
+				if r := recover(); r != nil {
+					slog.Error("audit storage panic recovered", "action", action, "key", key, "panic", r)
+				}
+			}()
 			details := map[string]string{
 				"key": key,
 			}
@@ -527,6 +657,12 @@ func (o *Orchestrator) WatchModules(ctx context.Context, bus contracts.EventBus)
 	}
 
 	handler := func(ctx context.Context, event contracts.Event) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		var payload contracts.ModuleRegisteredPayload
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return nil // skip malformed events
@@ -542,6 +678,9 @@ func (o *Orchestrator) WatchModules(ctx context.Context, bus contracts.EventBus)
 		if provider, ok := entry.Module.(contracts.StorageProvider); ok {
 			o.mu.Lock()
 			o.providers[payload.ModuleID] = provider
+			if tp, ok := provider.(contracts.TieredProvider); ok {
+				o.tiers[payload.ModuleID] = tp.Tier()
+			}
 			o.mu.Unlock()
 		}
 

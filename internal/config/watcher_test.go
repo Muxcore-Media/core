@@ -95,10 +95,10 @@ func TestDiffConfigs_SeedNodes(t *testing.T) {
 	old := Default()
 	old.GRPC.SeedNodes = []string{"a:9090"}
 
-	new := Default()
-	new.GRPC.SeedNodes = []string{"b:9090", "c:9090"}
+	newCfg := Default()
+	newCfg.GRPC.SeedNodes = []string{"b:9090", "c:9090"}
 
-	ch := diffConfigs(old, new)
+	ch := diffConfigs(old, newCfg)
 	if !ch.SeedNodes {
 		t.Error("expected SeedNodes change detected")
 	}
@@ -109,6 +109,45 @@ func TestDiffConfigs_NoChanges(t *testing.T) {
 	ch := diffConfigs(cfg, cfg)
 	if ch.LogLevel || ch.LogFormat || ch.AuditPath || ch.SeedNodes || ch.Unsafe {
 		t.Error("expected no changes when diffing identical configs")
+	}
+}
+
+func TestReload_FileDeletedAfterLoad(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "muxcore.json")
+
+	os.WriteFile(path, []byte(`{"server":{"addr":":8080"}}`), 0600)
+
+	// Load initial config.
+	prev, err := Load(path)
+	if err != nil {
+		t.Fatalf("initial Load: %v", err)
+	}
+
+	// Delete the config file, then reload should return an error but
+	// not panic or crash.
+	os.Remove(path)
+	_, err = Reload(prev, path)
+	if err == nil {
+		t.Error("expected error when reloading after file deletion")
+	}
+}
+
+func TestReload_CorruptedFileAfterLoad(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "muxcore.json")
+
+	os.WriteFile(path, []byte(`{"server":{"addr":":8080"}}`), 0600)
+	prev, err := Load(path)
+	if err != nil {
+		t.Fatalf("initial Load: %v", err)
+	}
+
+	// Corrupt the file with invalid JSON.
+	os.WriteFile(path, []byte("{bad json}"), 0600)
+	_, err = Reload(prev, path)
+	if err == nil {
+		t.Error("expected error when reloading corrupted file")
 	}
 }
 

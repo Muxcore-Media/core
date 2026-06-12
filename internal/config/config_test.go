@@ -1,8 +1,11 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -244,13 +247,158 @@ func TestLoad_PartialFile_MergesDefaults(t *testing.T) {
 	}
 }
 
+func TestRedactedJSON_HidesCredentials(t *testing.T) {
+	cfg := &Config{
+		Database: DatabaseConfig{Driver: "postgres", URL: "postgres://user:secret@localhost/db"},
+		Cache:    CacheConfig{Driver: "redis", URL: "redis://user:pass@localhost:6379/0"},
+		Server:   ServerConfig{CertFile: "/etc/certs/cert.pem", KeyFile: "/etc/certs/key.pem"},
+		GRPC:     GRPCConfig{CertFile: "/etc/grpc/cert.pem", KeyFile: "/etc/grpc/key.pem", JoinToken: "supersecret"},
+	}
+	data, err := cfg.RedactedJSON()
+	if err != nil {
+		t.Fatalf("RedactedJSON: %v", err)
+	}
+	output := string(data)
+	// Verify original credentials are NOT present in output.
+	for _, secret := range []string{"user:secret", "user:pass", "supersecret", "/etc/certs/", "/etc/grpc/"} {
+		if strings.Contains(output, secret) {
+			t.Errorf("secret %q leaked in output: %s", secret, output)
+		}
+	}
+	// Verify redaction markers are present.
+	for _, marker := range []string{"%2A%2A%2A", "set"} {
+		if !strings.Contains(output, marker) {
+			t.Errorf("expected redaction marker %q in output: %s", marker, output)
+		}
+	}
+}
+
+func TestConfig_LogValue_RedactsCredentials(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	db := DatabaseConfig{Driver: "postgres", URL: "postgres://user:secret@localhost/db"}
+	logger.Info("test", "db", db)
+	output := buf.String()
+	buf.Reset()
+	if strings.Contains(output, "user:secret") {
+		t.Errorf("DB credentials leaked in log output: %s", output)
+	}
+
+	cache := CacheConfig{Driver: "redis", URL: "redis://user:pass@localhost:6379/0"}
+	logger.Info("test", "cache", cache)
+	output = buf.String()
+	buf.Reset()
+	if strings.Contains(output, "user:pass") {
+		t.Errorf("cache credentials leaked in log output: %s", output)
+	}
+}
+
+func TestRedactURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		want     string
+		wantSafe bool // if true, check that original secret is absent
+	}{
+		{"empty", "", "", false},
+		{"postgres with creds", "postgres://user:secret@localhost/db", "", true},
+		{"redis with password", "redis://:pass@host:6379", "", true},
+		{"no credentials", "http://example.com/path", "http://example.com/path", false},
+		{"invalid URL", ":invalid:", "<redacted>", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := redactURL(tt.input)
+			if tt.want != "" && got != tt.want {
+				t.Errorf("redactURL(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+			if tt.wantSafe {
+				// Should not contain original credentials.
+				if strings.Contains(got, "user:secret") || strings.Contains(got, ":pass") {
+					t.Errorf("creds leaked: redactURL(%q) = %q", tt.input, got)
+				}
+				if !strings.Contains(got, "%2A%2A%2A") {
+					t.Errorf("expected redacted userinfo in result: redactURL(%q) = %q", tt.input, got)
+				}
+			}
+		})
+	}
+}
+
+func TestParseInt(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int
+	}{
+		{"42", 42},
+		{"0", 0},
+		{"-5", -5},
+		{"notanumber", 0},
+		{"", 0},
+	}
+	for _, tt := range tests {
+		got := parseInt(tt.input)
+		if got != tt.expected {
+			t.Errorf("parseInt(%q) = %d, want %d", tt.input, got, tt.expected)
+		}
+	}
+}
+
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
 		"MUXCORE_ADDR", "MUXCORE_LOG_LEVEL", "MUXCORE_LOG_FORMAT",
 		"MUXCORE_DATABASE_DRIVER", "MUXCORE_DATABASE_URL",
 		"MUXCORE_CACHE_DRIVER", "MUXCORE_CACHE_URL",
+		"MUXCORE_SERVER_READ_TIMEOUT", "MUXCORE_SERVER_WRITE_TIMEOUT",
+		"MUXCORE_GRPC_MAX_MESSAGE_SIZE_MB", "MUXCORE_GRPC_CA_CERT_DIR",
 	} {
 		os.Unsetenv(key)
+	}
+}
+
+func TestLoad_ServerTimeoutsEnv(t *testing.T) {
+	clearEnv(t)
+	os.Setenv("MUXCORE_SERVER_READ_TIMEOUT", "30")
+	os.Setenv("MUXCORE_SERVER_WRITE_TIMEOUT", "60")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Server.ReadTimeout != 30 {
+		t.Errorf("expected ReadTimeout 30, got %d", cfg.Server.ReadTimeout)
+	}
+	if cfg.Server.WriteTimeout != 60 {
+		t.Errorf("expected WriteTimeout 60, got %d", cfg.Server.WriteTimeout)
+	}
+}
+
+func TestLoad_GRPCEnv(t *testing.T) {
+	clearEnv(t)
+	os.Setenv("MUXCORE_GRPC_MAX_MESSAGE_SIZE_MB", "64")
+	os.Setenv("MUXCORE_GRPC_CA_CERT_DIR", "/custom/ca/path")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.GRPC.MaxMessageSizeMB != 64 {
+		t.Errorf("expected MaxMessageSizeMB 64, got %d", cfg.GRPC.MaxMessageSizeMB)
+	}
+	if cfg.GRPC.CACertDir != "/custom/ca/path" {
+		t.Errorf("expected CACertDir /custom/ca/path, got %q", cfg.GRPC.CACertDir)
+	}
+}
+
+func TestLoad_InvalidGRPCMessageSize_File(t *testing.T) {
+	clearEnv(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	os.WriteFile(path, []byte(`{"grpc":{"max_message_size_mb":600}}`), 0600)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for message size > 512")
 	}
 }

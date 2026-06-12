@@ -18,7 +18,7 @@ import (
 
 // StorageServer implements the StorageService gRPC service, wrapping
 // core's StorageOrchestrator so sidecar modules can access storage
-// without in-process Fabric access.
+// without in-process storage access.
 //
 // When a CallPolicyProvider is configured via SetCallPolicy(), every
 // storage operation checks whether the caller module has the \"storage\"
@@ -102,6 +102,14 @@ func (s *StorageServer) Put(stream storagev1.StorageService_PutServer) error {
 	// Write first chunk and remaining chunks asynchronously.
 	errCh := make(chan error, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("storage put writer panic recovered", "panic", r)
+				err := fmt.Errorf("storage put writer panic: %v", r)
+				pw.CloseWithError(err)
+				errCh <- err
+			}
+		}()
 		defer pw.Close()
 		// Write first chunk
 		chunk := firstReq.Chunk
@@ -189,7 +197,11 @@ func (s *StorageServer) Get(req *storagev1.GetRequest, stream storagev1.StorageS
 	if err != nil {
 		return status.Errorf(codes.NotFound, "get %q: %v", key, err)
 	}
-	defer reader.Close()
+	defer func() {
+		if reader != nil {
+			reader.Close()
+		}
+	}()
 
 	// Stat to get total size for the first chunk.
 	info, statErr := s.store.Stat(stream.Context(), key)
@@ -308,9 +320,7 @@ func (s *StorageServer) Capabilities(ctx context.Context, req *storagev1.Capabil
 		caps = []string{}
 	}
 
-	// Normalize capability names: "hardlinkable" from contracts matches
-	// the proto convention. The contracts use CamelCase interface names;
-	// we lower-case them for sidecar consumption.
+	// Capability names are lower-cased for sidecar consumption.
 	normalized := make([]string, 0, len(caps))
 	for _, c := range caps {
 		normalized = append(normalized, toSnakeCase(c))

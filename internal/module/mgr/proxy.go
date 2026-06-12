@@ -3,7 +3,6 @@ package mgr
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"sync"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
@@ -19,7 +18,7 @@ import (
 // process state (running, exited, or crashed).
 type SidecarProxy struct {
 	info    contracts.ModuleInfo
-	exitErr error // set when the process exits (nil = running)
+	exitErr error
 	exitMu  sync.RWMutex
 }
 
@@ -28,16 +27,8 @@ func NewSidecarProxy(info contracts.ModuleInfo) *SidecarProxy {
 	return &SidecarProxy{info: info}
 }
 
-// TrackProcess attaches the running process for health monitoring.
-// startErr is the error from cmd.Start() — nil means the process started.
-func (p *SidecarProxy) TrackProcess(cmd *exec.Cmd) {
-	go func() {
-		err := cmd.Wait()
-		p.exitMu.Lock()
-		p.exitErr = err
-		p.exitMu.Unlock()
-	}()
-}
+// TrackProcess is deprecated and unused. Use Manager.watchProcess /
+// proxy.setExit instead. Do not call — the goroutine races with setExit.
 
 func (p *SidecarProxy) Info() contracts.ModuleInfo    { return p.info }
 func (p *SidecarProxy) Init(_ context.Context) error  { return nil }
@@ -48,6 +39,14 @@ func (p *SidecarProxy) Stop(_ context.Context) error  { return nil }
 // describing the exit status (crashed, exited with non-zero code, etc.).
 // Returns nil for proxies that haven't been attached to a process yet
 // (registration order: proxy created before spawn).
+// setExit records the exit status of the tracked process.
+// Called by Manager.watchProcess — the sole owner of cmd.Wait().
+func (p *SidecarProxy) setExit(err error) {
+	p.exitMu.Lock()
+	p.exitErr = err
+	p.exitMu.Unlock()
+}
+
 func (p *SidecarProxy) Health(_ context.Context) error {
 	p.exitMu.RLock()
 	defer p.exitMu.RUnlock()
