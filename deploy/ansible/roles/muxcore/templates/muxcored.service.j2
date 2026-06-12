@@ -1,0 +1,37 @@
+[Unit]
+Description=MuxCore distributed fabric for media orchestration
+Documentation=https://github.com/Muxcore-Media/core
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ muxcore_system_user }}
+Group={{ muxcore_system_group }}
+EnvironmentFile=-{{ muxcore_config_dir }}/muxcore.conf
+ExecStart={{ muxcore_binary_path }} --tag {{ muxcore_tag }}
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+MemoryDenyWriteExecute=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+ReadWritePaths={{ muxcore_data_dir }} {{ muxcore_log_dir }}
+CapabilityBoundingSet=
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

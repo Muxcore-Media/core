@@ -1,0 +1,26 @@
+[Unit]
+Description=MuxCore module (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ module_user }}
+Group={{ module_group }}
+EnvironmentFile=/etc/muxcore/modules/%i/env
+ExecStart={{ module_binary_path }}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+MemoryDenyWriteExecute=true
+LockPersonality=true
+RestrictRealtime=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

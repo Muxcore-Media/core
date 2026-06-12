@@ -1,0 +1,28 @@
+# Default owner
+* @TheMinecraftGuyGuru
+
+# Core contracts (public API surface, requires careful review)
+/pkg/contracts/ @TheMinecraftGuyGuru
+
+# Internal packages
+/internal/api/ @TheMinecraftGuyGuru
+/internal/audit/ @TheMinecraftGuyGuru
+/internal/config/ @TheMinecraftGuyGuru
+/internal/events/ @TheMinecraftGuyGuru
+/internal/grpcmesh/ @TheMinecraftGuyGuru
+/internal/module/ @TheMinecraftGuyGuru
+/internal/registry/ @TheMinecraftGuyGuru
+/internal/storage/ @TheMinecraftGuyGuru
+
+# gRPC and protocol definitions
+/proto/ @TheMinecraftGuyGuru
+
+# SDK packages
+/sdk/ @TheMinecraftGuyGuru
+
+# CI/CD
+/.github/ @TheMinecraftGuyGuru
+
+# Security-sensitive files
+/SECURITY.md @TheMinecraftGuyGuru
+/SECURITY-AUDIT-*.md @TheMinecraftGuyGuru

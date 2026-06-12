@@ -157,11 +157,7 @@ func TestMyModule(t *testing.T) {
     reg  := mock.NewRegistry()
     stor := mock.NewStorage()
 
-    mod := NewMyModule(contracts.Fabric{
-        EventBus: bus,
-        Registry: reg,
-        Storage:  stor,
-    })
+    mod := NewMyModule(bus, reg, stor)
 
     mod.Init(context.Background())
 

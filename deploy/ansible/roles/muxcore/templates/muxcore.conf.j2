@@ -1,0 +1,37 @@
+# MuxCore Environment Configuration
+# Managed by Ansible — manual changes will be overwritten.
+
+# HTTP server
+MUXCORE_ADDR={{ muxcore_addr }}
+{% if muxcore_tls_cert %}
+MUXCORE_TLS_CERT={{ muxcore_tls_cert }}
+{% endif %}
+{% if muxcore_tls_key %}
+MUXCORE_TLS_KEY={{ muxcore_tls_key }}
+{% endif %}
+
+# gRPC mesh
+{% if muxcore_grpc_tls_cert %}
+MUXCORE_GRPC_TLS_CERT={{ muxcore_grpc_tls_cert }}
+{% endif %}
+{% if muxcore_grpc_tls_key %}
+MUXCORE_GRPC_TLS_KEY={{ muxcore_grpc_tls_key }}
+{% endif %}
+
+# Audit logging
+MUXCORE_AUDIT_PATH={{ muxcore_audit_path }}
+
+# Event WAL persistence
+MUXCORE_EVENT_JOURNAL_PATH={{ muxcore_event_journal_path }}
+
+# Logging
+MUXCORE_LOG_LEVEL={{ muxcore_log_level }}
+MUXCORE_LOG_FORMAT={{ muxcore_log_format }}
+
+# Cluster
+{% if muxcore_cluster_join_token %}
+MUXCORE_CLUSTER_JOIN_TOKEN={{ muxcore_cluster_join_token }}
+{% endif %}
+{% if muxcore_grpc_seed_nodes %}
+MUXCORE_GRPC_SEED_NODES={{ muxcore_grpc_seed_nodes }}
+{% endif %}

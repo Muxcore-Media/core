@@ -65,6 +65,9 @@ type funcHandler struct {
 }
 
 func (h *funcHandler) HandleCall(ctx context.Context, method string, payload []byte) ([]byte, error) {
+	if h.fn == nil {
+		return nil, fmt.Errorf("mock: handler function is nil")
+	}
 	return h.fn(ctx, method, payload)
 }
 

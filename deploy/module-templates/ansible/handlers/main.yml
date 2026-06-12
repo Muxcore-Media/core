@@ -1,0 +1,6 @@
+---
+- name: restart muxcore module
+  ansible.builtin.systemd:
+    name: "muxcore-module@{{ module_id }}"
+    state: restarted
+    daemon_reload: true

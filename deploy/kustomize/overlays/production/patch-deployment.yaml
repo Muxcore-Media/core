@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: muxcore
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: muxcore
+          resources:
+            requests:
+              cpu: 250m
+              memory: 128Mi
+            limits:
+              cpu: 2
+              memory: 1Gi
+          env:
+            - name: MUXCORE_LOG_LEVEL
+              value: info
+            - name: MUXCORE_LOG_FORMAT
+              value: json
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: muxcore

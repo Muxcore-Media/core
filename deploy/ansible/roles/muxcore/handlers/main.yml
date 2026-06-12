@@ -1,0 +1,11 @@
+---
+- name: Restart muxcore
+  ansible.builtin.systemd:
+    name: muxcored
+    state: restarted
+    daemon_reload: true
+
+- name: Reload muxcore
+  ansible.builtin.systemd:
+    name: muxcored
+    state: reloaded

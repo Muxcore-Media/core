@@ -1,0 +1,18 @@
+---
+- name: Deploy MuxCore
+  hosts: muxcore
+  become: true
+  roles:
+    - role: muxcore
+  vars:
+    # Install method — set muxcore_local_binary to copy from control machine,
+    # or leave empty and set muxcore_version to download from GitHub.
+    muxcore_version: latest
+    muxcore_local_binary: ""
+    muxcore_tag: default
+    muxcore_addr: ":8080"
+    muxcore_log_level: info
+    muxcore_log_format: text
+    muxcore_configure_firewall: false
+    muxcore_logrotate_enable: true
+    muxcore_logrotate_retention_days: 90

@@ -1,0 +1,30 @@
+---
+muxcore_version: latest
+muxcore_release_download: true
+muxcore_binary_path: /usr/local/bin/muxcored
+muxcore_local_binary: ""
+muxcore_system_user: muxcore
+muxcore_system_group: muxcore
+muxcore_config_dir: /etc/muxcore
+muxcore_data_dir: /var/lib/muxcore
+muxcore_log_dir: /var/log/muxcore
+muxcore_addr: ":8080"
+muxcore_tag: default
+muxcore_log_level: info
+muxcore_log_format: text
+muxcore_config_json: {}
+muxcore_audit_path: /var/log/muxcore/audit.jsonl
+muxcore_event_journal_path: /var/lib/muxcore/events
+muxcore_tls_cert: ""
+muxcore_tls_key: ""
+muxcore_grpc_tls_cert: ""
+muxcore_grpc_tls_key: ""
+muxcore_cluster_join_token: ""
+muxcore_grpc_seed_nodes: ""
+muxcore_configure_firewall: false
+muxcore_firewall_ports:
+  - "8080/tcp"
+muxcore_logrotate_enable: true
+muxcore_logrotate_retention_days: 90
+muxcore_github_owner: Muxcore-Media
+muxcore_github_repo: core
