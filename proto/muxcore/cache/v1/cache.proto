@@ -1,0 +1,50 @@
+syntax = "proto3";
+package muxcore.cache.v1;
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/cache/v1;cachev1";
+
+service CacheLayerService {
+  rpc Get(GetCacheLayerRequest) returns (GetCacheLayerResponse);
+  rpc Set(SetCacheLayerRequest) returns (SetCacheLayerResponse);
+  rpc Invalidate(InvalidateCacheLayerRequest) returns (InvalidateCacheLayerResponse);
+}
+
+message GetCacheLayerRequest { string key = 1; }
+message GetCacheLayerResponse { bytes value = 1; bool found = 2; }
+message SetCacheLayerRequest { string key = 1; bytes value = 2; }
+message SetCacheLayerResponse { string status = 1; }
+message InvalidateCacheLayerRequest { string prefix = 1; }
+message InvalidateCacheLayerResponse { string status = 1; }
+
+service CacheService {
+  rpc Get(GetCacheRequest) returns (GetCacheResponse);
+  rpc Set(SetCacheRequest) returns (SetCacheResponse);
+  rpc Delete(DeleteCacheRequest) returns (DeleteCacheResponse);
+  rpc Exists(ExistsCacheRequest) returns (ExistsCacheResponse);
+  rpc Incr(IncrCacheRequest) returns (IncrCacheResponse);
+  rpc CompareAndSwap(CompareAndSwapCacheRequest) returns (CompareAndSwapCacheResponse);
+  rpc Lock(LockCacheRequest) returns (LockCacheResponse);
+  rpc Unlock(UnlockCacheRequest) returns (UnlockCacheResponse);
+  rpc Publish(PublishCacheRequest) returns (PublishCacheResponse);
+  rpc Subscribe(SubscribeCacheRequest) returns (stream SubscribeCacheResponse);
+}
+
+message GetCacheRequest { string key = 1; }
+message GetCacheResponse { string key = 1; bytes value = 2; bool found = 3; }
+message SetCacheRequest { string key = 1; bytes value = 2; int64 ttl_seconds = 3; }
+message SetCacheResponse { string status = 1; }
+message DeleteCacheRequest { repeated string keys = 1; }
+message DeleteCacheResponse { int32 deleted = 1; }
+message ExistsCacheRequest { string key = 1; }
+message ExistsCacheResponse { bool exists = 1; }
+message IncrCacheRequest { string key = 1; int64 delta = 2; }
+message IncrCacheResponse { int64 value = 1; }
+message CompareAndSwapCacheRequest { string key = 1; bytes old_value = 2; bytes new_value = 3; }
+message CompareAndSwapCacheResponse { bool swapped = 1; }
+message LockCacheRequest { string key = 1; int64 ttl_seconds = 2; }
+message LockCacheResponse { string key = 1; string token = 2; bool acquired = 3; }
+message UnlockCacheRequest { string token = 1; }
+message UnlockCacheResponse { string status = 1; }
+message PublishCacheRequest { string channel = 1; bytes message = 2; }
+message PublishCacheResponse {}
+message SubscribeCacheRequest { string channel = 1; }
+message SubscribeCacheResponse { string channel = 1; bytes message = 2; }

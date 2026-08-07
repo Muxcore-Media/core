@@ -1,0 +1,12 @@
+syntax = "proto3";
+package muxcore.featureflags.v1;
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/featureflags/v1;featureflagsv1";
+
+service FeatureFlagsService {
+  rpc IsEnabled(IsEnabledRequest) returns (IsEnabledResponse);
+  rpc GetVariant(GetVariantRequest) returns (GetVariantResponse);
+}
+message IsEnabledRequest { string flag = 1; bool default_value = 2; }
+message IsEnabledResponse { bool enabled = 1; }
+message GetVariantRequest { string flag = 1; string default_value = 2; }
+message GetVariantResponse { string variant = 1; }

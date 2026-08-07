@@ -1,0 +1,27 @@
+syntax = "proto3";
+package muxcore.metrics.v1;
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/metrics/v1;metricsv1";
+
+message LabelPair { string name = 1; string value = 2; }
+service MetricsService {
+  rpc RegisterCounter(RegisterCounterRequest) returns (RegisterCounterResponse);
+  rpc RegisterGauge(RegisterGaugeRequest) returns (RegisterGaugeResponse);
+  rpc RegisterHistogram(RegisterHistogramRequest) returns (RegisterHistogramResponse);
+  rpc IncrementCounter(IncrementCounterRequest) returns (IncrementCounterResponse);
+  rpc SetGauge(SetGaugeRequest) returns (SetGaugeResponse);
+  rpc ObserveHistogram(ObserveHistogramRequest) returns (ObserveHistogramResponse);
+}
+message RegisterCounterRequest { string name = 1; string help = 2; repeated LabelPair labels = 3; }
+message RegisterCounterResponse { string status = 1; }
+message RegisterGaugeRequest { string name = 1; string help = 2; repeated LabelPair labels = 3; }
+message RegisterGaugeResponse { string status = 1; }
+message RegisterHistogramRequest {
+  string name = 1; string help = 2; repeated LabelPair labels = 3; repeated double buckets = 4;
+}
+message RegisterHistogramResponse { string status = 1; }
+message IncrementCounterRequest { string name = 1; repeated LabelPair labels = 2; double delta = 3; }
+message IncrementCounterResponse { string status = 1; }
+message SetGaugeRequest { string name = 1; repeated LabelPair labels = 2; double value = 3; }
+message SetGaugeResponse { string status = 1; }
+message ObserveHistogramRequest { string name = 1; repeated LabelPair labels = 2; double value = 3; }
+message ObserveHistogramResponse { string status = 1; }
