@@ -3,11 +3,13 @@ package grpcmesh
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	authv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/auth/v1"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
 
 // SidecarAuthProvider wraps a gRPC connection to a sidecar module's AuthService
@@ -94,7 +96,11 @@ func NewSidecarIdentityProvider(conn *grpc.ClientConn) *SidecarIdentityProvider 
 }
 
 func (s *SidecarIdentityProvider) ExtractIdentity(ctx context.Context) (*contracts.Identity, error) {
-	resp, err := s.client.ExtractIdentity(ctx, &authv1.ExtractIdentityRequest{})
+	token, callerID := identityHintsFromContext(ctx)
+	resp, err := s.client.ExtractIdentity(ctx, &authv1.ExtractIdentityRequest{
+		Token:    token,
+		CallerId: callerID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("sidecar auth identity: %w", err)
 	}
@@ -106,4 +112,30 @@ func (s *SidecarIdentityProvider) ExtractIdentity(ctx context.Context) (*contrac
 		Kind:  resp.Kind,
 		Roles: resp.Roles,
 	}, nil
+}
+
+// identityHintsFromContext pulls bearer token / caller id from gRPC metadata.
+// Incoming metadata is used on the server interceptor path; outgoing is checked
+// so unit tests and client-side helpers can supply the same keys.
+func identityHintsFromContext(ctx context.Context) (token, callerID string) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		md, ok = metadata.FromOutgoingContext(ctx)
+	}
+	if !ok {
+		return "", ""
+	}
+	if vals := md.Get("authorization"); len(vals) > 0 && vals[0] != "" {
+		auth := vals[0]
+		const prefix = "Bearer "
+		if len(auth) > len(prefix) && strings.EqualFold(auth[:len(prefix)], prefix) {
+			token = strings.TrimSpace(auth[len(prefix):])
+		} else {
+			token = strings.TrimSpace(auth)
+		}
+	}
+	if vals := md.Get("x-caller-id"); len(vals) > 0 {
+		callerID = vals[0]
+	}
+	return token, callerID
 }
