@@ -1,0 +1,83 @@
+syntax = "proto3";
+package muxcore.workflow.v1;
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/workflow/v1;workflowv1";
+
+service WorkflowService {
+  rpc RegisterDefinition(RegisterDefinitionRequest) returns (RegisterDefinitionResponse);
+  rpc RemoveDefinition(RemoveDefinitionRequest) returns (RemoveDefinitionResponse);
+  rpc GetDefinition(GetDefinitionRequest) returns (GetDefinitionResponse);
+  rpc ListDefinitions(ListDefinitionsRequest) returns (ListDefinitionsResponse);
+  rpc Run(RunRequest) returns (RunResponse);
+  rpc Status(StatusRequest) returns (StatusResponse);
+  rpc Cancel(CancelRequest) returns (CancelResponse);
+  rpc Pause(PauseRequest) returns (PauseResponse);
+  rpc Resume(ResumeRequest) returns (ResumeResponse);
+  rpc ListRuns(ListRunsRequest) returns (ListRunsResponse);
+}
+
+message StepHandler { string kind = 1; string ref = 2; }
+
+message TapestryStep {
+  string name = 1;
+  StepHandler handler = 2;
+  repeated string depends_on = 3;
+  int32 retry = 4;
+  int64 timeout_seconds = 5;
+  map<string, string> input_mapping = 6;
+  map<string, string> meta = 7;
+}
+
+message TapestryDefinition {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string version = 4;
+  repeated TapestryStep steps = 5;
+}
+
+message StepResult {
+  string step_name = 1;
+  string status = 2;
+  string error = 3;
+  int32 attempt = 4;
+  int32 max_retries = 5;
+  int64 started_at_unix = 6;
+  int64 ended_at_unix = 7;
+  map<string, string> output = 8;
+}
+
+message TapestryRun {
+  string id = 1;
+  string definition_id = 2;
+  string status = 3;
+  map<string, string> input = 4;
+  int64 started_at_unix = 5;
+  int64 ended_at_unix = 6;
+  string current_step = 7;
+  string error = 8;
+  repeated StepResult step_results = 9;
+}
+
+message RegisterDefinitionRequest { TapestryDefinition definition = 1; }
+message RegisterDefinitionResponse { string status = 1; }
+message RemoveDefinitionRequest { string definition_id = 1; }
+message RemoveDefinitionResponse { string status = 1; }
+message GetDefinitionRequest { string definition_id = 1; }
+message GetDefinitionResponse { TapestryDefinition definition = 1; }
+message ListDefinitionsRequest {}
+message ListDefinitionsResponse { repeated TapestryDefinition definitions = 1; }
+message RunRequest { string definition_id = 1; map<string, string> input = 2; }
+message RunResponse { string run_id = 1; string status = 2; }
+message StatusRequest { string run_id = 1; }
+message StatusResponse { TapestryRun run = 1; }
+message CancelRequest { string run_id = 1; }
+message CancelResponse { string status = 1; }
+message PauseRequest { string run_id = 1; }
+message PauseResponse { string status = 1; }
+message ResumeRequest { string run_id = 1; }
+message ResumeResponse { string status = 1; }
+message ListRunsRequest {
+  string status_filter = 1;
+  string definition_id_filter = 2;
+}
+message ListRunsResponse { repeated TapestryRun runs = 1; }

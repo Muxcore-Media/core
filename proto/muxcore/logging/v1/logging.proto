@@ -1,0 +1,26 @@
+syntax = "proto3";
+package muxcore.logging.v1;
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/logging/v1;loggingv1";
+
+enum Level {
+  LEVEL_UNSPECIFIED = 0;
+  LEVEL_DEBUG = 1;
+  LEVEL_INFO = 2;
+  LEVEL_WARN = 3;
+  LEVEL_ERROR = 4;
+}
+
+service LogService {
+  rpc Log(LogRequest) returns (LogResponse);
+  rpc SetLevel(SetLevelRequest) returns (SetLevelResponse);
+}
+
+message LogRequest {
+  Level level = 1;
+  string message = 2;
+  map<string, string> fields = 3;
+  string source_module = 4;
+}
+message LogResponse {}
+message SetLevelRequest { Level level = 1; }
+message SetLevelResponse { Level previous_level = 1; }

@@ -1,0 +1,12 @@
+syntax = "proto3";
+package muxcore.ratelimit.v1;
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/ratelimit/v1;ratelimitv1";
+
+service RateLimitService {
+  rpc Allow(AllowRequest) returns (AllowResponse);
+  rpc Enabled(EnabledRequest) returns (EnabledResponse);
+}
+message AllowRequest { string key = 1; }
+message AllowResponse { bool allowed = 1; }
+message EnabledRequest {}
+message EnabledResponse { bool enabled = 1; }
