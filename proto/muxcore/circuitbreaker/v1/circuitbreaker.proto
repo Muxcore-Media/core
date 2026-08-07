@@ -1,0 +1,31 @@
+syntax = "proto3";
+package muxcore.circuitbreaker.v1;
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/circuitbreaker/v1;circuitbreakerv1";
+
+enum CircuitState {
+  CIRCUIT_STATE_UNSPECIFIED = 0;
+  CIRCUIT_STATE_CLOSED = 1;
+  CIRCUIT_STATE_OPEN = 2;
+  CIRCUIT_STATE_HALF_OPEN = 3;
+}
+
+service CircuitBreakerService {
+  rpc State(StateRequest) returns (StateResponse);
+  rpc RecordSuccess(RecordSuccessRequest) returns (RecordSuccessResponse);
+  rpc RecordFailure(RecordFailureRequest) returns (RecordFailureResponse);
+  rpc Reset(ResetRequest) returns (ResetResponse);
+}
+
+message StateRequest { string key = 1; }
+message StateResponse {
+  CircuitState state = 1;
+  uint32 failure_count = 2;
+  int64 opened_at_unix_nano = 3;
+  int64 half_open_after_unix_nano = 4;
+}
+message RecordSuccessRequest { string key = 1; }
+message RecordSuccessResponse { CircuitState new_state = 1; }
+message RecordFailureRequest { string key = 1; }
+message RecordFailureResponse { CircuitState new_state = 1; bool circuit_just_opened = 2; }
+message ResetRequest { string key = 1; }
+message ResetResponse { CircuitState previous_state = 1; }
