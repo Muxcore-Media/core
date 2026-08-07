@@ -362,6 +362,16 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		degraded := false
 		modules := make(map[string]string, len(moduleHealth))
 		for id, err := range moduleHealth {
+			// Keys prefixed with "_" are informational metadata (uptime, version),
+			// not failure probes — include them without marking the system degraded.
+			if len(id) > 0 && id[0] == '_' {
+				if err != nil {
+					modules[id] = err.Error()
+				} else {
+					modules[id] = "ok"
+				}
+				continue
+			}
 			if err != nil {
 				modules[id] = "error"
 				degraded = true
