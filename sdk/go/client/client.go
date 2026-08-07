@@ -29,12 +29,15 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	auditv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/audit/v1"
 	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
@@ -196,6 +199,23 @@ func DialWithAddrs(addrs []string, opts ...Option) (*Client, error) {
 		grpc.MaxCallSendMsgSize(defaultMaxMsgBytes),
 	)
 	do.grpcOpts = append([]grpc.DialOption{msgSizeOpt}, do.grpcOpts...)
+
+	// Identify this process as a mesh module when MUXCORE_MODULE_ID is set so
+	// EventService/Publish (and other gated RPCs) can attribute the caller.
+	if mid := strings.TrimSpace(os.Getenv("MUXCORE_MODULE_ID")); mid != "" {
+		do.grpcOpts = append(do.grpcOpts, grpc.WithUnaryInterceptor(func(
+			ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption,
+		) error {
+			ctx = metadata.AppendToOutgoingContext(ctx, "x-caller-id", mid)
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}))
+		do.grpcOpts = append(do.grpcOpts, grpc.WithStreamInterceptor(func(
+			ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption,
+		) (grpc.ClientStream, error) {
+			ctx = metadata.AppendToOutgoingContext(ctx, "x-caller-id", mid)
+			return streamer(ctx, desc, cc, method, opts...)
+		}))
+	}
 
 	conn, err := grpc.NewClient(allAddrs[0], do.grpcOpts...)
 	if err != nil {
