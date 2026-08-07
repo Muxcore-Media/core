@@ -1,0 +1,17 @@
+syntax = "proto3";
+package muxcore.serialization.v1;
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/serialization/v1;serializationv1";
+
+service SerializationService {
+  rpc Convert(ConvertRequest) returns (ConvertResponse);
+  rpc SupportedTypes(SupportedTypesRequest) returns (SupportedTypesResponse);
+}
+
+message ConvertRequest {
+  string source_content_type = 1;
+  string target_content_type = 2;
+  bytes data = 3;
+}
+message ConvertResponse { bytes result = 1; }
+message SupportedTypesRequest {}
+message SupportedTypesResponse { repeated string content_types = 1; }

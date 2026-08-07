@@ -1,0 +1,22 @@
+syntax = "proto3";
+package muxcore.healthmonitor.v1;
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/healthmonitor/v1;healthmonitorv1";
+
+service HealthMonitorService {
+  rpc ReportHealth(ReportHealthRequest) returns (ReportHealthResponse);
+  rpc PublishEvent(PublishEventRequest) returns (PublishEventResponse);
+}
+
+message ModuleHealth {
+  string module_id = 1;
+  string state = 2;   // e.g. "running", "degraded"
+  string error = 3;
+}
+message ReportHealthRequest { repeated ModuleHealth modules = 1; }
+message ReportHealthResponse { string status = 1; }
+message PublishEventRequest {
+  string event_type = 1;
+  string module_id = 2;
+  string message = 3;
+}
+message PublishEventResponse { string status = 1; }

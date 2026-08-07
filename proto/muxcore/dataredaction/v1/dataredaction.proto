@@ -1,0 +1,13 @@
+syntax = "proto3";
+package muxcore.dataredaction.v1;
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/dataredaction/v1;dataredactionv1";
+
+service DataRedactionService {
+  rpc Redact(RedactRequest) returns (RedactResponse);
+  rpc SupportedRules(SupportedRulesRequest) returns (SupportedRulesResponse);
+}
+
+message RedactRequest { bytes data = 1; repeated string rules = 2; }
+message RedactResponse { bytes data = 1; }
+message SupportedRulesRequest {}
+message SupportedRulesResponse { repeated string rule_types = 1; }
