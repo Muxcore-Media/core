@@ -26,7 +26,7 @@ type MovieAddedPayload struct {
 	Title   string `json:"title"`
 	MovieID string `json:"movie_id"`
 	TMDBID  int32  `json:"tmdb_id"`
-	Year    int    `json:"year,omitempty"`
+	Year    int32  `json:"year,omitempty"`
 }
 
 type MovieRemovedPayload struct {
@@ -60,7 +60,7 @@ type TVEpisodeFileAddedPayload struct {
 type FileImportedPayload struct {
 	MediaType       string `json:"media_type"`
 	Title           string `json:"title"`
-	Year            int    `json:"year,omitempty"`
+	Year            int32  `json:"year,omitempty"`
 	TMDBID          int32  `json:"tmdb_id,omitempty"`
 	SeasonNumber    int    `json:"season_number,omitempty"`
 	EpisodeNumber   int    `json:"episode_number,omitempty"`
