@@ -50,6 +50,7 @@ var moduleRegistrationMethods = map[string]bool{
 	"/muxcore.events.v1.EventService/Subscribe":               true,
 	"/muxcore.events.v1.EventService/Unsubscribe":             true,
 	"/muxcore.events.v1.EventService/GetStats":                true,
+	"/muxcore.events.v1.EventService/Publish":                 true,
 	"/muxcore.health.v1.HealthService/Check":                  true,
 }
 
