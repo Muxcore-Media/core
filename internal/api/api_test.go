@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -83,6 +84,35 @@ func TestHealthEndpoint_Degraded(t *testing.T) {
 	srv.mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHealthEndpoint_UnderscoreMetadataDoesNotDegrade(t *testing.T) {
+	os.Setenv("MUXCORE_DEV_TLS_SKIP", "true")
+	srv := NewServer(":0", "", "")
+	srv.SetHealthChecker(func() map[string]error {
+		return map[string]error{
+			"core.storage": nil,
+			"_uptime":      fmt.Errorf("1s"),
+			"_version":     fmt.Errorf("ok"),
+		}
+	})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["status"] != "ok" {
+		t.Errorf("status=%v want ok", body["status"])
+	}
+	mods, _ := body["modules"].(map[string]any)
+	if mods["_uptime"] != "1s" || mods["_version"] != "ok" {
+		t.Errorf("modules=%v", mods)
 	}
 }
 
