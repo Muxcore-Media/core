@@ -17,6 +17,7 @@ type SettingDef struct {
 	Label       string // human-readable label, e.g. "Jackett Server URL"
 	Type        SettingType
 	Default     string // default value as a string
+	Value       string // current value as shown to admin UI (may be masked for secrets)
 	Description string // help text
 	Required    bool
 	Options     []string // for SettingTypeSelect: allowed values
