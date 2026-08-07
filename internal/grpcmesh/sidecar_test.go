@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -332,7 +333,13 @@ func TestSidecarAuthorizer_Can_GRPCError(t *testing.T) {
 
 func TestSidecarIdentityProvider_ExtractIdentity_Found(t *testing.T) {
 	conn := startTestAuthServer(t, &fakeAuthServer{
-		extractIdFn: func(_ context.Context, _ *authv1.ExtractIdentityRequest) (*authv1.ExtractIdentityResponse, error) {
+		extractIdFn: func(_ context.Context, req *authv1.ExtractIdentityRequest) (*authv1.ExtractIdentityResponse, error) {
+			if req.GetToken() != "sess-token" {
+				t.Errorf("Token = %q, want %q", req.GetToken(), "sess-token")
+			}
+			if req.GetCallerId() != "svc-1" {
+				t.Errorf("CallerId = %q, want %q", req.GetCallerId(), "svc-1")
+			}
 			return &authv1.ExtractIdentityResponse{
 				Found: true,
 				Id:    "id-1",
@@ -342,7 +349,11 @@ func TestSidecarIdentityProvider_ExtractIdentity_Found(t *testing.T) {
 		},
 	})
 	ip := NewSidecarIdentityProvider(conn)
-	ident, err := ip.ExtractIdentity(context.Background())
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		"authorization", "Bearer sess-token",
+		"x-caller-id", "svc-1",
+	))
+	ident, err := ip.ExtractIdentity(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
