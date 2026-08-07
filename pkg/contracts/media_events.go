@@ -58,16 +58,19 @@ type TVEpisodeFileAddedPayload struct {
 }
 
 type FileImportedPayload struct {
-	MediaType       string `json:"media_type"`
-	Title           string `json:"title"`
-	Year            int32  `json:"year,omitempty"`
-	TMDBID          int32  `json:"tmdb_id,omitempty"`
-	SeasonNumber    int    `json:"season_number,omitempty"`
-	EpisodeNumber   int    `json:"episode_number,omitempty"`
-	OriginalPath    string `json:"original_path,omitempty"`
-	StorageKey      string `json:"storage_key,omitempty"`
-	DestinationPath string `json:"destination_path,omitempty"`
-	Quality         string `json:"quality,omitempty"`
+	MediaType       string  `json:"media_type"`
+	Title           string  `json:"title"`
+	Year            int32   `json:"year,omitempty"`
+	TMDBID          int32   `json:"tmdb_id,omitempty"`
+	SeasonNumber    int32   `json:"season_number,omitempty"`
+	EpisodeNumber   int32   `json:"episode_number,omitempty"`
+	EpisodeNumbers  []int32 `json:"episode_numbers,omitempty"`
+	AbsoluteNumber  int32   `json:"absolute_number,omitempty"`
+	AirDate         string  `json:"air_date,omitempty"`
+	OriginalPath    string  `json:"original_path,omitempty"`
+	StorageKey      string  `json:"storage_key,omitempty"`
+	DestinationPath string  `json:"destination_path,omitempty"`
+	Quality         string  `json:"quality,omitempty"`
 }
 
 type DownloadEventFile struct {
