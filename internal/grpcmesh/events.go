@@ -69,9 +69,23 @@ func (s *EventServer) Publish(ctx context.Context, req *eventsv1.PublishRequest)
 	if err := s.checkAuth(ctx); err != nil {
 		return nil, err
 	}
+	// Allowlist path stamps callerid "_public"; prefer module identity from
+	// metadata / event source so publish-policy can authorize the real caller.
+	if id := callerid.Get(ctx); id == "" || id == "_public" {
+		if md, ok := metadata.FromIncomingContext(ctx); ok {
+			if ids := md.Get("x-caller-id"); len(ids) > 0 && ids[0] != "" {
+				ctx = callerid.Set(ctx, ids[0])
+			}
+		}
+	}
 	pb := req.GetEvent()
 	if pb == nil {
 		return nil, status.Error(codes.InvalidArgument, "event is required")
+	}
+	if id := callerid.Get(ctx); id == "" || id == "_public" {
+		if pb.GetSource() != "" {
+			ctx = callerid.Set(ctx, pb.GetSource())
+		}
 	}
 	if len(pb.GetPayload()) > maxEventPayloadSize {
 		return nil, status.Errorf(codes.InvalidArgument, "event payload exceeds maximum size %d bytes", maxEventPayloadSize)
