@@ -1,0 +1,18 @@
+syntax = "proto3";
+package muxcore.encryption.v1;
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/encryption/v1;encryptionv1";
+
+service EncryptionService {
+  rpc Encrypt(EncryptRequest) returns (EncryptResponse);
+  rpc Decrypt(DecryptRequest) returns (DecryptResponse);
+  rpc RotateKey(RotateKeyRequest) returns (RotateKeyResponse);
+  rpc Available(AvailableRequest) returns (AvailableResponse);
+}
+message EncryptRequest { bytes plaintext = 1; }
+message EncryptResponse { bytes ciphertext = 1; }
+message DecryptRequest { bytes ciphertext = 1; }
+message DecryptResponse { bytes plaintext = 1; }
+message RotateKeyRequest {}
+message RotateKeyResponse {}
+message AvailableRequest {}
+message AvailableResponse { bool available = 1; }

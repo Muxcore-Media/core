@@ -1,0 +1,48 @@
+syntax = "proto3";
+package muxcore.database.v1;
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/database/v1;databasev1";
+
+service DatabaseService {
+  rpc Exec(ExecRequest) returns (ExecResponse);
+  rpc Query(QueryRequest) returns (QueryResponse);
+  rpc Transaction(TransactionRequest) returns (TransactionResponse);
+  rpc Migrate(MigrateRequest) returns (MigrateResponse);
+  rpc Rollback(RollbackRequest) returns (RollbackResponse);
+}
+
+message Value {
+  oneof kind {
+    string string_val = 1;
+    int64 int_val = 2;
+    double float_val = 3;
+    bool bool_val = 4;
+    bytes bytes_val = 5;
+    bool null_val = 6;
+  }
+}
+
+message ExecRequest { string query = 1; repeated Value args = 2; }
+message ExecResponse { int64 rows_affected = 1; }
+
+message QueryRequest { string query = 1; repeated Value args = 2; }
+message Row { repeated Value values = 1; }
+message QueryResponse {
+  repeated string columns = 1;
+  repeated Row rows = 2;
+  int32 count = 3;
+}
+
+message Statement { string query = 1; repeated Value args = 2; }
+message TransactionRequest { repeated Statement statements = 1; }
+message TransactionResponse { string status = 1; }
+
+message Migration {
+  int32 version = 1;
+  string name = 2;
+  string up_sql = 3;
+  string down_sql = 4;
+}
+message MigrateRequest { repeated Migration migrations = 1; }
+message MigrateResponse { string status = 1; }
+message RollbackRequest { int32 target_version = 1; }
+message RollbackResponse { string status = 1; }

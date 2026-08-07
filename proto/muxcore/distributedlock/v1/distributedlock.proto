@@ -1,0 +1,16 @@
+syntax = "proto3";
+package muxcore.distributedlock.v1;
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/distributedlock/v1;distributedlockv1";
+
+service DistributedLockService {
+  rpc Acquire(AcquireRequest) returns (AcquireResponse);
+  rpc Unlock(UnlockRequest) returns (UnlockResponse);
+  rpc Renew(RenewRequest) returns (RenewResponse);
+}
+
+message AcquireRequest { string key = 1; string holder_id = 2; int64 ttl_ms = 3; }
+message AcquireResponse { bool acquired = 1; string lock_token = 2; string error = 3; }
+message UnlockRequest { string key = 1; string lock_token = 2; }
+message UnlockResponse { bool released = 1; }
+message RenewRequest { string key = 1; string lock_token = 2; int64 ttl_ms = 3; }
+message RenewResponse { bool renewed = 1; }

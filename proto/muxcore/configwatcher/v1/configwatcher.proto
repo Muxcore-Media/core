@@ -1,0 +1,13 @@
+syntax = "proto3";
+package muxcore.configwatcher.v1;
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/configwatcher/v1;configwatcherv1";
+
+service ConfigWatcherService {
+  rpc WatchChanges(WatchChangesRequest) returns (stream WatchChangesResponse);
+}
+message WatchChangesRequest { string capability = 1; }
+message WatchChangesResponse {
+  string event_type = 1;
+  string module_id = 2;
+  string capability = 3;
+}

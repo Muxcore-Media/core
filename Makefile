@@ -79,7 +79,26 @@ proto:
 		proto/muxcore/module/v1/*.proto \
 		proto/muxcore/spool/v1/*.proto \
 		proto/muxcore/lifecycle/v1/*.proto \
-		proto/muxcore/audit/v1/*.proto
+		proto/muxcore/audit/v1/*.proto \
+		proto/muxcore/auth/v1/*.proto \
+		proto/muxcore/policy/v1/*.proto \
+		proto/muxcore/cache/v1/*.proto \
+		proto/muxcore/serialization/v1/*.proto \
+		proto/muxcore/database/v1/*.proto \
+		proto/muxcore/healthmonitor/v1/*.proto \
+		proto/muxcore/tracing/v1/*.proto \
+		proto/muxcore/logging/v1/*.proto \
+		proto/muxcore/secrets/v1/*.proto \
+		proto/muxcore/distributedlock/v1/*.proto \
+		proto/muxcore/circuitbreaker/v1/*.proto \
+		proto/muxcore/dataredaction/v1/*.proto \
+		proto/muxcore/spoolresolver/v1/*.proto \
+		proto/muxcore/workflow/v1/*.proto \
+		proto/muxcore/encryption/v1/*.proto \
+		proto/muxcore/featureflags/v1/*.proto \
+		proto/muxcore/metrics/v1/*.proto \
+		proto/muxcore/ratelimit/v1/*.proto \
+		proto/muxcore/configwatcher/v1/*.proto
 
 ci: lint-all test-all build build-modules
 
