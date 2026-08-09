@@ -364,7 +364,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		for id, err := range moduleHealth {
 			// Keys prefixed with "_" are informational metadata (uptime, version),
 			// not failure probes — include them without marking the system degraded.
-			if len(id) > 0 && id[0] == '_' {
+			if id != "" && id[0] == '_' {
 				if err != nil {
 					modules[id] = err.Error()
 				} else {
