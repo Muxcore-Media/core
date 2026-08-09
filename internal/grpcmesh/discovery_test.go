@@ -594,3 +594,36 @@ func TestLocalNode_NoModuleIDs(t *testing.T) {
 		t.Errorf("expected nil modules when moduleIDs is nil, got %v", node.Modules)
 	}
 }
+
+func TestMembers_LocalModulesRefresh(t *testing.T) {
+	ds := newDS("node-a", "node-a", "node-b")
+	ds.leaderID = "node-a"
+	ds.term = 1
+	ds.moduleIDs = func() ([]string, map[string]string) {
+		return []string{"media-movies", "auth-local"}, map[string]string{"media-movies": ""}
+	}
+
+	ctx := callerid.Set(context.Background(), "_public")
+	resp, err := ds.Members(ctx, &discoveryv1.MembersRequest{})
+	if err != nil {
+		t.Fatalf("Members: %v", err)
+	}
+	var local *discoveryv1.NodeInfo
+	for _, m := range resp.Members {
+		if m.GetId() == "node-a" {
+			local = m
+		}
+		if m.GetId() == "node-b" && len(m.GetModules()) != 0 {
+			t.Errorf("peer node-b should keep stored modules (empty), got %v", m.GetModules())
+		}
+	}
+	if local == nil {
+		t.Fatal("local node-a missing from Members")
+	}
+	if len(local.GetModules()) != 2 {
+		t.Fatalf("local modules: got %v", local.GetModules())
+	}
+	if local.GetModuleHealth()["media-movies"] != "" {
+		t.Errorf("unexpected health error: %q", local.GetModuleHealth()["media-movies"])
+	}
+}
