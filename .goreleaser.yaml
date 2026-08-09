@@ -35,6 +35,21 @@ archives:
       - LICENSE
       - README.md
 
+# GHCR image (lowercase owner required). Needs Docker on the runner + packages:write.
+dockers:
+  - id: muxcored-linux-amd64
+    ids:
+      - muxcored
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile.goreleaser
+    image_templates:
+      - "ghcr.io/muxcore-media/muxcored:{{ .Version }}"
+      - "ghcr.io/muxcore-media/muxcored:{{ .Tag }}"
+      - "ghcr.io/muxcore-media/core:{{ .Version }}"
+      - "ghcr.io/muxcore-media/core:{{ .Tag }}"
+    skip_push: false
+
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
   algorithm: sha256
