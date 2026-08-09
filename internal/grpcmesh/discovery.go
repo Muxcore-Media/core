@@ -387,6 +387,20 @@ func (s *DiscoveryServer) Members(ctx context.Context, req *discoveryv1.MembersR
 	s.mu.RLock()
 	memberList := make([]*discoveryv1.NodeInfo, 0, len(s.members))
 	for _, m := range s.members {
+		if m.GetId() == s.nodeID && s.moduleIDs != nil {
+			// Refresh local node module list (heartbeats already send this to peers;
+			// single-node MVP never updates the stored member entry otherwise).
+			ids, health := s.moduleIDs()
+			cloned := &discoveryv1.NodeInfo{
+				Id:           m.GetId(),
+				GrpcAddr:     m.GetGrpcAddr(),
+				HttpAddr:     m.GetHttpAddr(),
+				Modules:      ids,
+				ModuleHealth: health,
+			}
+			memberList = append(memberList, cloned)
+			continue
+		}
 		memberList = append(memberList, m)
 	}
 	leaderID := s.leaderID
