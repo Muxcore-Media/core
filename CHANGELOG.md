@@ -7,47 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.5.0] — 2026-08-08 — Discovery allowlist + Members module list
+
 ### Added
 
-- Cluster adapter wrapping `DiscoveryServer` to implement `contracts.Cluster` with event polling for cross-node module call routing
-- Local filesystem `StorageProvider` (`internal/storage/local`) with atomic writes, metadata tracking, and streaming support
-- Storage tiering — `DiscoverTiers`, `Promote`, `Relegate` with tier-aware provider routing (hot > warm > cold > archive)
-- Standard gRPC health probe (`grpc.health.v1`) for K8s compatibility
-- `SetProvider` method on orchestrator for built-in providers
-- Configuration env vars: `MUXCORE_STORAGE_DIR`, `MUXCORE_STORAGE_{READ,WRITE,DELETE}_TIMEOUT`, `MUXCORE_AUDIT_MAX_SIZE_MB`, `MUXCORE_AUDIT_MAX_ROTATED_FILES`
-
-### Changed
-
-- Event bus WAL flushes and drains in-flight events on close (`MemoryBus.Close()`)
-- WAL replay timeout is now configurable via `WALReplayTimeout` field
-- Discovery server double-close guarded with `sync.Once`
-- Checksum verification for module resolution is now mandatory
-- Missing security capability warnings upgraded to ERROR level
-- gRPC error responses sanitized to prevent info leakage
-- Storage key namespace isolation enforced per-module
-- Audit exports streamed instead of buffered fully in memory
+- Public discovery allowlist entries for `ListAll`, `Watch`, and `FindByRole` (alongside existing `Members` / `Resolve` / `FindByCapability`) so operator UIs and peer fan-out work without a bearer mesh identity
+- `Members` refreshes the local node's `Modules` / `ModuleHealth` from `moduleIDs()` so single-node deployments no longer report an empty module list
 
 ### Fixed
 
-- Wire `SetAuditLogger`, `SetAuthorizer`, `SetRateLimiter`, `SetAuthFunc` on API server
-- Wire `Authorizer`/`IdentityProvider` to gRPC `AuthInterceptor`
-- Wire `InitAll`/`StartAll` for module lifecycle state transitions
-- Module `TrackProxy`/`Spawn` race condition resolved with `pendingProcesses` map
-- `Subscribe` stream.Send serialized through a single goroutine (fixes "transport: SendHeader called multiple times" race)
-- Security audit findings from SEC-AUDIT-2026-06-08, including:
-  - Repo URL allow-list validation for module resolution
-  - Built-in default rate limiter (100 req/s per IP token bucket)
-  - Removal of `MUXCORE_GRPC_REQUIRE_EVENTS_AUTH` and `MUXCORE_GRPC_REQUIRE_DISCOVERY_AUTH` env var bypasses
-- 17 security audit findings addressed (SEC-001 through SEC-016)
-- Code quality audit findings across 8 files (redundant guards, dead code, excessive comments)
-
-### Security
-
-- Checksum verification made mandatory for module resolution (SEC-001/SEC-002)
-- Removed authentication bypass env vars (SEC-004)
-- gRPC error sanitization to prevent information leakage (SEC-003)
-- Per-module storage key namespace isolation (SEC-005)
-- Streamed audit exports to prevent OOM (SEC-011)
+- Admin Cluster SSE / dashboard health empty-module regressions on host MVP (single-node membership never received heartbeat module updates)
 
 ## [v0.4.0] — 2026-06-08 — 48-gap remediation complete
 

@@ -43,9 +43,12 @@ var moduleRegistrationMethods = map[string]bool{
 	"/muxcore.module.v1.ModuleRegistration/Unregister":        true,
 	"/muxcore.discovery.v1.DiscoveryService/FindByCapability": true,
 	"/muxcore.discovery.v1.DiscoveryService/FindById":         true,
-	"/muxcore.discovery.v1.DiscoveryService/List":             true,
+	"/muxcore.discovery.v1.DiscoveryService/FindByRole":       true,
+	"/muxcore.discovery.v1.DiscoveryService/List":             true, // legacy alias name
+	"/muxcore.discovery.v1.DiscoveryService/ListAll":          true,
 	"/muxcore.discovery.v1.DiscoveryService/Members":          true,
 	"/muxcore.discovery.v1.DiscoveryService/ListMembers":      true,
+	"/muxcore.discovery.v1.DiscoveryService/Watch":            true,
 	"/muxcore.discovery.v1.DiscoveryService/Resolve":          true,
 	"/muxcore.events.v1.EventService/Subscribe":               true,
 	"/muxcore.events.v1.EventService/Unsubscribe":             true,
