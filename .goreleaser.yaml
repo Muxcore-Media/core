@@ -77,11 +77,15 @@ release:
   name_template: "v{{ .Version }}"
 
 signs:
+  # Requires COSIGN_PRIVATE_KEY (+ COSIGN_PASSWORD) in the Release job env.
+  # Self-hosted runners may also rewrite a legacy --key=cosign.pub via wrapper.
   - cmd: cosign
     signature: "${artifact}.sig"
     args:
       - sign-blob
-      - "--key=cosign.pub"
+      - "--yes"
+      - "--tlog-upload=false"
+      - "--key=env://COSIGN_PRIVATE_KEY"
       - "--output-signature=${signature}"
       - "${artifact}"
     artifacts: all
