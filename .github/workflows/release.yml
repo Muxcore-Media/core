@@ -43,3 +43,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional key-based signing (overrides keyless when set)
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          # Ensure runner-local cosign 2.x (PATH) is preferred over action downloads
+          COSIGN_EXPERIMENTAL: "0"
