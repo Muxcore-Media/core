@@ -173,58 +173,51 @@ jobs:
           go build -ldflags="-s -w" -o muxcored ./cmd/muxcored
       - name: Generate SLSA provenance
         run: |
-          # Generate in-toto SLSA provenance attestation
+          # cosign attest-blob --type slsaprovenance1 expects the predicate object
+          # (buildDefinition/runDetails), not a full in-toto Statement.
           COMMIT_SHA=$(git rev-parse HEAD)
-          BUILDER_ID="https://github.com/Muxcore-Media/core/.github/workflows/ci.yml@refs/heads/master"
+          BUILDER_ID="https://github.com/Muxcore-Media/core/.github/workflows/ci.yml@${GITHUB_REF}"
           BINARY_SHA=$(sha256sum muxcored | cut -d' ' -f1)
-
-          cat > provenance.json << PROVEOF
-          {
-            "_type": "https://in-toto.io/Statement/v1",
-            "subject": [
-              {
-                "name": "muxcored",
-                "digest": {
-                  "sha256": "${BINARY_SHA}"
-                }
-              }
-            ],
-            "predicateType": "https://slsa.dev/provenance/v1",
-            "predicate": {
-              "buildDefinition": {
-                "buildType": "https://github.com/Muxcore-Media/core/.github/workflows/ci.yml",
-                "externalParameters": {
-                  "source": {
-                    "uri": "https://github.com/Muxcore-Media/core",
-                    "digest": {
-                      "sha1": "${COMMIT_SHA}"
-                    }
+          jq -n \
+            --arg sha "$COMMIT_SHA" \
+            --arg builder "$BUILDER_ID" \
+            --arg inv "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            '{
+              buildDefinition: {
+                buildType: "https://github.com/Muxcore-Media/core/.github/workflows/ci.yml",
+                externalParameters: {
+                  source: {
+                    uri: "https://github.com/Muxcore-Media/core",
+                    digest: { sha1: $sha }
                   }
                 },
-                "internalParameters": {
-                  "builderImage": "go:1.26.5",
-                  "buildFlags": ["-ldflags=-s -w"]
+                internalParameters: {
+                  builderImage: "go:1.26.5",
+                  buildFlags: ["-ldflags=-s -w"]
                 },
-                "resolvedDependencies": []
+                resolvedDependencies: []
               },
-              "runDetails": {
-                "builder": {
-                  "id": "${BUILDER_ID}"
-                },
-                "metadata": {
-                  "invocationId": "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-                }
+              runDetails: {
+                builder: { id: $builder },
+                metadata: { invocationId: $inv }
               }
-            }
-          }
-          PROVEOF
+            }' > provenance-predicate.json
+          jq -n \
+            --arg binsha "$BINARY_SHA" \
+            --slurpfile pred provenance-predicate.json \
+            '{
+              "_type": "https://in-toto.io/Statement/v1",
+              subject: [{ name: "muxcored", digest: { sha256: $binsha } }],
+              predicateType: "https://slsa.dev/provenance/v1",
+              predicate: $pred[0]
+            }' > provenance.json
       - name: Sign provenance with cosign
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           if [ -n "$COSIGN_PRIVATE_KEY" ]; then
-            cosign attest-blob --key env://COSIGN_PRIVATE_KEY --predicate provenance.json --type slsaprovenance1 muxcored
+            cosign attest-blob --key env://COSIGN_PRIVATE_KEY --predicate provenance-predicate.json --type slsaprovenance1 muxcored
           else
             echo "COSIGN_PRIVATE_KEY not set — skipping attestation"
           fi
@@ -232,7 +225,9 @@ jobs:
         uses: actions/upload-artifact@v4 # v4.6.2
         with:
           name: slsa-provenance
-          path: provenance.json
+          path: |
+            provenance.json
+            provenance-predicate.json
 
   docker:
     name: Docker Build Test
