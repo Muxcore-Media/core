@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `internal/module/mgr` unit-test coverage raised (~44% → ~53%): Resolve cache/host/version paths, cert authority, resurrect/restart error paths, registration service wiring
+
 ## [v0.5.0] — 2026-08-08 — Discovery allowlist + Members module list
 
 ### Added

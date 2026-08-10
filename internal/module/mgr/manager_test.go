@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"google.golang.org/grpc"
 	"time"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
@@ -1015,5 +1017,162 @@ void hello() { printf("hello\n"); }
 	_, err := scanModuleSource(dir, DefaultScanPolicy)
 	if err == nil {
 		t.Fatal("expected error for cgo source file")
+	}
+}
+
+// --- SetCertAuthority / Resolve validation / Resurrect / Restart ---
+
+type stubCertIssuer struct{}
+
+func (stubCertIssuer) IssueModuleCertForDir(moduleID string, dir string) (string, string, error) {
+	return "", "", nil
+}
+func (stubCertIssuer) ValidateToken(token string) (string, error) { return "mod", nil }
+func (stubCertIssuer) CACertPEM() []byte                          { return []byte("ca") }
+func (stubCertIssuer) GenerateToken(moduleID string) (string, error) {
+	return "tok", nil
+}
+
+func TestSetCertAuthority(t *testing.T) {
+	m := NewManager("addr", nil, nil)
+	m.SetCertAuthority(stubCertIssuer{})
+	if m.certAuth == nil {
+		t.Fatal("expected certAuth set")
+	}
+}
+
+func TestResolve_InvalidVersion(t *testing.T) {
+	m := NewManager("addr", nil, nil)
+	_, err := m.Resolve("https://github.com/Muxcore-Media/x", "latest")
+	if err == nil {
+		t.Fatal("expected invalid version error")
+	}
+	if m.ResolveCount() != 1 {
+		t.Errorf("ResolveCount = %d, want 1", m.ResolveCount())
+	}
+}
+
+func TestResolve_DisallowedHost(t *testing.T) {
+	m := NewManager("addr", nil, nil)
+	m.SetAllowedRepoHosts([]string{"github.com"})
+	_, err := m.Resolve("https://evil.example/repo", "v1.0.0")
+	if err == nil {
+		t.Fatal("expected disallowed host error")
+	}
+}
+
+func TestResolve_CacheHit(t *testing.T) {
+	m := NewManager("addr", nil, nil)
+	cacheRoot := t.TempDir()
+	m.cacheDir = cacheRoot
+	moduleID := ModuleIDFromRepo("https://github.com/Muxcore-Media/cache-hit-mod")
+	binPath := filepath.Join(cacheRoot, moduleID, "v1.2.3", "muxcore-module")
+	if err := os.MkdirAll(filepath.Dir(binPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binPath, []byte("#!/bin/true\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bin, err := m.Resolve("https://github.com/Muxcore-Media/cache-hit-mod", "v1.2.3")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if bin.Path != binPath {
+		t.Fatalf("Path = %q, want %q", bin.Path, binPath)
+	}
+	if bin.ID != moduleID {
+		t.Fatalf("ID = %q, want %q", bin.ID, moduleID)
+	}
+}
+
+func TestResolveTagModule_InvalidVersion(t *testing.T) {
+	m := NewManager("addr", nil, nil)
+	_, err := m.ResolveTagModule(contracts.TagModule{
+		Repo: "https://github.com/Muxcore-Media/x", Version: "not-a-semver",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestResurrectOrphan_NotInTag(t *testing.T) {
+	m := NewManager("addr", nil, nil)
+	err := m.ResurrectOrphan(context.Background(), "missing-mod")
+	if err == nil {
+		t.Fatal("expected not found error")
+	}
+}
+
+func TestResurrectOrphan_AlreadyResolving(t *testing.T) {
+	m := NewManager("addr", nil, nil)
+	m.SetTag(&contracts.TagDefinition{
+		Modules: []contracts.TagModule{
+			{Repo: "https://github.com/Muxcore-Media/orphan-mod", Version: "v1.0.0"},
+		},
+	})
+	id := ModuleIDFromRepo("https://github.com/Muxcore-Media/orphan-mod")
+	m.resolving[id] = true
+	err := m.ResurrectOrphan(context.Background(), id)
+	if err == nil {
+		t.Fatal("expected already resolving error")
+	}
+}
+
+func TestResurrectOrphan_AlreadyRunningProcess(t *testing.T) {
+	m := NewManager("addr", nil, nil)
+	m.SetTag(&contracts.TagDefinition{
+		Modules: []contracts.TagModule{
+			{Repo: "https://github.com/Muxcore-Media/run-mod", Version: "v1.0.0"},
+		},
+	})
+	id := ModuleIDFromRepo("https://github.com/Muxcore-Media/run-mod")
+	m.processes[id] = exec.Command("true")
+	if err := m.ResurrectOrphan(context.Background(), id); err != nil {
+		t.Fatalf("expected nil for already running, got %v", err)
+	}
+}
+
+func TestResurrectPendingOrphans_Empty(t *testing.T) {
+	m := NewManager("addr", nil, nil)
+	m.ResurrectPendingOrphans(context.Background())
+}
+
+func TestRestartModule_MissingBinary(t *testing.T) {
+	m := NewManager("addr", nil, nil)
+	err := m.RestartModule(context.Background(), "nope")
+	if err == nil {
+		t.Fatal("expected missing binary error")
+	}
+}
+
+func TestRegisterModuleService_Registers(t *testing.T) {
+	m := NewManager("addr", nil, nil)
+	srv := grpc.NewServer()
+	m.RegisterModuleService(srv)
+	info := srv.GetServiceInfo()
+	if len(info) == 0 {
+		t.Fatal("expected at least one registered service")
+	}
+}
+
+func TestScanNonGoFile_RejectCGO(t *testing.T) {
+	var found []string
+	skip, err := scanNonGoFile("/tmp/x.c", nil, "/tmp", DefaultScanPolicy, &found)
+	if err == nil {
+		t.Fatal("expected cgo reject error")
+	}
+	if !skip {
+		t.Fatal("expected skip=true")
+	}
+}
+
+func TestExecCommandRunner_CommandContext(t *testing.T) {
+	var r execCommandRunner
+	cmd := r.CommandContext(context.Background(), "echo", "hi")
+	if cmd == nil || cmd.Path == "" && cmd.Args[0] != "echo" {
+		// Path may be resolved; Args should start with echo
+		if len(cmd.Args) == 0 || cmd.Args[0] != "echo" {
+			t.Fatalf("unexpected cmd: %#v", cmd)
+		}
 	}
 }
