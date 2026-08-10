@@ -8,10 +8,15 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/Muxcore-Media/core/internal/api"
+	"github.com/Muxcore-Media/core/internal/config"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
 	"github.com/Muxcore-Media/core/internal/registry"
+	"github.com/Muxcore-Media/core/internal/storage"
+	"github.com/Muxcore-Media/core/internal/workerpool"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 )
 
@@ -174,4 +179,90 @@ func TestWirePoliciesAndAuth_EmptyRegistry(t *testing.T) {
 	storageGrpc := grpcmesh.NewStorageServer(nil)
 
 	wirePoliciesAndAuth(reg, meshClient, storageGrpc, bus, srv, auth, nil, 32<<20)
+}
+
+func TestInitStorageAndHTTPAndAuditAndModuleMgr(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := config.Default()
+	cfg.Server.Addr = ":0"
+	cfg.GRPC.Addr = ":0"
+	cfg.Audit.Path = filepath.Join(t.TempDir(), "audit.log")
+	cfg.Audit.MaxSizeMB = 1
+	cfg.Audit.MaxRotatedFiles = 2
+	cfg.Spool.AllowedHosts = []string{"github.com"}
+
+	reg := registry.New()
+	bus := events.NewMemoryBus()
+	t.Setenv("MUXCORE_STORAGE_DIR", filepath.Join(t.TempDir(), "storage"))
+	t.Setenv("MUXCORE_METRICS_ENABLE", "true")
+	t.Setenv("MUXCORE_DEBUG_ENABLE", "1")
+
+	store, watchCancel := initStorage(ctx, cfg, reg, bus)
+	if store == nil || watchCancel == nil {
+		t.Fatal("initStorage")
+	}
+	defer watchCancel()
+
+	meshSrv := grpcmesh.NewServer()
+	meshClient := grpcmesh.NewClient(meshSrv)
+	discovery := grpcmesh.NewDiscoveryServer("node-test", ":0", ":0", "", func() ([]string, map[string]string) {
+		return nil, nil
+	})
+	pool := grpcmesh.NewConnPool()
+	wp := workerpool.New("node-test")
+
+	srv, metrics := initHTTPServer(cfg, reg, bus, store, meshClient, discovery, pool, wp)
+	if srv == nil {
+		t.Fatal("initHTTPServer")
+	}
+	if metrics == nil {
+		t.Fatal("expected metrics provider when MUXCORE_METRICS_ENABLE=true")
+	}
+	_ = metrics.ModuleDegradedCount()
+	_ = metrics.AllocBytes()
+
+	auditLogger := initAudit(cfg, bus, store, srv)
+	if auditLogger == nil {
+		t.Fatal("initAudit")
+	}
+
+	grpcSrv := grpc.NewServer()
+	auth := grpcmesh.NewAuthInterceptor()
+	modMgr, lifeMgr := initModuleManager(cfg, reg, bus, auditLogger, grpcSrv, metrics, "/bin/false", auth, nil)
+	if modMgr == nil || lifeMgr == nil {
+		t.Fatal("initModuleManager")
+	}
+	if metrics.ModuleSpawnCount == nil || metrics.ModuleRestartCount == nil || metrics.ModuleResolveCount == nil {
+		t.Fatal("expected metrics hooks from module manager")
+	}
+}
+
+func TestInitHTTPServer_NoExtras(t *testing.T) {
+	t.Setenv("MUXCORE_METRICS_ENABLE", "")
+	t.Setenv("MUXCORE_DEBUG_ENABLE", "")
+	cfg := config.Default()
+	cfg.Server.Addr = ":0"
+	reg := registry.New()
+	bus := events.NewMemoryBus()
+	store := storage.NewOrchestrator(reg)
+	meshClient := grpcmesh.NewClient(grpcmesh.NewServer())
+	discovery := grpcmesh.NewDiscoveryServer("n", ":0", ":0", "", func() ([]string, map[string]string) { return nil, nil })
+	srv, metrics := initHTTPServer(cfg, reg, bus, store, meshClient, discovery, grpcmesh.NewConnPool(), nil)
+	if srv == nil {
+		t.Fatal("server")
+	}
+	if metrics != nil {
+		t.Fatal("expected nil metrics when disabled")
+	}
+}
+
+func TestInitEventBus_WithWAL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.wal")
+	t.Setenv("MUXCORE_EVENT_JOURNAL_PATH", path)
+	bus := initEventBus()
+	if bus == nil {
+		t.Fatal("bus")
+	}
 }
