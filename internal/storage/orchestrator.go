@@ -30,6 +30,11 @@ const MaxObjectSize = 100 * 1024 * 1024 // 100 MB
 // Per-operation timeouts wrap every provider call so a hung provider cannot
 // block the caller indefinitely. Set via Timeouts, defaulting to
 // 30s reads, 5m writes, 30s deletes.
+// SidecarDialer opens a StorageProvider for a registered storage sidecar
+// (module id + announce/HTTP addr). Used when the registry entry is a proxy
+// rather than an in-process StorageProvider.
+type SidecarDialer func(moduleID, addr string) (contracts.StorageProvider, error)
+
 type Orchestrator struct {
 	mu            sync.RWMutex
 	registry      contracts.Registry
@@ -38,6 +43,7 @@ type Orchestrator struct {
 	policies      []RoutingPolicy
 	cache         contracts.CacheLayer
 	audit         contracts.AuditLogger
+	sidecarDialer SidecarDialer
 	readTimeout   time.Duration
 	writeTimeout  time.Duration
 	deleteTimeout time.Duration
@@ -95,19 +101,89 @@ func (o *Orchestrator) SetTimeouts(t Timeouts) {
 	}
 }
 
+// SetSidecarDialer configures how storage sidecars are dialed. Optional;
+// without a dialer only in-process StorageProvider modules are discovered.
+func (o *Orchestrator) SetSidecarDialer(d SidecarDialer) {
+	o.mu.Lock()
+	o.sidecarDialer = d
+	o.mu.Unlock()
+}
+
 // DiscoverStorage finds all registered storage modules and adds them to the pool.
+// In-process modules that implement StorageProvider are preferred; otherwise a
+// configured SidecarDialer dials modules advertising the storage capability
+// (or role "storage") via their HTTP/gRPC announce address.
 func (o *Orchestrator) DiscoverStorage() error {
-	entries := o.registry.FindByRole("storage")
+	seen := map[string]struct{}{}
+	byRole := o.registry.FindByRole("storage")
+	byCap := o.registry.FindByCapability(contracts.CapabilityStorage)
+	entries := make([]contracts.ModuleEntry, 0, len(byRole)+len(byCap))
+	entries = append(entries, byRole...)
+	entries = append(entries, byCap...)
 	for _, entry := range entries {
-		provider, ok := entry.Module.(contracts.StorageProvider)
-		if !ok {
+		id := entry.Info.ID
+		if id == "" {
 			continue
 		}
-		o.mu.Lock()
-		o.providers[entry.Info.ID] = provider
-		o.mu.Unlock()
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		if err := o.registerEntry(entry); err != nil {
+			slog.Warn("storage discover skip", "module", id, "error", err)
+		}
 	}
 	return nil
+}
+
+func (o *Orchestrator) registerEntry(entry contracts.ModuleEntry) error {
+	id := entry.Info.ID
+	if provider, ok := entry.Module.(contracts.StorageProvider); ok {
+		o.mu.Lock()
+		o.providers[id] = provider
+		o.mu.Unlock()
+		return nil
+	}
+	o.mu.RLock()
+	dialer := o.sidecarDialer
+	o.mu.RUnlock()
+	if dialer == nil {
+		return nil
+	}
+	addr := entry.Info.HTTPAddr
+	if addr == "" {
+		return fmt.Errorf("no announce addr")
+	}
+	if !hasStorageCapability(entry.Info) && !hasStorageRole(entry.Info) {
+		return nil
+	}
+	provider, err := dialer(id, addr)
+	if err != nil {
+		return err
+	}
+	o.mu.Lock()
+	o.providers[id] = provider
+	o.mu.Unlock()
+	slog.Info("remote storage provider registered", "module", id, "addr", addr)
+	return nil
+}
+
+func hasStorageCapability(info contracts.ModuleInfo) bool {
+	for _, c := range info.Capabilities {
+		if c == contracts.CapabilityStorage || c == "storage.s3" || strings.HasPrefix(c, "storage.") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasStorageRole(info contracts.ModuleInfo) bool {
+	for _, r := range info.Roles {
+		if r == "storage" {
+			return true
+		}
+	}
+	return false
 }
 
 // DiscoverCache finds a cache module from the registry and sets it as the read-through cache.
@@ -675,14 +751,8 @@ func (o *Orchestrator) WatchModules(ctx context.Context, bus contracts.EventBus)
 			return nil //nolint:nilerr // module may have unregistered already, skip
 		}
 
-		// Check if it's a storage provider
-		if provider, ok := entry.Module.(contracts.StorageProvider); ok {
-			o.mu.Lock()
-			o.providers[payload.ModuleID] = provider
-			if tp, ok := provider.(contracts.TieredProvider); ok {
-				o.tiers[payload.ModuleID] = tp.Tier()
-			}
-			o.mu.Unlock()
+		if err := o.registerEntry(entry); err != nil {
+			slog.Debug("WatchModules storage register", "module", payload.ModuleID, "error", err)
 		}
 
 		// Check if it implements CacheLayer

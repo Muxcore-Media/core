@@ -97,7 +97,7 @@ func main() {
 
 	grpcSrv, meshClient, discoveryGrpc, connPool, reg, creds, authInterceptor, nodeID, cluster, certAuth := initGRPCMesh(ctx, cfg, bus)
 
-	store, watchCancel := initStorage(ctx, cfg, reg, bus)
+	store, watchCancel := initStorage(ctx, cfg, reg, bus, creds, maxMsgBytes)
 
 	workerPool := workerpool.New(nodeID)
 	if *taskDir != "" {

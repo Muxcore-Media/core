@@ -648,6 +648,55 @@ func (r *mockRegistryWithCaps) StartupOrder() ([]string, error) {
 }
 func (r *mockRegistryWithCaps) DependencyGraph(id string) ([]string, error) { return nil, nil }
 
+func TestOrchestrator_DiscoverStorage_SidecarDialer(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	// Proxy module: registered in the mesh but not an in-process StorageProvider.
+	proxy := &cacheOnlyModule{id: "storage-s3"}
+	reg.addModule(proxy, "storage-s3", []string{"storage"}, []string{"storage", "storage.s3"})
+	e := reg.providers["storage-s3"]
+	e.Info.HTTPAddr = "127.0.0.1:9610"
+	reg.providers["storage-s3"] = e
+
+	dialed := false
+	orch := NewOrchestrator(reg)
+	orch.SetSidecarDialer(func(moduleID, addr string) (contracts.StorageProvider, error) {
+		if moduleID != "storage-s3" || addr != "127.0.0.1:9610" {
+			t.Fatalf("unexpected dial %s @ %s", moduleID, addr)
+		}
+		dialed = true
+		return newMockProvider("storage-s3"), nil
+	})
+	if err := orch.DiscoverStorage(); err != nil {
+		t.Fatal(err)
+	}
+	if !dialed {
+		t.Fatal("expected sidecar dialer to be invoked")
+	}
+	if n := orch.ProviderCount(); n != 1 {
+		t.Fatalf("ProviderCount=%d, want 1", n)
+	}
+
+	data := []byte("from-s3")
+	if err := orch.Put(context.Background(), "obj", bytes.NewReader(data), int64(len(data))); err != nil {
+		t.Fatalf("Put via dialed provider: %v", err)
+	}
+}
+
+func TestOrchestrator_DiscoverStorage_SidecarNoDialerSkipped(t *testing.T) {
+	reg := newMockRegistryWithCaps()
+	proxy := &cacheOnlyModule{id: "storage-s3"}
+	reg.addModule(proxy, "storage-s3", []string{"storage"}, []string{"storage"})
+	e := reg.providers["storage-s3"]
+	e.Info.HTTPAddr = "127.0.0.1:9610"
+	reg.providers["storage-s3"] = e
+
+	orch := NewOrchestrator(reg)
+	_ = orch.DiscoverStorage()
+	if n := orch.ProviderCount(); n != 0 {
+		t.Fatalf("ProviderCount=%d, want 0 without dialer", n)
+	}
+}
+
 // Tests for previously uncovered orchestrator functions
 
 func TestOrchestrator_DiscoverCache_Found(t *testing.T) {
