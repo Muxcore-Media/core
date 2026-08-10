@@ -142,6 +142,45 @@ func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus
 	meshClient = grpcmesh.NewClient(meshSrv)
 	slog.Info("gRPC mesh server created")
 
+	// When mTLS is enabled without explicit server cert files, bootstrap the
+	// internal CA first and present a CA-issued muxcored server certificate.
+	// Otherwise GRPCTransportCredentials fails closed before the CA is created.
+	useAutoMTLS := cfg.GRPC.MTLSEnabled && cfg.GRPC.CertFile == "" && cfg.GRPC.KeyFile == ""
+	if useAutoMTLS || cfg.GRPC.CACertDir != "" {
+		caDir := cfg.GRPC.CACertDir
+		if caDir == "" {
+			home, _ := os.UserHomeDir()
+			if home == "" {
+				home = "/tmp"
+			}
+			caDir = filepath.Join(home, ".muxcore", "ca")
+		}
+		var caErr error
+		certAuth, caErr = grpcmesh.NewCertAuthority(caDir)
+		if caErr != nil {
+			slog.Error("certificate authority", "error", caErr)
+			os.Exit(1)
+		}
+		slog.Info("certificate authority ready", "dir", caDir)
+
+		if useAutoMTLS {
+			serverDir := filepath.Join(caDir, "server")
+			certPath, keyPath, issueErr := certAuth.IssueModuleCertForDir("muxcored", serverDir)
+			if issueErr != nil {
+				slog.Error("issue muxcored server cert", "error", issueErr)
+				os.Exit(1)
+			}
+			cfg.GRPC.CertFile = certPath
+			cfg.GRPC.KeyFile = keyPath
+			cfg.GRPC.CACertFile = filepath.Join(caDir, "ca.crt")
+			if cfg.Server.CertFile == "" && cfg.Server.KeyFile == "" {
+				cfg.Server.CertFile = certPath
+				cfg.Server.KeyFile = keyPath
+			}
+			slog.Info("auto-issued muxcored TLS certs", "cert", certPath, "http", cfg.Server.CertFile != "")
+		}
+	}
+
 	creds, err := grpcmesh.GRPCTransportCredentials(
 		cfg.GRPC.CertFile,
 		cfg.GRPC.KeyFile,
@@ -168,12 +207,14 @@ func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus
 		slog.Info("gRPC TLS enabled",
 			"cert", cfg.GRPC.CertFile,
 			"mtls", cfg.GRPC.MTLSEnabled,
+			"auto_ca", useAutoMTLS,
 		)
 	} else {
 		slog.Warn("gRPC TLS is disabled — insecure mode")
 	}
 
-	if cfg.GRPC.MTLSEnabled || cfg.GRPC.CACertDir != "" {
+	// If CA was not created above (explicit cert files + optional CACertDir), create now.
+	if certAuth == nil && (cfg.GRPC.MTLSEnabled || cfg.GRPC.CACertDir != "") {
 		caDir := cfg.GRPC.CACertDir
 		if caDir == "" {
 			home, _ := os.UserHomeDir()
@@ -189,15 +230,19 @@ func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus
 			os.Exit(1)
 		}
 		if creds == nil && cfg.GRPC.MTLSEnabled {
-			mTLSCreds := grpcmesh.MTLSConfig(certAuth)
-			if mTLSCreds != nil {
-				creds = credentials.NewTLS(mTLSCreds)
+			tlsCfg, tlsErr := grpcmesh.MTLSServerConfig(certAuth)
+			if tlsErr != nil {
+				slog.Error("grpc mtls server creds", "error", tlsErr)
+				os.Exit(1)
 			}
+			creds = credentials.NewTLS(tlsCfg)
+			grpcOpts = append(grpcOpts, grpc.Creds(creds))
 		}
 		slog.Info("certificate authority ready", "dir", caDir)
 	}
 
 	authInterceptor = grpcmesh.NewAuthInterceptor()
+
 
 	grpcOpts = append(grpcOpts,
 		grpc.ChainUnaryInterceptor(

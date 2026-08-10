@@ -359,6 +359,8 @@ func (ca *CertAuthority) startTokenCleanup() {
 
 // MTLSConfig builds a tls.Config configured with the CA cert for client
 // verification (mTLS). When ca is nil, returns nil (no mTLS).
+// Note: this does not include a server certificate — prefer MTLSServerConfig
+// when bootstrapping core without pre-provisioned cert files.
 func MTLSConfig(ca *CertAuthority) *tls.Config {
 	if ca == nil {
 		return nil
@@ -370,4 +372,33 @@ func MTLSConfig(ca *CertAuthority) *tls.Config {
 		ClientCAs:  pool,
 		MinVersion: tls.VersionTLS12,
 	}
+}
+
+// MTLSServerConfig issues a CA-signed server certificate for muxcored and
+// returns a tls.Config that presents it while requiring client certs signed
+// by the same CA. Used when grpc.mtls_enabled is set without explicit
+// cert_file/key_file (staging / auto-CA path).
+func MTLSServerConfig(ca *CertAuthority) (*tls.Config, error) {
+	if ca == nil {
+		return nil, fmt.Errorf("certificate authority is nil")
+	}
+	certPEM, keyPEM, err := ca.IssueModuleCert("muxcored",
+		[]net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		[]string{"localhost", "muxcored"},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("issue muxcored server cert: %w", err)
+	}
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("parse muxcored server cert: %w", err)
+	}
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(ca.CACertPEM())
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    pool,
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }
