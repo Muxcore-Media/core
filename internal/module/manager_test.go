@@ -584,13 +584,24 @@ func TestHealthCheck_HealthyModule(t *testing.T) {
 }
 
 type mockRestarter struct {
+	mu         sync.Mutex
 	calledWith string
+	calls      int
 	err        error
 }
 
 func (r *mockRestarter) RestartModule(ctx context.Context, moduleID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.calledWith = moduleID
+	r.calls++
 	return r.err
+}
+
+func (r *mockRestarter) lastCall() (string, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calledWith, r.calls
 }
 
 func TestSetRestarter(t *testing.T) {
@@ -673,4 +684,89 @@ func TestStopAll_AuditLifecycle(t *testing.T) {
 	if !found {
 		t.Error("expected module.stop audit entry")
 	}
+}
+
+func TestStartHealthCheckLoop_RemediatesUnhealthy(t *testing.T) {
+	reg := registry.New()
+	mgr := module.NewManager(reg, nil)
+	r := &mockRestarter{}
+	mgr.SetRestarter(r)
+
+	mgr.Register(context.Background(), &testModule{
+		info:      contracts.ModuleInfo{ID: "sick", Name: "Sick", Version: "1.0.0"},
+		healthErr: errUnhealthy,
+	}, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mgr.StartHealthCheckLoop(ctx, 20*time.Millisecond)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if id, n := r.lastCall(); n > 0 {
+			if id != "sick" {
+				t.Fatalf("restarted %q, want sick", id)
+			}
+			cancel()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("expected RestartModule for unhealthy module")
+}
+
+func TestStartHealthCheckLoop_NoRestarterSkipsRestart(t *testing.T) {
+	reg := registry.New()
+	mgr := module.NewManager(reg, nil)
+	mgr.Register(context.Background(), &testModule{
+		info:      contracts.ModuleInfo{ID: "sick-nr", Name: "Sick", Version: "1.0.0"},
+		healthErr: errUnhealthy,
+	}, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mgr.StartHealthCheckLoop(ctx, 15*time.Millisecond)
+	time.Sleep(80 * time.Millisecond)
+	cancel()
+	// No restarter: HealthCheck still runs; just ensure no panic.
+	results := mgr.HealthCheck(context.Background())
+	if results["sick-nr"] == nil {
+		t.Fatal("expected unhealthy result")
+	}
+}
+
+func TestStartHealthCheckLoop_RestartErrorLogged(t *testing.T) {
+	reg := registry.New()
+	mgr := module.NewManager(reg, nil)
+	r := &mockRestarter{err: errors.New("restart failed")}
+	mgr.SetRestarter(r)
+	mgr.Register(context.Background(), &testModule{
+		info:      contracts.ModuleInfo{ID: "sick-re", Name: "Sick", Version: "1.0.0"},
+		healthErr: errUnhealthy,
+	}, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mgr.StartHealthCheckLoop(ctx, 20*time.Millisecond)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, n := r.lastCall(); n > 0 {
+			cancel()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("expected RestartModule attempt despite error")
+}
+
+func TestStartHealthCheckLoop_DefaultInterval(t *testing.T) {
+	reg := registry.New()
+	mgr := module.NewManager(reg, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// interval <= 0 uses DefaultHealthCheckInterval; cancel immediately so we don't wait 30s.
+	mgr.StartHealthCheckLoop(ctx, 0)
+	cancel()
+	time.Sleep(20 * time.Millisecond)
 }
