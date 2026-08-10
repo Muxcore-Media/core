@@ -1,0 +1,23 @@
+[package]
+name = "muxcore-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "MuxCore Rust SDK for sidecar modules (register / lifecycle)"
+license = "Apache-2.0"
+repository = "https://github.com/Muxcore-Media/core"
+readme = "README.md"
+
+[dependencies]
+tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "signal", "sync"] }
+tonic = { version = "0.12", features = ["transport"] }
+prost = "0.13"
+tokio-stream = "0.1"
+tracing = "0.1"
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[dev-dependencies]
+tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "time"] }
+tonic = { version = "0.12", features = ["transport"] }
+tokio-stream = { version = "0.1", features = ["net"] }
