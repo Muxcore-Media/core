@@ -27,6 +27,12 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
+// Tunables for sidecar policy discovery (overridden in tests).
+var (
+	sidecarPolicyAttempts = 20
+	sidecarPolicySleep    = 250 * time.Millisecond
+)
+
 func runDryRun(ctx context.Context, tagName, spoolURL string) {
 	slog.Info("dry-run: config and startup checks passed")
 	if tagName != "" {
@@ -176,15 +182,18 @@ func waitForSidecarPolicies(
 		{"publish.policy", func() error { return bootstrap.WirePublishPolicy(reg, bus, creds, maxMsgBytes) }},
 		{"auth", func() error { return bootstrap.WireAuth(reg, srv, authInterceptor, creds, maxMsgBytes) }},
 	} {
-		for i := 0; i < 20; i++ {
+		for i := 0; i < sidecarPolicyAttempts; i++ {
 			if err := discover.fn(); err != nil {
 				slog.Warn("sidecar policy discovery", "capability", discover.name, "error", err)
 			}
 			if (discover.name == "call.policy" && meshClient.CallPolicy() != nil) ||
-				(discover.name == "publish.policy" && bus.PublishPolicy() != nil) {
+				(discover.name == "publish.policy" && bus.PublishPolicy() != nil) ||
+				(discover.name == "auth" && len(reg.FindByCapability(contracts.CapabilityAuth)) > 0) {
 				break
 			}
-			time.Sleep(250 * time.Millisecond)
+			if sidecarPolicySleep > 0 {
+				time.Sleep(sidecarPolicySleep)
+			}
 		}
 	}
 }
