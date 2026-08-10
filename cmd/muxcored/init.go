@@ -29,6 +29,7 @@ import (
 	"github.com/Muxcore-Media/core/internal/spool"
 	"github.com/Muxcore-Media/core/internal/storage"
 	localstorage "github.com/Muxcore-Media/core/internal/storage/local"
+	remotestorage "github.com/Muxcore-Media/core/internal/storage/remote"
 	"github.com/Muxcore-Media/core/internal/workerpool"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"google.golang.org/grpc"
@@ -319,12 +320,19 @@ func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus
 	return
 }
 
-func initStorage(ctx context.Context, cfg *config.Config, reg *registry.Registry, bus *events.MemoryBus) (*storage.Orchestrator, context.CancelFunc) {
+func initStorage(ctx context.Context, cfg *config.Config, reg *registry.Registry, bus *events.MemoryBus, creds credentials.TransportCredentials, maxMsgBytes int) (*storage.Orchestrator, context.CancelFunc) {
 	store := storage.NewOrchestrator(reg)
 	store.SetTimeouts(storage.Timeouts{
 		Read:   time.Duration(cfg.Storage.ReadTimeoutSeconds) * time.Second,
 		Write:  time.Duration(cfg.Storage.WriteTimeoutSeconds) * time.Second,
 		Delete: time.Duration(cfg.Storage.DeleteTimeoutSeconds) * time.Second,
+	})
+	store.SetSidecarDialer(func(moduleID, addr string) (contracts.StorageProvider, error) {
+		conn, err := bootstrap.DialSidecar(addr, creds, maxMsgBytes)
+		if err != nil {
+			return nil, err
+		}
+		return remotestorage.New(moduleID, conn), nil
 	})
 	if err := store.DiscoverStorage(); err != nil {
 		slog.Warn("storage discover", "error", err)

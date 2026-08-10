@@ -31,6 +31,7 @@ const (
 	CapabilityScheduler       = "scheduler"
 	CapabilityHealthMonitor   = "health.monitor"
 	CapabilityBackup          = "backup"
+	CapabilityStorage         = "storage"
 
 	// Worker pool capabilities.
 	CapabilityWorkerPool = "worker.pool"
