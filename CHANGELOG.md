@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.5.5] — 2026-08-10 — self-hosted CI merge gate
+
+### Fixed
+- CI Test/Coverage: drop `go test -race` on self-hosted runners (merge gate is `go test -count=1`); avoids race failures in module manager StopAll/Wait paths under `-race`.
+- Lint: `awaitAndShutdown` inherits cancelled context via `context.WithoutCancel`; fieldalign sidecar policy discover structs.
+
 ### Added
+- `scripts/local-image.sh` + README notes for laptop/local-registry `muxcored` image builds.
+- Makefile `release-snapshot` target (GoReleaser snapshot, no publish).
+
+### Added (prior Unreleased — nested SDK tags already cut)
 - Python module SDK scaffold (`sdk/python` **v0.1.0**): `muxcore.sdk.run` registers via `ModuleRegistration`, mirrors Go lifecycle (TLS/insecure + signal shutdown). Nested tag: `sdk/python/v0.1.0`.
 - TypeScript module SDK scaffold (`sdk/typescript` **v0.1.0**): `@muxcore-media/sdk` `run()` with `@grpc/grpc-js` + proto-loader. Nested tag: `sdk/typescript/v0.1.0`.
 - Rust module SDK scaffold (`sdk/rust` **v0.1.0**): `muxcore-sdk` crate with tonic `run` / `run_until` (plaintext dial in v0.1.0). Nested tag: `sdk/rust/v0.1.0`.
