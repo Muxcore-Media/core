@@ -1,4 +1,4 @@
-.PHONY: build test test-integration lint coverage proto ci clean run help fmt tidy docker-build dev
+.PHONY: build test test-integration lint coverage proto ci clean run help fmt tidy docker-build dev release-snapshot
 
 GO ?= go
 PROTOC ?= $(shell which protoc 2>/dev/null || echo ~/.local/bin/protoc)
@@ -117,6 +117,10 @@ tidy:
 docker-build:
 	docker build -t muxcore:dev .
 
+# Local cross-build preview (linux/darwin × amd64/arm64). Tag releases use GoReleaser on self-hosted CI.
+release-snapshot:
+	goreleaser release --snapshot --clean
+
 dev:
 	docker-compose up -d
 
@@ -138,5 +142,6 @@ help:
 	@echo "  fmt          Run go fmt ./..."
 	@echo "  tidy         Run go mod tidy"
 	@echo "  docker-build Build Docker image (muxcore:dev)"
+	@echo "  release-snapshot  GoReleaser snapshot (no publish)"
 	@echo "  dev          Start development services via docker-compose"
 	@echo "  clean        Remove build artifacts"
