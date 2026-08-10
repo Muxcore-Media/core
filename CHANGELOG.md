@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.5.6] — 2026-08-10 — GoReleaser cosign + event bus Close drain
+
+### Fixed
+- Release signing: drop cosign `sign-blob --yes` (unknown on runner cosign &lt;2.x) so GoReleaser can finish on self-hosted.
+- Event bus `Close`: stop subscriber workers before drain and avoid dropping dequeued events (fixes flaky `TestMemoryBus_CloseWithDrain`).
+
 ## [v0.5.5] — 2026-08-10 — self-hosted CI merge gate
 
 ### Fixed
