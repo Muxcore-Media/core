@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `internal/module/mgr` unit-test coverage raised (~61% → ~73%): SpawnWithWatchdog (+ fallback), BootstrapRegister success/error paths, Spawn with cert authority
 - `internal/module/mgr` unit-test coverage raised (~53% → ~60%): gRPC Register/Unregister paths, bootstrap-without-CA, RestartModule from stored binary, reconcileContracts with declarations
 - `internal/module/mgr` unit-test coverage raised (~44% → ~53%): Resolve cache/host/version paths, cert authority, resurrect/restart error paths, registration service wiring
 - Decompose `cmd/muxcored` startup: dry-run, policy/auth wiring, management gRPC registration, listener start, and shutdown moved to `lifecycle.go`
