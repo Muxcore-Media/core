@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.5.7] — 2026-08-10 — Release workflow cosign 2.x
+
+### Fixed
+- Release job installs cosign 2.4.3 via `sigstore/cosign-installer` so goreleaser-action `verify-blob --yes` works on the self-hosted runner.
+
 ## [v0.5.6] — 2026-08-10 — GoReleaser cosign + event bus Close drain
 
 ### Fixed
