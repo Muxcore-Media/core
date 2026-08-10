@@ -3,17 +3,22 @@ package main
 import (
 	"context"
 	"flag"
+	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 
 	"github.com/Muxcore-Media/core/internal/api"
+	"github.com/Muxcore-Media/core/internal/audit"
 	"github.com/Muxcore-Media/core/internal/config"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
+	modlifecycle "github.com/Muxcore-Media/core/internal/module"
+	modulemgr "github.com/Muxcore-Media/core/internal/module/mgr"
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/storage"
 	"github.com/Muxcore-Media/core/internal/workerpool"
@@ -334,4 +339,86 @@ func TestInitGRPCMesh_InsecureDevSkip(t *testing.T) {
 	}
 	_ = cluster.Stop(ctx)
 	grpcSrv.Stop()
+}
+
+func TestRegisterManagementGRPC(t *testing.T) {
+	cfg := config.Default()
+	cfg.Audit.Path = filepath.Join(t.TempDir(), "audit.log")
+	reg := registry.New()
+	bus := events.NewMemoryBus()
+	auditLogger, err := audit.NewFileLogger(cfg.Audit.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	life := modlifecycle.NewManager(reg, bus)
+	modMgr := modulemgr.NewManager(":0", reg, life)
+	discovery := grpcmesh.NewDiscoveryServer("n1", ":0", ":0", "", func() ([]string, map[string]string) {
+		return nil, nil
+	})
+	grpcSrv := grpc.NewServer()
+	var mu sync.Mutex
+	registerManagementGRPC(grpcSrv, "file:///tmp/spool", cfg, &mu, modMgr, reg, "n1", discovery, auditLogger)
+	if len(grpcSrv.GetServiceInfo()) < 3 {
+		t.Fatalf("expected management services registered, got %d", len(grpcSrv.GetServiceInfo()))
+	}
+}
+
+func TestStartHTTPAndGRPCAndShutdown(t *testing.T) {
+	t.Setenv("MUXCORE_DEV_TLS_SKIP", "true")
+	cfg := config.Default()
+	cfg.Server.Addr = "127.0.0.1:0"
+	cfg.GRPC.Addr = "127.0.0.1:0"
+
+	// Bind HTTP to an ephemeral port via Listen first by using NewServer then replacing — api.Server uses cfg addr as-is.
+	// Pick free ports.
+	lnHTTP, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpAddr := lnHTTP.Addr().String()
+	_ = lnHTTP.Close()
+	lnGRPC, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	grpcAddr := lnGRPC.Addr().String()
+	_ = lnGRPC.Close()
+
+	cfg.Server.Addr = httpAddr
+	cfg.GRPC.Addr = grpcAddr
+
+	reg := registry.New()
+	bus := events.NewMemoryBus()
+	store := storage.NewOrchestrator(reg)
+	srv := api.NewServer(cfg.Server.Addr, "", "")
+	grpcSrv := grpc.NewServer()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sighup := make(chan os.Signal, 1)
+	fatalErr := startHTTPAndGRPC(cfg, srv, grpcSrv)
+
+	// Give listeners a moment
+	time.Sleep(50 * time.Millisecond)
+
+	watchCancel := func() {}
+	life := modlifecycle.NewManager(reg, bus)
+	modMgr := modulemgr.NewManager(cfg.GRPC.Addr, reg, life)
+	pool := grpcmesh.NewConnPool()
+	wp := workerpool.New("n")
+	discovery := grpcmesh.NewDiscoveryServer("n", cfg.GRPC.Addr, cfg.Server.Addr, "", func() ([]string, map[string]string) {
+		return nil, nil
+	})
+
+	done := make(chan struct{})
+	go func() {
+		awaitAndShutdown(ctx, cancel, sighup, fatalErr, srv, grpcSrv, watchCancel, wp, bus, modMgr, pool, discovery)
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("shutdown timed out")
+	}
+	_ = store
 }
