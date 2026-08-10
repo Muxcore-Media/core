@@ -3,6 +3,7 @@ package mgr
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1342,4 +1343,209 @@ func TestReconcileContracts_WithContracts(t *testing.T) {
 	m := NewManager("addr", nil, nil)
 	// Should not panic; may warn if reconciler cannot resolve remotely.
 	_ = m.reconcileContracts(dir)
+}
+
+// --- SpawnWithWatchdog / BootstrapRegister success paths ---
+
+func TestSpawnWithWatchdog_NilBinary(t *testing.T) {
+	m := NewManager("127.0.0.1:9000", nil, nil)
+	if err := m.SpawnWithWatchdog(context.Background(), nil, nil); err == nil {
+		t.Fatal("expected error for nil binary")
+	}
+}
+
+func TestSpawnWithWatchdog_FallbackWithoutPath(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	m := NewManager("127.0.0.1:9000", nil, nil)
+	m.SetCommandRunner(spawnMockRunner{})
+	bin := &ModuleBinary{
+		ID:            "wd-fallback",
+		Version:       "v1.0.0",
+		Path:          "/fake/path",
+		RestartPolicy: RestartNever,
+		Config:        map[string]string{"k": "v"},
+	}
+	if err := m.SpawnWithWatchdog(ctx, bin, []string{"127.0.0.1:9001"}); err != nil {
+		t.Fatalf("SpawnWithWatchdog fallback: %v", err)
+	}
+	if got := m.SpawnCount(); got != 1 {
+		t.Errorf("SpawnCount=%d want 1", got)
+	}
+	stopCtx, stopCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer stopCancel()
+	m.StopAll(stopCtx)
+}
+
+func TestSpawnWithWatchdog_WithWatchdogBinary(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	m := NewManager("127.0.0.1:9000", nil, nil)
+	m.SetWatchdogPath("/fake/watchdog")
+	m.SetCommandRunner(longRunningRunner{})
+	bin := &ModuleBinary{
+		ID:            "wd-spawn",
+		Version:       "v1.0.0",
+		Path:          "/fake/module",
+		RestartPolicy: RestartNever,
+	}
+	if err := m.SpawnWithWatchdog(ctx, bin, []string{"127.0.0.1:9000", "127.0.0.1:9001"}); err != nil {
+		t.Fatalf("SpawnWithWatchdog: %v", err)
+	}
+	if got := m.SpawnCount(); got != 1 {
+		t.Errorf("SpawnCount=%d want 1", got)
+	}
+	if err := m.SpawnWithWatchdog(ctx, bin, nil); err == nil {
+		t.Fatal("expected duplicate spawn error")
+	}
+	stopCtx, stopCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer stopCancel()
+	m.StopAll(stopCtx)
+}
+
+type fileCertIssuer struct {
+	moduleID string
+	tokenErr error
+	issueErr error
+	skipKey  bool
+}
+
+func (f fileCertIssuer) ValidateToken(token string) (string, error) {
+	if f.tokenErr != nil {
+		return "", f.tokenErr
+	}
+	return f.moduleID, nil
+}
+
+func (f fileCertIssuer) IssueModuleCertForDir(moduleID string, dir string) (string, string, error) {
+	if f.issueErr != nil {
+		return "", "", f.issueErr
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", "", err
+	}
+	cert := filepath.Join(dir, moduleID+".crt")
+	key := filepath.Join(dir, moduleID+".key")
+	if err := os.WriteFile(cert, []byte("CERT"), 0o600); err != nil {
+		return "", "", err
+	}
+	if f.skipKey {
+		// Return a key path that does not exist (avoid leftover TempDir collisions).
+		return cert, filepath.Join(dir, moduleID+".missing.key"), nil
+	}
+	if err := os.WriteFile(key, []byte("KEY"), 0o600); err != nil {
+		return "", "", err
+	}
+	return cert, key, nil
+}
+
+func (f fileCertIssuer) CACertPEM() []byte { return []byte("CA") }
+func (f fileCertIssuer) GenerateToken(moduleID string) (string, error) {
+	return "tok", nil
+}
+
+func TestRegistrationServer_BootstrapSuccess(t *testing.T) {
+	m, _, _ := testLifecycleMgr(t)
+	m.SetCertAuthority(fileCertIssuer{moduleID: "m1"})
+	srv := &registrationServer{mgr: m}
+	resp, err := srv.BootstrapRegister(context.Background(), &modulev1.BootstrapRegisterRequest{
+		ModuleId: "m1",
+		Token:    "good",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Accepted {
+		t.Fatalf("expected accept: %s", resp.Error)
+	}
+	if resp.SignedCert != "CERT" || resp.KeyPem != "KEY" || resp.CaCert != "CA" {
+		t.Fatalf("unexpected PEM payloads: cert=%q key=%q ca=%q", resp.SignedCert, resp.KeyPem, resp.CaCert)
+	}
+}
+
+func TestRegistrationServer_BootstrapInvalidToken(t *testing.T) {
+	m, _, _ := testLifecycleMgr(t)
+	m.SetCertAuthority(fileCertIssuer{moduleID: "m1", tokenErr: errors.New("expired")})
+	srv := &registrationServer{mgr: m}
+	resp, err := srv.BootstrapRegister(context.Background(), &modulev1.BootstrapRegisterRequest{
+		ModuleId: "m1",
+		Token:    "bad",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Accepted {
+		t.Fatal("expected reject for invalid token")
+	}
+}
+
+func TestRegistrationServer_BootstrapModuleMismatch(t *testing.T) {
+	m, _, _ := testLifecycleMgr(t)
+	m.SetCertAuthority(fileCertIssuer{moduleID: "other"})
+	srv := &registrationServer{mgr: m}
+	resp, err := srv.BootstrapRegister(context.Background(), &modulev1.BootstrapRegisterRequest{
+		ModuleId: "m1",
+		Token:    "tok",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Accepted {
+		t.Fatal("expected reject for module/token mismatch")
+	}
+}
+
+func TestRegistrationServer_BootstrapIssueFail(t *testing.T) {
+	m, _, _ := testLifecycleMgr(t)
+	m.SetCertAuthority(fileCertIssuer{moduleID: "m1", issueErr: errors.New("sign fail")})
+	srv := &registrationServer{mgr: m}
+	resp, err := srv.BootstrapRegister(context.Background(), &modulev1.BootstrapRegisterRequest{
+		ModuleId: "m1",
+		Token:    "tok",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Accepted {
+		t.Fatal("expected reject when cert issue fails")
+	}
+}
+
+func TestRegistrationServer_BootstrapMissingKeyFile(t *testing.T) {
+	m, _, _ := testLifecycleMgr(t)
+	m.SetCertAuthority(fileCertIssuer{moduleID: "m-nokey", skipKey: true})
+	srv := &registrationServer{mgr: m}
+	resp, err := srv.BootstrapRegister(context.Background(), &modulev1.BootstrapRegisterRequest{
+		ModuleId: "m-nokey",
+		Token:    "tok",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Accepted {
+		t.Fatal("expected reject when key file missing")
+	}
+}
+
+func TestSpawn_WithCertAuthority(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	m := NewManager("127.0.0.1:9000", nil, nil)
+	m.SetCertAuthority(fileCertIssuer{moduleID: "tls-mod"})
+	m.SetCommandRunner(spawnMockRunner{})
+	bin := &ModuleBinary{
+		ID:            "tls-mod",
+		Version:       "v1.0.0",
+		Path:          "/fake/path",
+		RestartPolicy: RestartNever,
+	}
+	if err := m.Spawn(ctx, bin); err != nil {
+		t.Fatalf("Spawn with CA: %v", err)
+	}
+	stopCtx, stopCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer stopCancel()
+	m.StopAll(stopCtx)
 }
