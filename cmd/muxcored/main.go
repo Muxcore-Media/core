@@ -2,13 +2,10 @@ package main
 
 import (
 	"context"
-	"errors"
 	"expvar"
 	"flag"
 	"fmt"
 	"log/slog"
-	"net"
-	"net/http"
 	"net/http/pprof"
 	"os"
 	"os/signal"
@@ -76,7 +73,7 @@ const securityDisclaimer = `╔════════════════�
 ║                                                              ║
 ╚══════════════════════════════════════════════════════════════╝`
 
-func main() { //nolint:gocyclo // main initialization has many unavoidable branches
+func main() {
 	tagName, spoolURL, watchdogPath, taskDir, idempotencyDir, deadletterDir, printVersion, dryRun := parseFlags()
 
 	if *printVersion {
@@ -117,18 +114,7 @@ func main() { //nolint:gocyclo // main initialization has many unavoidable branc
 	}
 
 	if *dryRun {
-		slog.Info("dry-run: config and startup checks passed")
-		if *tagName != "" {
-			slog.Info("dry-run: fetching spool tag to verify connectivity", "spool", *spoolURL, "tag", *tagName)
-			tag, err := spool.FetchTag(ctx, *spoolURL, *tagName)
-			if err != nil {
-				slog.Error("dry-run: spool connectivity failed", "error", err)
-				os.Exit(1)
-			}
-			slog.Info("dry-run: spool OK", "tag", tag.Name, "modules", len(tag.Modules))
-		}
-		slog.Info("dry-run: all checks passed — ready to start")
-		os.Exit(0)
+		runDryRun(ctx, *tagName, *spoolURL)
 	}
 
 	bus := initEventBus()
@@ -168,48 +154,7 @@ func main() { //nolint:gocyclo // main initialization has many unavoidable branc
 	storageGrpc := grpcmesh.NewStorageServer(store)
 	storageGrpc.RegisterWithGRPC(grpcSrv)
 
-	if err := bootstrap.WireCallPolicy(reg, meshClient, storageGrpc, creds, maxMsgBytes); err != nil {
-		slog.Warn("call policy setup", "error", err)
-	}
-	if meshClient.CallPolicy() == nil {
-		slog.Warn("no call policy provider registered — all inter-module mesh calls and storage operations are denied until a call.policy module is deployed")
-	}
-
-	if err := bootstrap.WirePublishPolicy(reg, bus, creds, maxMsgBytes); err != nil {
-		slog.Warn("publish policy setup", "error", err)
-	}
-	if bus.PublishPolicy() == nil {
-		slog.Info("no publish policy provider registered — event publication denied by default")
-	}
-
-	encryptionEntries := reg.FindByCapability("encryption")
-	if len(encryptionEntries) == 0 {
-		if !bootstrap.DevTLSSkipCheck() {
-			slog.Warn("no encryption provider registered — data at rest will not be encrypted. Deploy an encryption module or set MUXCORE_DEV_TLS_SKIP for development")
-		} else {
-			slog.Info("no encryption provider registered — data at rest is not encrypted (development mode)")
-		}
-	} else {
-		if ep, ok := encryptionEntries[0].Module.(contracts.EncryptionProvider); ok {
-			if ep.Available() {
-				slog.Info("encryption provider loaded from registry",
-					"module", encryptionEntries[0].Info.ID)
-			} else {
-				slog.Warn("encryption provider registered but unavailable",
-					"module", encryptionEntries[0].Info.ID)
-			}
-		}
-	}
-
-	if err := bootstrap.WireAuth(reg, srv, authInterceptor, creds, maxMsgBytes); err != nil {
-		slog.Warn("auth setup", "error", err)
-	}
-	if len(reg.FindByCapability(contracts.CapabilityAuthorizer)) == 0 {
-		slog.Error("no authorizer registered — HTTP API requests requiring authorization will be denied until an authorizer module is deployed")
-	}
-	if len(reg.FindByCapability(contracts.CapabilityAuth)) == 0 {
-		slog.Info("no auth provider registered — HTTP API has no authentication. All requests except /health and public paths will be rejected")
-	}
+	wirePoliciesAndAuth(reg, meshClient, storageGrpc, bus, srv, authInterceptor, creds, maxMsgBytes)
 
 	discoveryGrpc.SetRegistry(reg)
 
@@ -224,17 +169,7 @@ func main() { //nolint:gocyclo // main initialization has many unavoidable branc
 	lifecycleMgr.StartHealthCheckLoop(ctx, modlifecycle.DefaultHealthCheckInterval)
 	slog.Info("health check scheduler started")
 
-	spoolGrpc := grpcmesh.NewSpoolServer(*spoolURL, cfg, &cfgMu, modMgr, reg)
-	spoolGrpc.RegisterWithGRPC(grpcSrv)
-	slog.Info("spool management gRPC service registered")
-
-	lifecycleGrpc := grpcmesh.NewLifecycleServer(reg, modMgr, nodeID, discoveryGrpc)
-	lifecycleGrpc.RegisterWithGRPC(grpcSrv)
-	slog.Info("module lifecycle gRPC service registered")
-
-	auditGrpc := grpcmesh.NewAuditServer(auditLogger)
-	auditGrpc.RegisterWithGRPC(grpcSrv)
-	slog.Info("audit gRPC service registered")
+	registerManagementGRPC(grpcSrv, *spoolURL, cfg, &cfgMu, modMgr, reg, nodeID, discoveryGrpc, auditLogger)
 
 	bootstrap.RunClusterEventListener(ctx, cluster, nodeID, workerPool, modMgr)
 
@@ -258,58 +193,9 @@ func main() { //nolint:gocyclo // main initialization has many unavoidable branc
 
 	srv.SetHealthChecker(bootstrap.InitHealthProbes(ctx, bus, discoveryGrpc, store, cfg, reg, &cfgMu))
 
-	fatalErr := make(chan error, 1)
+	fatalErr := startHTTPAndGRPC(cfg, srv, grpcSrv)
 
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("api server panic recovered", "panic", r)
-				fatalErr <- fmt.Errorf("api server panic: %v", r)
-			}
-		}()
-		if err := srv.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("api server", "error", err)
-			fatalErr <- err
-		}
-	}()
-
-	var lc net.ListenConfig
-	grpcLis, err := lc.Listen(context.Background(), "tcp", cfg.GRPC.Addr)
-	if err != nil {
-		slog.Error("grpc listen", "error", err)
-		os.Exit(1)
-	}
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("grpc server panic recovered", "panic", r)
-			}
-		}()
-		slog.Info("gRPC mesh listening", "addr", cfg.GRPC.Addr)
-		if err := grpcSrv.Serve(grpcLis); err != nil {
-			slog.Error("grpc server", "error", err)
-		}
-	}()
-
-	for _, discover := range []struct { //nolint:govet // struct field alignment is acceptable for this type
-		name string
-		fn   func() error
-	}{
-		{"call.policy", func() error { return bootstrap.WireCallPolicy(reg, meshClient, storageGrpc, creds, maxMsgBytes) }},
-		{"publish.policy", func() error { return bootstrap.WirePublishPolicy(reg, bus, creds, maxMsgBytes) }},
-		{"auth", func() error { return bootstrap.WireAuth(reg, srv, authInterceptor, creds, maxMsgBytes) }},
-	} {
-		for i := 0; i < 20; i++ {
-			if err := discover.fn(); err != nil {
-				slog.Warn("sidecar policy discovery", "capability", discover.name, "error", err)
-			}
-			if (discover.name == "call.policy" && meshClient.CallPolicy() != nil) ||
-				(discover.name == "publish.policy" && bus.PublishPolicy() != nil) {
-				break
-			}
-			time.Sleep(250 * time.Millisecond)
-		}
-	}
+	waitForSidecarPolicies(reg, meshClient, storageGrpc, bus, srv, authInterceptor, creds, maxMsgBytes)
 
 	bootstrap.AutoJoinSeedNodes(ctx, cfg, creds, discoveryGrpc)
 
@@ -332,43 +218,7 @@ func main() { //nolint:gocyclo // main initialization has many unavoidable branc
 
 	bootstrap.RunConfigReloadLoop(ctx, sighupCh, configPath, cfg, &cfgMu, bus)
 
-	select {
-	case <-ctx.Done():
-	case err := <-fatalErr:
-		slog.Error("fatal error, shutting down", "error", err)
-		cancel()
-	}
-	slog.Info("shutting down...")
-
-	signal.Stop(sighupCh)
-
-	drainCtx, drainCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer drainCancel()
-	if err := srv.Drain(drainCtx); err != nil {
-		slog.Error("api drain", "error", err)
-	}
-
-	grpcSrv.GracefulStop()
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-
-	watchCancel()
-	if err := workerPool.Shutdown(shutdownCtx); err != nil {
-		slog.Error("workerpool shutdown", "error", err)
-	}
-	bus.Close()
-	if err := modMgr.StopAll(shutdownCtx); err != nil {
-		slog.Error("module stop", "error", err)
-	}
-
-	connPool.Close()
-	discoveryGrpc.Close()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		slog.Error("api shutdown", "error", err)
-	}
-
-	slog.Info("MuxCore stopped.")
+	awaitAndShutdown(ctx, cancel, sighupCh, fatalErr, srv, grpcSrv, watchCancel, workerPool, bus, modMgr, connPool, discoveryGrpc)
 }
 
 func parseFlags() (tagName, spoolURL, watchdogPath, taskDir, idempotencyDir, deadletterDir *string, printVersion, dryRun *bool) { //nolint:gocritic // too many results for flag parsing
