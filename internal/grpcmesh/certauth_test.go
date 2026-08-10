@@ -2,6 +2,7 @@ package grpcmesh
 
 import (
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
@@ -277,6 +278,28 @@ func TestMTLSConfig_ValidCA(t *testing.T) {
 	}
 	if cfg.MinVersion != 0x0303 {
 		t.Errorf("MinVersion = %#x, want 0x0303 (TLS 1.2)", cfg.MinVersion)
+	}
+}
+
+func TestMTLSServerConfig_IssuesServerCert(t *testing.T) {
+	ca, err := NewCertAuthority(filepath.Join(t.TempDir(), "ca"))
+	if err != nil {
+		t.Fatalf("NewCertAuthority: %v", err)
+	}
+	defer ca.Close()
+
+	cfg, err := MTLSServerConfig(ca)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg == nil || len(cfg.Certificates) != 1 {
+		t.Fatal("expected server certificate")
+	}
+	if cfg.ClientAuth != tls.RequireAndVerifyClientCert {
+		t.Fatalf("ClientAuth=%v", cfg.ClientAuth)
+	}
+	if cfg.ClientCAs == nil {
+		t.Fatal("expected ClientCAs")
 	}
 }
 

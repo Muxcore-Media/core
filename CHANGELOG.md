@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Auto-mTLS bootstrap: when `grpc.mtls_enabled` is set without `cert_file`/`key_file`, create the internal CA first, issue a `muxcored` server cert (also used for HTTP when unset), and wire mTLS via `ca.crt` so staging cutover can start without pre-provisioned TLS files (`MTLSServerConfig` helper retained for tests)
+
 ### Changed
 
 - Further `cmd/muxcored` decomposition: flag/config/context setup and service init helpers moved to `init.go` (main orchestration stays in `main.go`; runtime lifecycle remains in `lifecycle.go`)
