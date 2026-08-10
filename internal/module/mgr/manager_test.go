@@ -1549,3 +1549,131 @@ func TestSpawn_WithCertAuthority(t *testing.T) {
 	defer stopCancel()
 	m.StopAll(stopCtx)
 }
+
+type stubLifecycleModule struct {
+	info contracts.ModuleInfo
+}
+
+func (m *stubLifecycleModule) Info() contracts.ModuleInfo     { return m.info }
+func (m *stubLifecycleModule) Init(_ context.Context) error   { return nil }
+func (m *stubLifecycleModule) Start(_ context.Context) error  { return nil }
+func (m *stubLifecycleModule) Stop(_ context.Context) error   { return nil }
+func (m *stubLifecycleModule) Health(_ context.Context) error { return nil }
+
+func TestResolve_InvalidURL(t *testing.T) {
+	m := NewManager("addr", nil, nil)
+	_, err := m.Resolve("://bad", "v1.0.0")
+	if err == nil {
+		t.Fatal("expected invalid URL error")
+	}
+}
+
+func TestResolveTagModule_InstanceCacheHit(t *testing.T) {
+	m := NewManager("addr", nil, nil)
+	cacheRoot := t.TempDir()
+	m.cacheDir = cacheRoot
+	repo := "https://github.com/Muxcore-Media/inst-cache"
+	id := ModuleIDFromRepoWithInstance(repo, "east")
+	binPath := filepath.Join(cacheRoot, id, "v1.0.0", "muxcore-module")
+	if err := os.MkdirAll(filepath.Dir(binPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binPath, []byte("#!/bin/true\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bin, err := m.ResolveTagModule(contracts.TagModule{
+		Repo: repo, Version: "v1.0.0", InstanceID: "east",
+		Config: map[string]string{"k": "v"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveTagModule: %v", err)
+	}
+	if bin.ID != id || bin.InstanceID != "east" {
+		t.Fatalf("got id=%q instance=%q", bin.ID, bin.InstanceID)
+	}
+	if bin.Path != binPath {
+		t.Fatalf("path=%q want %q", bin.Path, binPath)
+	}
+}
+
+func TestResurrectOrphan_RegisteredRunning(t *testing.T) {
+	reg := registry.New()
+	id := ModuleIDFromRepo("https://github.com/Muxcore-Media/sidecar-run")
+	if err := reg.Register(&stubLifecycleModule{
+		info: contracts.ModuleInfo{ID: id, Name: "Sidecar", Version: "1.0.0"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SetState(id, contracts.ModuleStateStarting); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SetState(id, contracts.ModuleStateRunning); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager("addr", reg, nil)
+	m.SetTag(&contracts.TagDefinition{
+		Modules: []contracts.TagModule{
+			{Repo: "https://github.com/Muxcore-Media/sidecar-run", Version: "v1.0.0"},
+		},
+	})
+	if err := m.ResurrectOrphan(context.Background(), id); err != nil {
+		t.Fatalf("expected nil for registered running sidecar, got %v", err)
+	}
+}
+
+func TestResurrectOrphan_ChecksumFail(t *testing.T) {
+	m := NewManager("addr", registry.New(), nil)
+	cacheRoot := t.TempDir()
+	m.cacheDir = cacheRoot
+	repo := "https://github.com/Muxcore-Media/orphan-badsum"
+	id := ModuleIDFromRepo(repo)
+	binPath := filepath.Join(cacheRoot, id, "v1.0.0", "muxcore-module")
+	if err := os.MkdirAll(filepath.Dir(binPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binPath, []byte("binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m.SetTag(&contracts.TagDefinition{
+		Modules: []contracts.TagModule{
+			{Repo: repo, Version: "v1.0.0", Checksum: "0000000000000000000000000000000000000000000000000000000000000000"},
+		},
+	})
+	err := m.ResurrectOrphan(context.Background(), id)
+	if err == nil {
+		t.Fatal("expected checksum failure")
+	}
+}
+
+func TestResurrectPendingOrphans_SkipsRunningProcess(t *testing.T) {
+	m := NewManager("addr", nil, nil)
+	repo := "https://github.com/Muxcore-Media/pending-run"
+	id := ModuleIDFromRepo(repo)
+	m.SetTag(&contracts.TagDefinition{
+		Modules: []contracts.TagModule{{Repo: repo, Version: "v1.0.0"}},
+	})
+	m.processes[id] = exec.Command("true")
+	m.ResurrectPendingOrphans(context.Background())
+}
+
+func TestResurrectPendingOrphans_SkipsRegisteredRunning(t *testing.T) {
+	reg := registry.New()
+	repo := "https://github.com/Muxcore-Media/pending-reg"
+	id := ModuleIDFromRepo(repo)
+	if err := reg.Register(&stubLifecycleModule{
+		info: contracts.ModuleInfo{ID: id, Name: "Reg", Version: "1.0.0"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SetState(id, contracts.ModuleStateStarting); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SetState(id, contracts.ModuleStateRunning); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager("addr", reg, nil)
+	m.SetTag(&contracts.TagDefinition{
+		Modules: []contracts.TagModule{{Repo: repo, Version: "v1.0.0"}},
+	})
+	m.ResurrectPendingOrphans(context.Background())
+}
