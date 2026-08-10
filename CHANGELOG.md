@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `contracts.SettingsUpdater` + `sdk/go/module.RegisterSettings` / `SettingsHandlerFromProvider` for first-class admin settings mesh wiring.
+
 ### Changed
 - Make sidecar policy wait tunable; cover empty-registry fast path.
 - Cover muxcored management gRPC registration and HTTP/gRPC start/shutdown.
