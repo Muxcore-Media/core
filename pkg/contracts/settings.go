@@ -27,6 +27,15 @@ type SettingDef struct {
 // SettingsProvider is an optional interface modules implement to expose their
 // configuration to the admin UI. The admin UI discovers all modules that implement
 // this interface and renders their settings automatically.
+//
+// Prefer wiring via sdk/go/module.RegisterSettings so Settings / UpdateSetting
+// mesh methods are registered without hand-rolled SettingsHandler closures.
 type SettingsProvider interface {
 	Settings() []SettingDef
+}
+
+// SettingsUpdater is an optional companion to SettingsProvider for admin writes.
+// Unknown keys should return an error; masked secret no-ops may return nil.
+type SettingsUpdater interface {
+	UpdateSetting(key, value string) error
 }

@@ -1493,6 +1493,7 @@ func TestInterfaceComplianceCompileTime(t *testing.T) {
 	_ = func(CallPolicyProvider) {}
 	_ = func(InputValidator) {}
 	_ = func(SettingsProvider) {}
+	_ = func(SettingsUpdater) {}
 	_ = func(BackupProvider) {}
 	_ = func(Backupable) {}
 	_ = func(IdentityProvider) {}
