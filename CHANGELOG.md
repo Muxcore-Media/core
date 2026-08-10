@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Expand `module/mgr` resurrect/resolve tests (coverage ~76%).
 - Expand `internal/module` tests for health-check loop remediation (coverage).
 
 ## [v0.5.1] — 2026-08-10 — Staging mTLS bootstrap + SDK client dial
