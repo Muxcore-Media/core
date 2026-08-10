@@ -175,12 +175,12 @@ func waitForSidecarPolicies(
 	maxMsgBytes int,
 ) {
 	for _, discover := range []struct {
-		name string
 		fn   func() error
+		name string
 	}{
-		{"call.policy", func() error { return bootstrap.WireCallPolicy(reg, meshClient, storageGrpc, creds, maxMsgBytes) }},
-		{"publish.policy", func() error { return bootstrap.WirePublishPolicy(reg, bus, creds, maxMsgBytes) }},
-		{"auth", func() error { return bootstrap.WireAuth(reg, srv, authInterceptor, creds, maxMsgBytes) }},
+		{func() error { return bootstrap.WireCallPolicy(reg, meshClient, storageGrpc, creds, maxMsgBytes) }, "call.policy"},
+		{func() error { return bootstrap.WirePublishPolicy(reg, bus, creds, maxMsgBytes) }, "publish.policy"},
+		{func() error { return bootstrap.WireAuth(reg, srv, authInterceptor, creds, maxMsgBytes) }, "auth"},
 	} {
 		for i := 0; i < sidecarPolicyAttempts; i++ {
 			if err := discover.fn(); err != nil {
@@ -222,7 +222,8 @@ func awaitAndShutdown(
 
 	signal.Stop(sighupCh)
 
-	drainCtx, drainCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// Parent ctx is already cancelled; WithoutCancel keeps a live deadline for drain/stop.
+	drainCtx, drainCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer drainCancel()
 	if err := srv.Drain(drainCtx); err != nil {
 		slog.Error("api drain", "error", err)
@@ -230,14 +231,14 @@ func awaitAndShutdown(
 
 	grpcSrv.GracefulStop()
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer shutdownCancel()
 
 	watchCancel()
 	if err := workerPool.Shutdown(shutdownCtx); err != nil {
 		slog.Error("workerpool shutdown", "error", err)
 	}
-	bus.Close()
+	bus.Close() //nolint:contextcheck // MemoryBus.Close has no context parameter
 	if err := modMgr.StopAll(shutdownCtx); err != nil {
 		slog.Error("module stop", "error", err)
 	}
