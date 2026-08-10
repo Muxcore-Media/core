@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.5.3] — 2026-08-10 — media.import.failed event
+
+### Added
+- `contracts.EventImportFailed` (`media.import.failed`) + `ImportFailedPayload` for automation → notification wiring. Nested tag: `pkg/contracts/v0.5.3`.
+
 ## [v0.5.2] — 2026-08-10 — Settings mesh + chunked Storage.Put
 
 ### Fixed
