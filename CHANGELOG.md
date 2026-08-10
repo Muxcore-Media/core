@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Cover muxcored storage/HTTP/audit/module-manager init helpers.
 - Cover muxcored init/lifecycle helpers (flags, stores, policy wiring).
 - Expand `module/mgr` resurrect/resolve tests (coverage ~76%).
 - Expand `internal/module` tests for health-check loop remediation (coverage).
