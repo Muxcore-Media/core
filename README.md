@@ -75,6 +75,23 @@ JSON Schema for editor validation: [`muxcore.schema.json`](muxcore.schema.json)
 
 ---
 
+## Local / self-hosted `muxcored` image
+
+Dockerfile is at the repo root. Laptop path:
+
+```bash
+# Preferred: workspace helper (starts localhost:5000 registry when needed)
+../_mvp/local-registry.sh start
+./scripts/local-image.sh v0.5.4
+
+# Or: build/tag/push with docker|podman against an already-running local registry
+CONTAINER_RUNTIME=docker ./scripts/local-image.sh v0.5.4
+```
+
+Image default: `localhost:5000/muxcore/muxcored:<tag>`.
+
+---
+
 ## License
 
 GPL-3.0
