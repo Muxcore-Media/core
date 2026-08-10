@@ -7,19 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.5.1] — 2026-08-10 — Staging mTLS bootstrap + SDK client dial
+
 ### Fixed
 
 - Module SDK mTLS dial: register `--muxcore-tls-{cert,key,ca}` flags; load client certs when connecting (spawn already passed cert paths but dial ignored them)
 - Spawn writes `ca.crt` beside module certs and passes `--muxcore-tls-ca` so sidecars can verify the auto-CA server cert
-- Auto-mTLS bootstrap: when `grpc.mtls_enabled` is set without `cert_file`/`key_file`, create the internal CA first, issue a `muxcored` server cert (also used for HTTP when unset), and wire mTLS via `ca.crt` so staging cutover can start without pre-provisioned TLS files (`MTLSServerConfig` helper retained for tests)
+- Auto-mTLS bootstrap: when `grpc.mtls_enabled` is set without `cert_file`/`key_file`, create the internal CA first, issue a `muxcored` server cert (also used for HTTP when unset), and wire mTLS via `ca.crt`
 
 ### Changed
 
-- Further `cmd/muxcored` decomposition: flag/config/context setup and service init helpers moved to `init.go` (main orchestration stays in `main.go`; runtime lifecycle remains in `lifecycle.go`)
-- `internal/module/mgr` unit-test coverage raised (~61% → ~73%): SpawnWithWatchdog (+ fallback), BootstrapRegister success/error paths, Spawn with cert authority
-- `internal/module/mgr` unit-test coverage raised (~53% → ~60%): gRPC Register/Unregister paths, bootstrap-without-CA, RestartModule from stored binary, reconcileContracts with declarations
-- `internal/module/mgr` unit-test coverage raised (~44% → ~53%): Resolve cache/host/version paths, cert authority, resurrect/restart error paths, registration service wiring
-- Decompose `cmd/muxcored` startup: dry-run, policy/auth wiring, management gRPC registration, listener start, and shutdown moved to `lifecycle.go`
+- Further `cmd/muxcored` decomposition: `init.go` + `lifecycle.go`; `module/mgr` coverage raised (~44% → ~73%)
 
 ## [v0.5.0] — 2026-08-08 — Discovery allowlist + Members module list
 
