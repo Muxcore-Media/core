@@ -11,24 +11,17 @@
 //	    })
 //	}
 //
-// # CLI tool usage (client only, no registration)
-//
-//	conn, cleanup := modulesdk.Connect(modulesdk.ConnectConfig{
-//	    OnConnect: func(c *grpc.ClientConn) {
-//	        // use c to create service clients
-//	    },
-//	})
-//	defer cleanup()
-//
 // Config resolution priority:
 //  1. Explicit Config field
-//  2. Environment variable (MUXCORE_GRPC_ADDR, MUXCORE_MODULE_ID)
-//  3. CLI flag (--muxcore-mesh-addr, --muxcore-module-id)
+//  2. Environment variable (MUXCORE_GRPC_ADDR, MUXCORE_MODULE_ID, MUXCORE_TLS_*)
+//  3. CLI flag (--muxcore-mesh-addr, --muxcore-module-id, --muxcore-tls-*)
 //  4. Module.Info().ID (for module ID only)
 package module
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -39,6 +32,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
@@ -48,12 +42,34 @@ import (
 const (
 	envGRPCAddr = "MUXCORE_GRPC_ADDR"
 	envModuleID = "MUXCORE_MODULE_ID"
+	envTLSCert  = "MUXCORE_TLS_CERT"
+	envTLSKey   = "MUXCORE_TLS_KEY"
+	envTLSCA    = "MUXCORE_TLS_CA"
 
 	flagGRPCAddr = "muxcore-mesh-addr"
 	flagModuleID = "muxcore-module-id"
+	flagTLSCert  = "muxcore-tls-cert"
+	flagTLSKey   = "muxcore-tls-key"
+	flagTLSCA    = "muxcore-tls-ca"
 
 	defaultShutdownTimeout = 10 * time.Second
 )
+
+func init() {
+	// Register mesh/TLS flags so core-spawned modules accept --muxcore-* args
+	// without "flag provided but not defined". Safe if callers already defined them.
+	registerStringFlag(flagGRPCAddr, "", "MuxCore mesh gRPC address (host:port)")
+	registerStringFlag(flagModuleID, "", "MuxCore module ID")
+	registerStringFlag(flagTLSCert, "", "Client TLS certificate PEM path")
+	registerStringFlag(flagTLSKey, "", "Client TLS private key PEM path")
+	registerStringFlag(flagTLSCA, "", "CA certificate PEM path (verify core)")
+}
+
+func registerStringFlag(name, value, usage string) {
+	if flag.Lookup(name) == nil {
+		flag.String(name, value, usage)
+	}
+}
 
 // Config configures a sidecar module's lifecycle.
 type Config struct {
@@ -71,6 +87,15 @@ type Config struct {
 
 	// Insecure disables TLS. Use for development only.
 	Insecure bool
+
+	// TLSCertFile / TLSKeyFile are the client certificate for mTLS.
+	// If empty, reads MUXCORE_TLS_CERT / MUXCORE_TLS_KEY or --muxcore-tls-cert/key.
+	TLSCertFile string
+	TLSKeyFile  string
+
+	// TLSCAFile is the CA used to verify core's server certificate.
+	// If empty, reads MUXCORE_TLS_CA or --muxcore-tls-ca.
+	TLSCAFile string
 }
 
 // Run starts the module, connects to core, registers, and blocks until
@@ -89,7 +114,12 @@ func Run(cfg Config) error {
 		return fmt.Errorf("module: module ID is required — set %s or --%s", envModuleID, flagModuleID)
 	}
 
-	conn, err := dialGRPC(grpcAddr, cfg.Insecure)
+	conn, err := dialGRPC(grpcAddr, dialTLSConfig{
+		plaintext: cfg.Insecure,
+		certFile:  resolveString(cfg.TLSCertFile, envTLSCert, flagTLSCert, ""),
+		keyFile:   resolveString(cfg.TLSKeyFile, envTLSKey, flagTLSKey, ""),
+		caFile:    resolveString(cfg.TLSCAFile, envTLSCA, flagTLSCA, ""),
+	})
 	if err != nil {
 		return fmt.Errorf("module: connect to core at %s: %w", grpcAddr, err)
 	}
@@ -165,6 +195,10 @@ type ConnectConfig struct {
 
 	// Insecure disables TLS for development.
 	Insecure bool
+
+	TLSCertFile string
+	TLSKeyFile  string
+	TLSCAFile   string
 }
 
 // Connect opens a gRPC connection to core and returns it.
@@ -176,7 +210,12 @@ func Connect(cfg ConnectConfig) (*grpc.ClientConn, error) {
 	if grpcAddr == "" {
 		return nil, fmt.Errorf("module: core gRPC address is required — set %s or --%s", envGRPCAddr, flagGRPCAddr)
 	}
-	return dialGRPC(grpcAddr, cfg.Insecure)
+	return dialGRPC(grpcAddr, dialTLSConfig{
+		plaintext: cfg.Insecure,
+		certFile:  resolveString(cfg.TLSCertFile, envTLSCert, flagTLSCert, ""),
+		keyFile:   resolveString(cfg.TLSKeyFile, envTLSKey, flagTLSKey, ""),
+		caFile:    resolveString(cfg.TLSCAFile, envTLSCA, flagTLSCA, ""),
+	})
 }
 
 // WaitForShutdown blocks until SIGTERM or SIGINT, then returns the signal.
@@ -185,12 +224,52 @@ func WaitForShutdown() os.Signal {
 	return waitForSignal()
 }
 
-func dialGRPC(addr string, plaintext bool) (*grpc.ClientConn, error) {
+type dialTLSConfig struct {
+	plaintext bool
+	certFile  string
+	keyFile   string
+	caFile    string
+}
+
+func dialGRPC(addr string, tlsCfg dialTLSConfig) (*grpc.ClientConn, error) {
 	var opts []grpc.DialOption
-	if plaintext {
+	if tlsCfg.plaintext {
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	} else {
+		creds, err := loadClientTLS(tlsCfg.certFile, tlsCfg.keyFile, tlsCfg.caFile)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, grpc.WithTransportCredentials(creds))
 	}
 	return grpc.NewClient(addr, opts...)
+}
+
+func loadClientTLS(certFile, keyFile, caFile string) (credentials.TransportCredentials, error) {
+	if certFile == "" || keyFile == "" {
+		return nil, fmt.Errorf("TLS required — set %s/%s (or --%s/--%s), or enable insecure with MUXCORE_INSECURE_DISABLE_TLS=true",
+			envTLSCert, envTLSKey, flagTLSCert, flagTLSKey)
+	}
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load client TLS cert/key: %w", err)
+	}
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}
+	if caFile != "" {
+		pemBytes, err := os.ReadFile(caFile) //nolint:gosec // path from operator config
+		if err != nil {
+			return nil, fmt.Errorf("read TLS CA: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pemBytes) {
+			return nil, fmt.Errorf("parse TLS CA from %q", caFile)
+		}
+		tlsConfig.RootCAs = pool
+	}
+	return credentials.NewTLS(tlsConfig), nil
 }
 
 func waitForSignal() os.Signal {
