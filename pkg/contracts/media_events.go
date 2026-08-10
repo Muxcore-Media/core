@@ -16,6 +16,7 @@ const (
 	EventTVEpisodeFileAdded   = "media.tv.episode.file.added"
 	EventTVEpisodeFileRemoved = "media.tv.episode.file.removed"
 	EventFileImported         = "media.file.imported"
+	EventImportFailed         = "media.import.failed"
 	EventDownloadStarted      = "download.started"
 	EventDownloadCompleted    = "download.completed"
 	EventDownloadFailed       = "download.failed"
@@ -71,6 +72,14 @@ type FileImportedPayload struct {
 	StorageKey      string  `json:"storage_key,omitempty"`
 	DestinationPath string  `json:"destination_path,omitempty"`
 	Quality         string  `json:"quality,omitempty"`
+}
+
+// ImportFailedPayload is published when post-download import cannot complete
+// (scanner missing, ImportPath error, etc.).
+type ImportFailedPayload struct {
+	DownloadID string `json:"download_id,omitempty"`
+	Path       string `json:"path,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 type DownloadEventFile struct {
