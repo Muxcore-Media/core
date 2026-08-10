@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Python module SDK scaffold (`sdk/python` **v0.1.0**): `muxcore.sdk.run` registers via `ModuleRegistration`, mirrors Go lifecycle (TLS/insecure + signal shutdown). Nested tag: `sdk/python/v0.1.0`.
+- TypeScript module SDK scaffold (`sdk/typescript` **v0.1.0**): `@muxcore-media/sdk` `run()` with `@grpc/grpc-js` + proto-loader. Nested tag: `sdk/typescript/v0.1.0`.
 
 ## [v0.5.4] — 2026-08-10 — remote storage sidecar wiring
 
