@@ -422,3 +422,22 @@ func TestStartHTTPAndGRPCAndShutdown(t *testing.T) {
 	}
 	_ = store
 }
+
+func TestWaitForSidecarPolicies_EmptyFast(t *testing.T) {
+	oldA, oldS := sidecarPolicyAttempts, sidecarPolicySleep
+	sidecarPolicyAttempts = 1
+	sidecarPolicySleep = 0
+	t.Cleanup(func() {
+		sidecarPolicyAttempts = oldA
+		sidecarPolicySleep = oldS
+	})
+
+	reg := registry.New()
+	meshClient := grpcmesh.NewClient(grpcmesh.NewServer())
+	bus := events.NewMemoryBus()
+	srv := api.NewServer(":0", "", "")
+	auth := grpcmesh.NewAuthInterceptor()
+	storageGrpc := grpcmesh.NewStorageServer(nil)
+	waitForSidecarPolicies(reg, meshClient, storageGrpc, bus, srv, auth, nil, 32<<20)
+}
+

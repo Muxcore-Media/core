@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Make sidecar policy wait tunable; cover empty-registry fast path.
 - Cover muxcored management gRPC registration and HTTP/gRPC start/shutdown.
 - Cover muxcored `initGRPCMesh` auto-mTLS and insecure boot paths.
 - Cover muxcored storage/HTTP/audit/module-manager init helpers.
