@@ -46,6 +46,22 @@ func RegisterMeshHandler(srv *grpc.Server, moduleID string, h SettingsHandler) {
 	})
 }
 
+// SettingsHandlerFromProvider builds a SettingsHandler from a SettingsProvider,
+// wiring UpdateSetting when the provider also implements SettingsUpdater.
+func SettingsHandlerFromProvider(provider contracts.SettingsProvider) SettingsHandler {
+	h := SettingsHandler{List: provider.Settings}
+	if u, ok := provider.(contracts.SettingsUpdater); ok {
+		h.Update = u.UpdateSetting
+	}
+	return h
+}
+
+// RegisterSettings wires a contracts.SettingsProvider (and optional SettingsUpdater)
+// onto the module mesh. Prefer this over constructing SettingsHandler by hand.
+func RegisterSettings(srv *grpc.Server, moduleID string, provider contracts.SettingsProvider) {
+	RegisterMeshHandler(srv, moduleID, SettingsHandlerFromProvider(provider))
+}
+
 // MaskSecret returns a fixed mask for non-empty secrets so UIs never echo raw values.
 func MaskSecret(v string) string {
 	if strings.TrimSpace(v) == "" {
