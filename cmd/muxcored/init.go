@@ -244,7 +244,6 @@ func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus
 
 	authInterceptor = grpcmesh.NewAuthInterceptor()
 
-
 	grpcOpts = append(grpcOpts,
 		grpc.ChainUnaryInterceptor(
 			bootstrap.GRPCLoggingInterceptor,

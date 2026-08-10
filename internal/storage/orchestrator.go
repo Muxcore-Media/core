@@ -115,9 +115,11 @@ func (o *Orchestrator) SetSidecarDialer(d SidecarDialer) {
 // (or role "storage") via their HTTP/gRPC announce address.
 func (o *Orchestrator) DiscoverStorage() error {
 	seen := map[string]struct{}{}
-	var entries []contracts.ModuleEntry
-	entries = append(entries, o.registry.FindByRole("storage")...)
-	entries = append(entries, o.registry.FindByCapability(contracts.CapabilityStorage)...)
+	byRole := o.registry.FindByRole("storage")
+	byCap := o.registry.FindByCapability(contracts.CapabilityStorage)
+	entries := make([]contracts.ModuleEntry, 0, len(byRole)+len(byCap))
+	entries = append(entries, byRole...)
+	entries = append(entries, byCap...)
 	for _, entry := range entries {
 		id := entry.Info.ID
 		if id == "" {

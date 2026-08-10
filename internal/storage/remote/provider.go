@@ -5,6 +5,7 @@ package remote
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -20,6 +21,8 @@ import (
 const putChunkSize = 1 << 20 // 1 MiB
 
 // Provider implements contracts.StorageProvider (+ Streamable) over gRPC.
+//
+//nolint:govet // fieldalignment: id kept first for readability
 type Provider struct {
 	id     string
 	client storagev1.StorageServiceClient
@@ -66,11 +69,11 @@ func (p *Provider) Put(ctx context.Context, key string, data io.Reader, size int
 				}
 				first = false
 			}
-			if err := stream.Send(req); err != nil {
-				return fmt.Errorf("remote storage put send: %w", err)
+			if sendErr := stream.Send(req); sendErr != nil {
+				return fmt.Errorf("remote storage put send: %w", sendErr)
 			}
 		}
-		if readErr == io.EOF {
+		if errors.Is(readErr, io.EOF) {
 			break
 		}
 		if readErr != nil {
@@ -78,8 +81,8 @@ func (p *Provider) Put(ctx context.Context, key string, data io.Reader, size int
 		}
 	}
 	if first {
-		if err := stream.Send(&storagev1.PutRequest{Key: key, TotalSize: size}); err != nil {
-			return fmt.Errorf("remote storage put empty: %w", err)
+		if sendErr := stream.Send(&storagev1.PutRequest{Key: key, TotalSize: size}); sendErr != nil {
+			return fmt.Errorf("remote storage put empty: %w", sendErr)
 		}
 	}
 	_, err = stream.CloseAndRecv()
@@ -92,7 +95,7 @@ func (p *Provider) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 		return nil, mapErr(err)
 	}
 	first, err := stream.Recv()
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		return io.NopCloser(bytes.NewReader(nil)), nil
 	}
 	if err != nil {
@@ -105,6 +108,7 @@ type chunkStream interface {
 	Recv() (*storagev1.GetResponse, error)
 }
 
+//nolint:govet // fieldalignment: first buffer kept ahead of stream for hot path
 type streamReader struct {
 	first  []byte
 	stream chunkStream
@@ -121,7 +125,7 @@ func (r *streamReader) Read(p []byte) (int, error) {
 		return n, nil
 	}
 	chunk, err := r.stream.Recv()
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		r.err = io.EOF
 		return 0, io.EOF
 	}
@@ -143,7 +147,7 @@ func (p *Provider) Stream(ctx context.Context, key string, offset, length int64)
 		return nil, mapErr(err)
 	}
 	first, err := stream.Recv()
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		return io.NopCloser(bytes.NewReader(nil)), nil
 	}
 	if err != nil {
@@ -162,7 +166,7 @@ func (p *Provider) Move(ctx context.Context, src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	body, err := io.ReadAll(rc)
 	if err != nil {
 		return err
