@@ -204,7 +204,7 @@ func TestInitStorageAndHTTPAndAuditAndModuleMgr(t *testing.T) {
 	t.Setenv("MUXCORE_METRICS_ENABLE", "true")
 	t.Setenv("MUXCORE_DEBUG_ENABLE", "1")
 
-	store, watchCancel := initStorage(ctx, cfg, reg, bus)
+	store, watchCancel := initStorage(ctx, cfg, reg, bus, nil, 0)
 	if store == nil || watchCancel == nil {
 		t.Fatal("initStorage")
 	}

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.5.4] — 2026-08-10 — remote storage sidecar wiring
+
+### Added
+- `contracts.CapabilityStorage` (`storage`) for registry discovery of storage sidecars.
+- `internal/storage/remote` gRPC `StorageProvider` (+ `Streamable`) client for `muxcore.storage.v1.StorageService`.
+- Storage orchestrator `SidecarDialer` / `SetSidecarDialer`: discover and dial modules with role/capability `storage` via announce addr (e.g. `storage-s3`).
+- muxcored wires the dialer through `bootstrap.DialSidecar` (same pattern as auth/policy sidecars).
+
+Nested tag: `pkg/contracts/v0.5.4`.
+
 ## [v0.5.3] — 2026-08-10 — media.import.failed event
 
 ### Added
