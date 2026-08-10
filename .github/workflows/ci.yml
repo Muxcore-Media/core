@@ -130,7 +130,7 @@ jobs:
             printf "OK: coverage %.1f%% meets threshold 60%%\n", pct;
           }'
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4 # v4.6.2
+        uses: actions/upload-artifact@v7 # v4.6.2
         with:
           name: coverage
           path: coverage.out
@@ -222,7 +222,7 @@ jobs:
             echo "COSIGN_PRIVATE_KEY not set — skipping attestation"
           fi
       - name: Upload provenance
-        uses: actions/upload-artifact@v4 # v4.6.2
+        uses: actions/upload-artifact@v7 # v4.6.2
         with:
           name: slsa-provenance
           path: |
