@@ -477,9 +477,14 @@ func (m *Manager) Spawn(ctx context.Context, bin *ModuleBinary) error {
 		if certErr != nil {
 			slog.Error("issue cert for module spawn", "id", bin.ID, "error", certErr)
 		} else {
+			caPath := filepath.Join(tlsCertDir, "ca.crt")
+			if writeErr := os.WriteFile(caPath, ca.CACertPEM(), 0o600); writeErr != nil {
+				slog.Warn("write CA cert for spawn", "id", bin.ID, "error", writeErr)
+			}
 			args = append(args,
 				"--muxcore-tls-cert", certPath,
 				"--muxcore-tls-key", keyPath,
+				"--muxcore-tls-ca", caPath,
 			)
 		}
 	}
@@ -649,6 +654,9 @@ func (m *Manager) watchProcess(ctx context.Context, cmd *exec.Cmd, bin *ModuleBi
 			"--muxcore-tls-cert", filepath.Join(certDir, "module.crt"),
 			"--muxcore-tls-key", filepath.Join(certDir, "module.key"),
 		)
+		if _, caStat := os.Stat(filepath.Join(certDir, "ca.crt")); caStat == nil {
+			baseArgs = append(baseArgs, "--muxcore-tls-ca", filepath.Join(certDir, "ca.crt"))
+		}
 	}
 
 	for attempt := 0; ; attempt++ {
