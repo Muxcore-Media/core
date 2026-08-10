@@ -8,10 +8,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
-
-	"google.golang.org/grpc"
 	"time"
 
+	"google.golang.org/grpc"
+
+	"github.com/Muxcore-Media/core/internal/events"
+	modulemgr "github.com/Muxcore-Media/core/internal/module"
+	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	modulev1 "github.com/Muxcore-Media/core/proto/gen/muxcore/module/v1"
 )
@@ -1175,4 +1178,168 @@ func TestExecCommandRunner_CommandContext(t *testing.T) {
 			t.Fatalf("unexpected cmd: %#v", cmd)
 		}
 	}
+}
+
+func testLifecycleMgr(t *testing.T) (*Manager, *registry.Registry, *modulemgr.Manager) {
+	t.Helper()
+	reg := registry.New()
+	bus := events.NewMemoryBus()
+	life := modulemgr.NewManager(reg, bus)
+	m := NewManager("127.0.0.1:9090", reg, life)
+	return m, reg, life
+}
+
+func TestRegistrationServer_RegisterAndUnregister(t *testing.T) {
+	m, reg, _ := testLifecycleMgr(t)
+	srv := &registrationServer{mgr: m}
+
+	hookCalled := false
+	m.PostRegisterHook = func(id string, caps []string) {
+		hookCalled = true
+		if id != "reg-mod" {
+			t.Errorf("hook id=%s", id)
+		}
+	}
+
+	resp, err := srv.Register(context.Background(), &modulev1.RegisterRequest{
+		ModuleId: "reg-mod",
+		ModuleInfo: &modulev1.ModuleInfo{
+			Id:           "reg-mod",
+			Name:         "Reg Mod",
+			Version:      "1.2.3",
+			Capabilities: []string{"test.cap"},
+			Roles:        []string{"test"},
+			HttpAddr:     ":1234",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Accepted {
+		t.Fatalf("not accepted: %s", resp.Error)
+	}
+	if resp.MeshAddr != "127.0.0.1:9090" {
+		t.Errorf("mesh addr %q", resp.MeshAddr)
+	}
+	if !hookCalled {
+		t.Fatal("expected PostRegisterHook")
+	}
+	if _, err := reg.Get("reg-mod"); err != nil {
+		t.Fatal("module not in registry")
+	}
+	m.mu.Lock()
+	_, tracked := m.proxies["reg-mod"]
+	m.mu.Unlock()
+	if !tracked {
+		t.Fatal("proxy not tracked")
+	}
+
+	uresp, err := srv.Unregister(context.Background(), &modulev1.UnregisterRequest{ModuleId: "reg-mod"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !uresp.Acknowledged {
+		t.Fatal("unregister not acknowledged")
+	}
+	if _, err := reg.Get("reg-mod"); err == nil {
+		t.Fatal("module still in registry")
+	}
+}
+
+func TestRegistrationServer_RegisterDefaultsAndMissingID(t *testing.T) {
+	m, _, _ := testLifecycleMgr(t)
+	srv := &registrationServer{mgr: m}
+
+	resp, err := srv.Register(context.Background(), &modulev1.RegisterRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Accepted {
+		t.Fatal("expected reject without module id")
+	}
+
+	resp, err = srv.Register(context.Background(), &modulev1.RegisterRequest{
+		ModuleId: "bare-id",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Accepted {
+		t.Fatalf("expected accept with ModuleId only: %s", resp.Error)
+	}
+}
+
+func TestRegistrationServer_UnregisterMissing(t *testing.T) {
+	m, _, _ := testLifecycleMgr(t)
+	srv := &registrationServer{mgr: m}
+	resp, err := srv.Unregister(context.Background(), &modulev1.UnregisterRequest{ModuleId: "nope"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Acknowledged {
+		t.Fatal("expected not acknowledged for missing module")
+	}
+}
+
+func TestRegistrationServer_BootstrapWithoutCA(t *testing.T) {
+	m, _, _ := testLifecycleMgr(t)
+	srv := &registrationServer{mgr: m}
+	resp, err := srv.BootstrapRegister(context.Background(), &modulev1.BootstrapRegisterRequest{
+		ModuleId: "m1",
+		Token:    "tok",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Accepted {
+		t.Fatal("expected reject without cert authority")
+	}
+	if resp.Error == "" {
+		t.Fatal("expected error message")
+	}
+}
+
+func TestRestartModule_RespawnsFromBinary(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	m := NewManager("addr", nil, nil)
+	m.SetCommandRunner(spawnMockRunner{})
+
+	bin := &ModuleBinary{
+		ID:            "restart-me",
+		Version:       "v1.0.0",
+		Path:          "/fake/path",
+		RestartPolicy: RestartNever,
+	}
+	m.mu.Lock()
+	m.binaries[bin.ID] = bin
+	m.mu.Unlock()
+
+	if err := m.RestartModule(ctx, bin.ID); err != nil {
+		t.Fatalf("RestartModule: %v", err)
+	}
+	if got := m.SpawnCount(); got != 1 {
+		t.Errorf("SpawnCount=%d want 1", got)
+	}
+
+	stopCtx, stopCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer stopCancel()
+	m.StopAll(stopCtx)
+}
+
+func TestReconcileContracts_WithContracts(t *testing.T) {
+	dir := t.TempDir()
+	mux := filepath.Join(dir, "muxcore.json")
+	content := `{
+  "contracts": [
+    {"repo": "github.com/Muxcore-Media/core/pkg/contracts", "interface": "Module", "version": "v0.4.0"}
+  ]
+}`
+	if err := os.WriteFile(mux, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager("addr", nil, nil)
+	// Should not panic; may warn if reconciler cannot resolve remotely.
+	_ = m.reconcileContracts(dir)
 }
