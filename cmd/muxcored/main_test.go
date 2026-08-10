@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/Muxcore-Media/core/internal/bootstrap"
@@ -155,5 +156,19 @@ func TestDevTLSSkipCheck(t *testing.T) {
 	t.Setenv("MUXCORE_DEV_TLS_SKIP", "false")
 	if bootstrap.DevTLSSkipCheck() {
 		t.Error("expected false when both vars are 'false'")
+	}
+}
+
+func TestLoadConfig_MissingUsesDefaults(t *testing.T) {
+	t.Setenv("MUXCORE_CONFIG", filepath.Join(t.TempDir(), "no-such-muxcore.json"))
+	cfg, path := loadConfig()
+	if cfg == nil {
+		t.Fatal("expected default config")
+	}
+	if path == "" {
+		t.Fatal("expected config path")
+	}
+	if cfg.Server.Addr == "" {
+		t.Fatal("expected default server addr")
 	}
 }
