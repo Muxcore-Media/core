@@ -479,29 +479,80 @@ type StorageClient struct {
 	raw storagev1.StorageServiceClient
 }
 
-// Put uploads an object. Reads all of r before sending.
+// putChunkSize is well under the default 32 MiB gRPC message limit so large
+// library files can stream without ResourceExhausted.
+const putChunkSize = 1 << 20 // 1 MiB
+
+// Put uploads an object as a chunked client stream (proto: first frame has
+// key + total_size, subsequent frames carry body chunks).
 func (s *StorageClient) Put(ctx context.Context, key string, r io.Reader) error {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return fmt.Errorf("storage.Put: read: %w", err)
-	}
+	totalSize, r := sizedReader(r)
 
 	stream, err := s.raw.Put(ctx)
 	if err != nil {
 		return fmt.Errorf("storage.Put: open stream: %w", err)
 	}
 
-	// Send header chunk with metadata.
-	if err := stream.Send(&storagev1.PutRequest{
-		Key:       key,
-		Chunk:     data,
-		TotalSize: int64(len(data)),
-	}); err != nil {
-		return fmt.Errorf("storage.Put: send: %w", err)
+	buf := make([]byte, putChunkSize)
+	first := true
+	for {
+		n, readErr := r.Read(buf)
+		if n > 0 {
+			req := &storagev1.PutRequest{Chunk: append([]byte(nil), buf[:n]...)}
+			if first {
+				req.Key = key
+				req.TotalSize = totalSize
+				first = false
+			}
+			if err := stream.Send(req); err != nil {
+				return fmt.Errorf("storage.Put: send: %w", err)
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return fmt.Errorf("storage.Put: read: %w", readErr)
+		}
+	}
+	if first {
+		// Empty object: still announce key/size.
+		if err := stream.Send(&storagev1.PutRequest{Key: key, TotalSize: totalSize}); err != nil {
+			return fmt.Errorf("storage.Put: send: %w", err)
+		}
 	}
 
 	_, err = stream.CloseAndRecv()
 	return err
+}
+
+// sizedReader returns a known size when the reader supports Stat or Seek.
+// Otherwise totalSize is 0 (unknown) and the original reader is returned.
+func sizedReader(r io.Reader) (int64, io.Reader) {
+	type stater interface {
+		Stat() (os.FileInfo, error)
+	}
+	if s, ok := r.(stater); ok {
+		if fi, err := s.Stat(); err == nil {
+			return fi.Size(), r
+		}
+	}
+	if sk, ok := r.(io.Seeker); ok {
+		cur, err := sk.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, r
+		}
+		end, err := sk.Seek(0, io.SeekEnd)
+		if err != nil {
+			_, _ = sk.Seek(cur, io.SeekStart)
+			return 0, r
+		}
+		_, _ = sk.Seek(cur, io.SeekStart)
+		if end >= cur {
+			return end - cur, r
+		}
+	}
+	return 0, r
 }
 
 // Get downloads an object and returns it as a ReadCloser.
