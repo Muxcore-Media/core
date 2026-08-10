@@ -43,6 +43,8 @@ type sub struct { //nolint:govet // struct field alignment is acceptable
 
 	// cancel for the subscriber worker goroutine lifecycle.
 	cancel context.CancelFunc
+	// done is closed when the subscriber worker exits.
+	done chan struct{}
 
 	// dropped counts events dropped due to full channel.
 	dropped atomic.Int64
@@ -105,9 +107,15 @@ func (b *MemoryBus) Close() {
 	b.wal = nil
 	b.mu.Unlock()
 
-	// Drain phase: process remaining events in subscriber channels before
-	// cancelling workers. Gives in-flight events a best-effort chance at
-	// delivery. Uses a short deadline to avoid blocking shutdown.
+	// Stop workers first so only Close drains remaining channel events
+	// (avoids racing the worker's channel receive / dropping dequeued events).
+	for _, s := range subs {
+		s.cancel()
+	}
+	for _, s := range subs {
+		<-s.done
+	}
+
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer drainCancel()
 	var wg sync.WaitGroup
@@ -142,11 +150,6 @@ func (b *MemoryBus) Close() {
 		}(s)
 	}
 	wg.Wait()
-
-	// Cancel subscriber worker goroutines after drain.
-	for _, s := range subs {
-		s.cancel()
-	}
 
 	// Close the WAL to flush buffered writes.
 	if wal != nil {
@@ -358,6 +361,7 @@ func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType str
 		moduleID:  moduleID,
 		ch:        make(chan contracts.Event, subscriberBufferSize),
 		cancel:    workerCancel,
+		done:      make(chan struct{}),
 	}
 
 	// Start the dedicated worker goroutine for this subscriber.
@@ -386,6 +390,7 @@ func (b *MemoryBus) subscribeInternal(_ context.Context, moduleID, eventType str
 // Each handler invocation gets a timeout context. When the subscriber is
 // removed (Unsubscribe/UnsubscribeAll), the worker's context is cancelled.
 func (b *MemoryBus) subscriberWorker(ctx context.Context, s *sub, timeout time.Duration) {
+	defer close(s.done)
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("subscriber worker panic recovered",
@@ -406,6 +411,13 @@ func (b *MemoryBus) subscriberWorker(ctx context.Context, s *sub, timeout time.D
 			select {
 			case b.sem <- struct{}{}:
 			case <-ctx.Done():
+				// Event already dequeued — leave it for Close drain (do not drop).
+				select {
+				case s.ch <- event:
+				default:
+					// Channel full: deliver inline so the event is not lost.
+					b.deliverEvent(context.WithoutCancel(ctx), s, event, timeout)
+				}
 				return
 			}
 
@@ -444,6 +456,26 @@ func (b *MemoryBus) subscriberWorker(ctx context.Context, s *sub, timeout time.D
 				}
 			}()
 		}
+	}
+}
+
+func (b *MemoryBus) deliverEvent(ctx context.Context, s *sub, event contracts.Event, timeout time.Duration) {
+	start := time.Now()
+	handlerCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if event.TraceID != "" {
+		handlerCtx = trace.WithTraceID(handlerCtx, event.TraceID)
+	}
+	err := s.handler(handlerCtx, event)
+	s.processed.Add(1)
+	s.totalLatencyNs.Add(int64(time.Since(start)))
+	if err != nil {
+		slog.Error("event handler error",
+			"type", event.Type,
+			"id", event.ID,
+			"module_id", s.moduleID,
+			"error", err,
+		)
 	}
 }
 
