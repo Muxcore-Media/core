@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- SDK `Storage.Put` streams 1 MiB chunks instead of one giant message (avoids gRPC ResourceExhausted on large media imports).
+
 ### Added
 - `contracts.SettingsUpdater` + `sdk/go/module.RegisterSettings` / `SettingsHandlerFromProvider` for first-class admin settings mesh wiring.
 
