@@ -7,11 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.5.2] — 2026-08-10 — Settings mesh + chunked Storage.Put
+
 ### Fixed
-- SDK `Storage.Put` streams 1 MiB chunks instead of one giant message (avoids gRPC ResourceExhausted on large media imports).
+- SDK `Storage.Put` streams 1 MiB chunks instead of one giant message (avoids gRPC ResourceExhausted on large media imports). Nested tag: `sdk/go/client/v0.5.2`.
 
 ### Added
-- `contracts.SettingsUpdater` + `sdk/go/module.RegisterSettings` / `SettingsHandlerFromProvider` for first-class admin settings mesh wiring.
+- `contracts.SettingsUpdater` + `sdk/go/module.RegisterSettings` / `SettingsHandlerFromProvider` for first-class admin settings mesh wiring. Nested tags: `pkg/contracts/v0.5.2`, `sdk/go/module/v0.5.2`.
 
 ### Changed
 - Make sidecar policy wait tunable; cover empty-registry fast path.
