@@ -82,8 +82,8 @@ signs:
   - cmd: cosign
     signature: "${artifact}.sig"
     args:
+      # No --yes: runner cosign may be <2.x (unknown flag). Non-interactive via env key.
       - sign-blob
-      - "--yes"
       - "--tlog-upload=false"
       - "--key=env://COSIGN_PRIVATE_KEY"
       - "--output-signature=${signature}"
