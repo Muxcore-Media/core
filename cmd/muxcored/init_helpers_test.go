@@ -266,3 +266,72 @@ func TestInitEventBus_WithWAL(t *testing.T) {
 		t.Fatal("bus")
 	}
 }
+
+func TestInitGRPCMesh_AutoMTLS(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := config.Default()
+	cfg.GRPC.Addr = ":0"
+	cfg.Server.Addr = ":0"
+	cfg.GRPC.MTLSEnabled = true
+	cfg.GRPC.CertFile = ""
+	cfg.GRPC.KeyFile = ""
+	cfg.GRPC.CACertDir = t.TempDir()
+	cfg.GRPC.MaxMessageSizeMB = 0 // exercise default 32MB branch
+
+	bus := events.NewMemoryBus()
+	grpcSrv, meshClient, discovery, pool, reg, creds, auth, nodeID, cluster, certAuth := initGRPCMesh(ctx, cfg, bus)
+	if grpcSrv == nil || meshClient == nil || discovery == nil || pool == nil || reg == nil {
+		t.Fatal("expected mesh components")
+	}
+	if creds == nil {
+		t.Fatal("expected TLS creds")
+	}
+	if auth == nil || cluster == nil || certAuth == nil {
+		t.Fatal("expected auth/cluster/ca")
+	}
+	if nodeID == "" {
+		t.Fatal("expected node id")
+	}
+	if cfg.GRPC.CertFile == "" || cfg.GRPC.KeyFile == "" || cfg.GRPC.CACertFile == "" {
+		t.Fatal("expected auto-issued cert paths on cfg")
+	}
+	if _, err := os.Stat(cfg.GRPC.CertFile); err != nil {
+		t.Fatalf("server cert missing: %v", err)
+	}
+	if cfg.Server.CertFile == "" {
+		t.Fatal("expected HTTP cert filled from auto CA")
+	}
+	_ = cluster.Stop(ctx)
+	grpcSrv.Stop()
+}
+
+func TestInitGRPCMesh_InsecureDevSkip(t *testing.T) {
+	t.Setenv("MUXCORE_DEV_TLS_SKIP", "true")
+	t.Setenv("MUXCORE_INSECURE_DISABLE_TLS", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := config.Default()
+	cfg.GRPC.Addr = ":0"
+	cfg.Server.Addr = ":0"
+	cfg.GRPC.MTLSEnabled = false
+	cfg.GRPC.CertFile = ""
+	cfg.GRPC.KeyFile = ""
+	cfg.GRPC.CACertDir = ""
+
+	bus := events.NewMemoryBus()
+	grpcSrv, _, _, _, _, creds, _, _, cluster, certAuth := initGRPCMesh(ctx, cfg, bus)
+	if grpcSrv == nil {
+		t.Fatal("grpc server")
+	}
+	if creds != nil {
+		t.Fatal("expected nil creds in insecure mode")
+	}
+	if certAuth != nil {
+		t.Fatal("expected no CA without mtls/ca dir")
+	}
+	_ = cluster.Stop(ctx)
+	grpcSrv.Stop()
+}

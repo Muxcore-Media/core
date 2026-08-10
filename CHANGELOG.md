@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Cover muxcored `initGRPCMesh` auto-mTLS and insecure boot paths.
 - Cover muxcored storage/HTTP/audit/module-manager init helpers.
 - Cover muxcored init/lifecycle helpers (flags, stores, policy wiring).
 - Expand `module/mgr` resurrect/resolve tests (coverage ~76%).
