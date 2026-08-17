@@ -37,7 +37,7 @@ jobs:
 
       # Runner may ship cosign <2.x (no --yes); goreleaser-action verify-blob needs 2.x.
       - name: Install cosign 2.x
-        uses: sigstore/cosign-installer@v3.8.2
+        uses: sigstore/cosign-installer@v4.1.2
         with:
           cosign-release: v2.4.3
 
