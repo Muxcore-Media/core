@@ -134,6 +134,8 @@ func (s *SpoolServer) FetchTag(ctx context.Context, req *spoolv1.FetchTagRequest
 			Checksum:   tm.Checksum,
 			InstanceId: tm.InstanceID,
 			Config:     tm.Config,
+			Signature:  tm.Signature,
+			Publisher:  tm.Publisher,
 		}
 	}
 
@@ -227,6 +229,36 @@ func (s *SpoolServer) DeployTag(ctx context.Context, req *spoolv1.DeployTagReque
 			slog.Warn("deploy tag: checksum verification failed, skipping optional module",
 				"repo", tm.Repo, "error", err)
 			result.Error = fmt.Sprintf("checksum skipped: %v", err)
+			skipped++
+			results = append(results, result)
+			continue
+		}
+
+		if err := s.modMgr.VerifyPublisher(tm.Publisher); err != nil {
+			if tm.Required {
+				result.Error = fmt.Sprintf("publisher: %v", err)
+				failed++
+				results = append(results, result)
+				continue
+			}
+			slog.Warn("deploy tag: publisher verification failed, skipping optional module",
+				"repo", tm.Repo, "error", err)
+			result.Error = fmt.Sprintf("publisher skipped: %v", err)
+			skipped++
+			results = append(results, result)
+			continue
+		}
+
+		if err := s.modMgr.VerifySignature(bin, tm.Signature); err != nil {
+			if tm.Required {
+				result.Error = fmt.Sprintf("signature: %v", err)
+				failed++
+				results = append(results, result)
+				continue
+			}
+			slog.Warn("deploy tag: signature verification failed, skipping optional module",
+				"repo", tm.Repo, "error", err)
+			result.Error = fmt.Sprintf("signature skipped: %v", err)
 			skipped++
 			results = append(results, result)
 			continue

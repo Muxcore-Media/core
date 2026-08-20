@@ -8,6 +8,14 @@ type TagModule struct {
 	Version  string `json:"version"`
 	Required bool   `json:"required"`
 	Checksum string `json:"checksum,omitempty"`
+	// Signature is an optional hex/base64 ed25519 detached signature over the
+	// module artifact bytes. Sidecar files {artifact}.sig / {artifact}.minisig
+	// are also accepted when MUXCORE_SPOOL_REQUIRE_SIGNATURE=1.
+	Signature string `json:"signature,omitempty"`
+	// Publisher is an optional identity string for the module pin (marketplace
+	// trust). When MUXCORE_SPOOL_ALLOWED_PUBLISHERS is set, DeployTag/boot
+	// require a match.
+	Publisher string `json:"publisher,omitempty"`
 	// InstanceID differentiates multiple copies of the same module on one
 	// node. When set, the derived module ID becomes "{baseID}-{instanceID}"
 	// instead of just "{baseID}". Allows running two identical modules

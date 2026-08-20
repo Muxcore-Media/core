@@ -55,6 +55,7 @@ message AuthenticateResponse {
   repeated string roles = 8;
   repeated string permissions = 9;
   string error = 10;
+  string tenant_id = 11;
 }
 
 message ValidateRequest {
@@ -68,6 +69,7 @@ message ValidateResponse {
   repeated string roles = 4;
   repeated string permissions = 5;
   string error = 6;
+  string tenant_id = 7;
 }
 
 message RevokeRequest {
@@ -98,6 +100,7 @@ message ExtractIdentityResponse {
   string kind = 3;
   repeated string roles = 4;
   string error = 5;
+  string tenant_id = 6;
 }
 
 message EnableTOTPRequest {
@@ -162,6 +165,7 @@ message UserInfo {
   string username = 2;
   repeated string roles = 3;
   bool totp_enabled = 4;
+  string tenant_id = 5;
 }
 
 message ListUsersResponse {

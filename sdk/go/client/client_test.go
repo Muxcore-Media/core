@@ -1,14 +1,18 @@
 package client
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/Muxcore-Media/core/pkg/tenant"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 func TestDial_WithInsecure(t *testing.T) {
+	t.Setenv("TENANT_MODE", "")
+	t.Setenv("MUXCORE_TENANT_CLUSTER_MAP", "")
 	// grpc.NewClient doesn't eagerly connect, so this works without a server.
 	c, err := Dial("localhost:19999", WithInsecure())
 	if err != nil {
@@ -30,6 +34,24 @@ func TestDial_WithInsecure(t *testing.T) {
 	}
 	if c.Mesh == nil {
 		t.Error("expected Mesh client to be initialized")
+	}
+}
+
+func TestDialContext_TenantClusterRewrite(t *testing.T) {
+	tenant.ResetCachedRouter()
+	t.Cleanup(tenant.ResetCachedRouter)
+	t.Setenv("TENANT_MODE", "1")
+	t.Setenv("MUXCORE_TENANT_CLUSTER_MAP", `{"acme":"remote-core:19090"}`)
+	t.Setenv("MUXCORE_TENANT_CLUSTER_STRICT", "")
+	t.Setenv("MUXCORE_TENANT_ID", "")
+	ctx := tenant.WithID(context.Background(), "acme")
+	c, err := DialContext(ctx, "localhost:19999", WithInsecure())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if c.currentAddr != "remote-core:19090" {
+		t.Fatalf("expected rewritten addr, got %q", c.currentAddr)
 	}
 }
 

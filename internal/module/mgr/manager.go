@@ -25,6 +25,8 @@ import (
 	"github.com/Muxcore-Media/contracts-reconciler/reconciler"
 	modulemgr "github.com/Muxcore-Media/core/internal/module"
 	"github.com/Muxcore-Media/core/internal/registry"
+	"github.com/Muxcore-Media/core/internal/sandbox"
+	"github.com/Muxcore-Media/core/internal/spool"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	modulev1 "github.com/Muxcore-Media/core/proto/gen/muxcore/module/v1"
 	"google.golang.org/grpc"
@@ -139,6 +141,8 @@ type Manager struct {
 	restartCount     atomic.Int64
 	resolveCount     atomic.Int64
 	cmdRunner        CommandRunner
+	// sandboxRunner optionally wraps module spawn (gVisor/Firecracker). Default no-op.
+	sandboxRunner sandbox.Runner
 	// watchdogPath is the path to the muxcore-watchdog binary.
 	// When set, SpawnWithWatchdog launches this binary instead of the module
 	// directly, enabling automatic core failover for sidecar modules.
@@ -208,7 +212,19 @@ func NewManager(meshAddr string, reg *registry.Registry, modMgr *modulemgr.Manag
 		modMgr:            modMgr,
 		ScanPolicy:        DefaultScanPolicy,
 		cmdRunner:         execCommandRunner{},
+		sandboxRunner:     sandbox.FromEnv(),
 	}
+}
+
+// SetSandboxRunner overrides the module isolation runner (tests / ops).
+func (m *Manager) SetSandboxRunner(r sandbox.Runner) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r == nil {
+		m.sandboxRunner = sandbox.NoopRunner{}
+		return
+	}
+	m.sandboxRunner = r
 }
 
 // SetAllowedRepoHosts restricts module resolution to repos hosted on the given hosts.
@@ -285,6 +301,12 @@ func (m *Manager) ResurrectOrphan(ctx context.Context, moduleID string) error {
 	}
 	if err := m.VerifyChecksum(bin, tm.Checksum); err != nil {
 		return fmt.Errorf("checksum orphan %q: %w", moduleID, err)
+	}
+	if err := m.VerifyPublisher(tm.Publisher); err != nil {
+		return fmt.Errorf("publisher orphan %q: %w", moduleID, err)
+	}
+	if err := m.VerifySignature(bin, tm.Signature); err != nil {
+		return fmt.Errorf("signature orphan %q: %w", moduleID, err)
 	}
 	if err := m.Spawn(ctx, bin); err != nil {
 		return fmt.Errorf("spawn orphan %q: %w", moduleID, err)
@@ -494,6 +516,24 @@ func (m *Manager) Spawn(ctx context.Context, bin *ModuleBinary) error {
 	cmd.Env = os.Environ()
 	for k, v := range bin.Config {
 		cmd.Env = append(cmd.Env, "MUXCORE_CFG_"+k+"="+v)
+	}
+	runner := m.sandboxRunner
+	if runner == nil {
+		runner = sandbox.NoopRunner{}
+	}
+	wrapped, wrapErr := runner.Wrap(ctx, sandbox.Spec{
+		ModuleID: bin.ID,
+		BinPath:  bin.Path,
+		Args:     args,
+		Env:      cmd.Env,
+	})
+	if wrapErr != nil {
+		return fmt.Errorf("sandbox wrap %s: %w", bin.ID, wrapErr)
+	}
+	if wrapped.Mode != sandbox.ModeNone {
+		cmd = m.cmdRunner.CommandContext(ctx, wrapped.Path, wrapped.Args...) //nolint:gosec
+		cmd.Env = wrapped.Env
+		slog.Info("module spawn sandboxed", "id", bin.ID, "mode", wrapped.Mode, "runner", wrapped.Path)
 	}
 	// Prefix module output so it's distinguishable from core's own log files.
 	// In JSON log mode (MUXCORE_LOG_FORMAT=json) unprefixed text output from
@@ -826,6 +866,28 @@ func (m *Manager) VerifyChecksum(bin *ModuleBinary, expected string) error {
 		return fmt.Errorf("checksum mismatch for %s: expected %s, got %s", bin.ID, expected, actual)
 	}
 	slog.Info("module checksum verified", "id", bin.ID, "checksum", expected[:16]+"...")
+	return nil
+}
+
+// VerifyPublisher enforces MUXCORE_SPOOL_ALLOWED_PUBLISHERS when configured.
+func (m *Manager) VerifyPublisher(publisher string) error {
+	if err := spool.CheckPublisherAllowlist(publisher); err != nil {
+		return fmt.Errorf("publisher: %w", err)
+	}
+	return nil
+}
+
+// VerifySignature checks an optional ed25519 detached signature for the
+// module binary (inline TagModule.Signature or sidecar .sig/.minisig).
+// Controlled by MUXCORE_SPOOL_REQUIRE_SIGNATURE + MUXCORE_SPOOL_PUBLIC_KEY
+// and/or MUXCORE_SPOOL_TRUSTED_KEYS_DIR. Supports minisign hashed (ED) mode.
+func (m *Manager) VerifySignature(bin *ModuleBinary, inlineSignature string) error {
+	if bin == nil {
+		return fmt.Errorf("verify signature: module binary is nil")
+	}
+	if err := spool.VerifyArtifactSignature(bin.Path, inlineSignature); err != nil {
+		return fmt.Errorf("signature for %s: %w", bin.ID, err)
+	}
 	return nil
 }
 

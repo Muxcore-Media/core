@@ -79,11 +79,63 @@ run with the capabilities it declared. A module that declares only
 `downloader.torrent` should not be able to read the filesystem or call the
 notification system.
 
-**Current state (2026-05-27)**: Module capabilities are enforced at runtime via
+**Current state (2026-08-20)**: Module capabilities are enforced at runtime via
 call policy (mesh routing + storage access) and publish policy (event dispatch).
 Modules run as sidecar processes — they connect to core via gRPC and execute
-with the same OS-level privileges as the core process. Sandboxing is a
-deployment concern (Docker, K8s, gVisor), not a core concern.
+with the same OS-level privileges as the core process **unless** an optional
+sandbox runner is enabled.
+
+### Module sandboxing (optional)
+
+| Env | Values | Behavior |
+| --- | ------ | -------- |
+| `MUXCORE_MODULE_SANDBOX` | `none` (default), `gvisor`, `firecracker` | Selects spawn wrapper |
+| `MUXCORE_SANDBOX_GVISOR_BIN` | path (default `runsc`) | gVisor binary |
+| `MUXCORE_SANDBOX_FIRECRACKER_BIN` | path (default `firecracker-spawn`) | Firecracker helper |
+| `MUXCORE_SANDBOX_OCI_AUTO` | `1` | gVisor: write OCI bundle (`sandbox/oci`) and `runsc run --bundle` |
+| `MUXCORE_SANDBOX_SECCOMP` | `1` | Apply default seccomp (`sandbox/seccomp/default.json`) on `runsc do exec`; OCI gVisor bundles always embed the profile |
+| `MUXCORE_SANDBOX_FC_ROOTFS` | path | Firecracker rootfs image or directory; Wrap fail-closed if unset/missing unless `ROOTFS_AUTO=1` |
+| `MUXCORE_SANDBOX_ROOTFS_AUTO` | `1` | Build minimal BusyBox rootfs (`sandbox/rootfs`) into OCI bundles / Firecracker when `FC_ROOTFS` unset |
+| `MUXCORE_SANDBOX_ROOTFS_TEMPLATE` | path | Copy an existing rootfs tree into the OCI bundle instead of synthesizing |
+| `MUXCORE_SANDBOX_ROOTFS_PROFILE` | `busybox` (default), `alpine-minimal` | Distro-oriented layout on top of BusyBox baseline |
+| `MUXCORE_SANDBOX_FC_KERNEL` | path | Guest kernel for Firecracker microVM config |
+| `MUXCORE_SANDBOX_FC_VSOCK_CID` | int (default 3) | vsock guest CID in generated Firecracker config |
+| `MUXCORE_SANDBOX_FC_VSOCK_UDS` | path | Host vsock UDS path |
+| `MUXCORE_SANDBOX_FC_DRY_RUN` | `1` | Write Firecracker config and exit (CI/fixture) |
+| `MUXCORE_SANDBOX_ROOTFS_BUSYBOX` | path | Operator Mode B: local static busybox binary for `MakeRootfs` |
+| `MUXCORE_SANDBOX_ROOTFS_BUSYBOX_URL` | URL | Operator Mode B: download static busybox into the rootfs |
+
+- **Default (`none`)**: no-op runner — modules inherit loom privileges (Docker/K8s remain the deployment sandbox).
+- **`gvisor` / `firecracker`**: spawn path calls `sandbox.Runner.Wrap` before `exec`. If the selected binary is missing, spawn **fails closed** (no silent unsandboxed fallback). Manager construction uses `sandbox.FromEnv()`.
+- **Minimal rootfs**: `core/internal/sandbox/rootfs.MakeRootfs` / `MakeDistroRootfs` builds a BusyBox-oriented layout with optional `alpine-minimal` profile (`MUXCORE_SANDBOX_ROOTFS_PROFILE`). Fixture/CI mode embeds a stub busybox script (offline). Operator mode copies a real static busybox. Script: `core/scripts/make-sandbox-rootfs.sh`.
+- **OCI**: `sandbox/oci.WriteBundle` writes `config.json` + module binary; with `ROOTFS_AUTO` / `ROOTFS_TEMPLATE` it also applies the BusyBox/distro layout. Operators may validate with `runsc spec validate --bundle <dir>`.
+- **Firecracker**: helper `firecracker-spawn` writes a microVM `config.json` (boot-source, rootfs drive, **vsock** UDS). `MUXCORE_SANDBOX_FC_DRY_RUN=1` validates config without launching. Full guest boot remains operator-owned when Firecracker binary is present. Core does not ship runsc or Firecracker binaries.
+
+### Marketplace artifact trust
+
+| Env | Behavior |
+| --- | -------- |
+| (default) | DeployTag verifies SHA-256 checksum pins when present |
+| `MUXCORE_SPOOL_REQUIRE_SIGNATURE=1` | Require ed25519 detached signature (tag `signature` field or sidecar `.sig` / `.minisig`) |
+| `MUXCORE_SPOOL_PUBLIC_KEY` | Path to a single ed25519 public key (raw/hex/base64/PEM or minisign `.pub` shape) |
+| `MUXCORE_SPOOL_TRUSTED_KEYS_DIR` | Directory of trusted public key files (tried until one verifies) |
+| `MUXCORE_SPOOL_ALLOWED_PUBLISHERS` | Comma-separated publisher allowlist; when set, tag `publisher` must match |
+
+Signature verification is wired on the DeployTag / boot spawn path. Minisign sidecars support both legacy (`Ed`, raw bytes) and hashed (`ED`, Blake2b-512 prehash) modes, including trusted-comment global signature checks.
+
+### Multi-tenant scaffolding (optional)
+
+| Env | Behavior |
+| --- | -------- |
+| `TENANT_MODE=1` | Request middleware injects `tenant_id`; **per-tenant storage partitions** under `data/tenants/{id}/` for request-media SQLite and userdata-local files (`X-Tenant-ID` / claims; missing → `default`). Default off = single household. |
+| `MUXCORE_TENANT_CLUSTER_MAP` | JSON `{"tenant-a":"host:9090"}` — maps tenant_id → remote muxcored gRPC endpoint(s) (comma-separated failover list allowed) |
+| `MUXCORE_TENANT_REGION_MAP` | JSON `{"tenant-a":"us-east"}` — preferred region; placement picks mesh nodes by `region` label before cluster map fallback |
+| `MUXCORE_NODE_REGION` | string | This node's region label (e.g. `us-east`) |
+| `MUXCORE_TENANT_STORAGE_SYNC` | JSON per-tenant mirror policy — `file://` targets (fixture) or `s3://` peers (production storage-s3) |
+| `MUXCORE_TENANT_CLUSTER_STRICT=1` | Fail closed when a mapped remote is unreachable (TCP probe) |
+| `MUXCORE_TENANT_ID` | Process-scoped tenant for module dials when request context has no tenant_id |
+
+Household isolation on one host is implemented (partitions, auth-local `tenant_id`, BFF headers, cross-tenant deny without `admin`). Multi-cluster routing: `core/pkg/tenant` `Router` / `ResolveDial`; SDK `client.Dial` rewrites addresses when the map is set. **Multi-region placement** (`Placer`, `MUXCORE_TENANT_REGION_MAP`) and **cross-cluster storage sync** (`MirrorTenant`, `MUXCORE_TENANT_STORAGE_SYNC`) ship for operator-driven multi-region deploys. Admin Cluster page documents env knobs.
 
 When reporting vulnerabilities, frame issues against both the intended and
 actual boundaries. A bug in a module's business logic that stays within its

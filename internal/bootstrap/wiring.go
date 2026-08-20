@@ -524,6 +524,22 @@ func LoadAndSpawnModules(ctx context.Context, tagName, spoolURL string, modMgr *
 				"repo", tm.Repo, "id", bin.ID, "error", err)
 			continue
 		}
+		if err := modMgr.VerifyPublisher(tm.Publisher); err != nil {
+			if tm.Required {
+				return fmt.Errorf("publisher verification failed for required module %s: %w", tm.Repo, err)
+			}
+			slog.Warn("publisher verification failed, skipping optional module",
+				"repo", tm.Repo, "id", bin.ID, "error", err)
+			continue
+		}
+		if err := modMgr.VerifySignature(bin, tm.Signature); err != nil {
+			if tm.Required {
+				return fmt.Errorf("signature verification failed for required module %s: %w", tm.Repo, err)
+			}
+			slog.Warn("signature verification failed, skipping optional module",
+				"repo", tm.Repo, "id", bin.ID, "error", err)
+			continue
+		}
 		if useWatchdog {
 			if err := modMgr.SpawnWithWatchdog(ctx, bin, peerAddrs); err != nil {
 				if tm.Required {
