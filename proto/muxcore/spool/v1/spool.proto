@@ -70,6 +70,11 @@ message TagModuleProto {
   string checksum = 4;
   string instance_id = 5;
   map<string, string> config = 6;
+  // signature is an optional ed25519 detached signature (hex/base64) over the
+  // module artifact. Sidecar .sig / .minisig files are also accepted.
+  string signature = 7;
+  // publisher is an optional publisher identity for marketplace trust allowlists.
+  string publisher = 8;
 }
 
 message FetchTagResponse {

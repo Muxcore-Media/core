@@ -24,6 +24,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -39,6 +40,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/Muxcore-Media/core/pkg/tenant"
 	auditv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/audit/v1"
 	discoveryv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/discovery/v1"
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
@@ -162,7 +164,26 @@ func initServiceClients(conn *grpc.ClientConn) (*AuditClient, *DiscoveryClient, 
 // Dial connects to a muxcored gRPC endpoint and returns a Client.
 // The caller must call Close() when done.
 // The address is the primary; use WithFallbackAddrs for failover addresses.
+//
+// When TENANT_MODE=1 and MUXCORE_TENANT_CLUSTER_MAP is set, the dial address
+// may be rewritten to the tenant's remote cluster (see tenant.ResolveDial).
+// Use DialContext to supply tenant_id via context; otherwise MUXCORE_TENANT_ID
+// is consulted. Strict mode (MUXCORE_TENANT_CLUSTER_STRICT=1) fails closed if
+// the remote is unreachable.
 func Dial(addr string, opts ...Option) (*Client, error) {
+	return DialContext(context.Background(), addr, opts...)
+}
+
+// DialContext is Dial with a context for tenant cluster resolution.
+func DialContext(ctx context.Context, addr string, opts ...Option) (*Client, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if remote, err := tenant.ResolveDialFromEnv(ctx); err != nil {
+		return nil, fmt.Errorf("client: tenant cluster: %w", err)
+	} else if remote != "" {
+		addr = remote
+	}
 	return DialWithAddrs([]string{addr}, opts...)
 }
 
@@ -173,6 +194,9 @@ func Dial(addr string, opts ...Option) (*Client, error) {
 // If only one address is supplied, the client still runs a reconnect loop
 // that re-dials the same address on transient failure (useful for short
 // core restarts).
+//
+// Tenant cluster rewrite is applied only via Dial / DialContext (not here),
+// so callers that already resolved addresses are unchanged.
 //
 // The caller must call Close() when done.
 func DialWithAddrs(addrs []string, opts ...Option) (*Client, error) {
@@ -558,7 +582,13 @@ func sizedReader(r io.Reader) (int64, io.Reader) {
 // Get downloads an object and returns it as a ReadCloser.
 // The caller must close the returned reader.
 func (s *StorageClient) Get(ctx context.Context, key string) (io.ReadCloser, error) {
-	stream, err := s.raw.Get(ctx, &storagev1.GetRequest{Key: key})
+	return s.GetRange(ctx, key, 0, 0)
+}
+
+// GetRange downloads [offset, offset+length) of an object (length 0 = until EOF).
+// The caller must close the returned reader.
+func (s *StorageClient) GetRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error) {
+	stream, err := s.raw.Get(ctx, &storagev1.GetRequest{Key: key, Offset: offset, Length: length})
 	if err != nil {
 		return nil, fmt.Errorf("storage.Get: %w", err)
 	}
@@ -588,6 +618,21 @@ func (s *StorageClient) Get(ctx context.Context, key string) (io.ReadCloser, err
 	}()
 
 	return pr, nil
+}
+
+// GetBytes reads an object (or range) fully into memory.
+func (s *StorageClient) GetBytes(ctx context.Context, key string, offset, length int64) ([]byte, error) {
+	rc, err := s.GetRange(ctx, key, offset, length)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rc.Close() }()
+	return io.ReadAll(rc)
+}
+
+// PutBytes uploads an in-memory object via chunked Put.
+func (s *StorageClient) PutBytes(ctx context.Context, key string, data []byte) error {
+	return s.Put(ctx, key, bytes.NewReader(data))
 }
 
 // Delete removes an object.

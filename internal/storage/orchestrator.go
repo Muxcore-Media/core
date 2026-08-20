@@ -21,8 +21,8 @@ import (
 )
 
 // MaxObjectSize is the maximum size of a single object that can be stored.
-// Objects larger than this are rejected to prevent memory exhaustion.
-const MaxObjectSize = 100 * 1024 * 1024 // 100 MB
+// Sized for full media files (season packs / remuxes) on local disk backends.
+const MaxObjectSize = 64 << 30 // 64 GiB
 
 // Orchestrator routes storage operations to registered providers based on
 // capability negotiation and user-defined policies.
@@ -79,7 +79,7 @@ func NewOrchestrator(reg contracts.Registry) *Orchestrator {
 		providers:     make(map[string]contracts.StorageProvider),
 		tiers:         make(map[string]contracts.StorageTier),
 		readTimeout:   30 * time.Second,
-		writeTimeout:  5 * time.Minute,
+		writeTimeout:  2 * time.Hour,
 		deleteTimeout: 30 * time.Second,
 		auditSem:      make(chan struct{}, 100),
 	}
@@ -317,12 +317,26 @@ func validatePrefix(prefix string) error {
 // caller is a registered module (extracted from context). This enforces
 // per-module key isolation: modules can only access keys under their own
 // namespace. System-level calls (no caller ID) use the key as-is.
-// The prefix is stripped from internal storage — callers are unaware of it.
+//
+// Keys under torrent/ are shared across modules (downloader writes pieces /
+// assembled files; scanner imports them) and are not namespaced.
 func namespaceKey(ctx context.Context, key string) string {
+	if strings.HasPrefix(key, "torrent/") {
+		return key
+	}
 	if cid := callerid.Get(ctx); cid != "" && !strings.HasPrefix(key, cid+"/") {
 		return cid + "/" + key
 	}
 	return key
+}
+
+// legacyDownloaderTorrentKey is where downloader-native-torrent wrote objects
+// before torrent/ became a shared (un-namespaced) prefix.
+func legacyDownloaderTorrentKey(key string) string {
+	if strings.HasPrefix(key, "torrent/") {
+		return "downloader-native-torrent/" + key
+	}
+	return ""
 }
 
 // validateKeyOrPrefix applies the common validation rules shared by
@@ -476,6 +490,7 @@ func (o *Orchestrator) Get(ctx context.Context, key string) (io.ReadCloser, erro
 	if err := validateKey(key); err != nil {
 		return nil, err
 	}
+	orig := key
 	key = namespaceKey(ctx, key)
 	o.mu.RLock()
 	cache := o.cache
@@ -491,12 +506,18 @@ func (o *Orchestrator) Get(ctx context.Context, key string) (io.ReadCloser, erro
 		return nil, err
 	}
 
-	getCtx, cancel := o.withTimeout(ctx, o.readTimeout)
-	defer cancel()
-	rc, err := prov.Get(getCtx, key)
+	try := func(k string) (io.ReadCloser, error) {
+		getCtx, cancel := o.withTimeout(ctx, o.readTimeout)
+		defer cancel()
+		return prov.Get(getCtx, k)
+	}
+	rc, err := try(key)
+	if err != nil && isNotFound(err) {
+		if alt := legacyDownloaderTorrentKey(orig); alt != "" && alt != key {
+			rc, err = try(alt)
+		}
+	}
 	if err != nil && !errors.Is(err, contracts.ErrNotFound) {
-		// Wrap provider-specific "not found" signals so callers can use errors.Is.
-		// Providers may return their own error types; normalise here.
 		if isNotFound(err) {
 			return nil, contracts.ErrNotFound
 		}
@@ -542,14 +563,25 @@ func (o *Orchestrator) Exists(ctx context.Context, key string) (bool, error) {
 	if err := validateKey(key); err != nil {
 		return false, err
 	}
+	orig := key
 	key = namespaceKey(ctx, key)
 	prov, err := o.route(key)
 	if err != nil {
 		return false, err
 	}
-	tctx, cancel := o.withTimeout(ctx, o.readTimeout)
-	defer cancel()
-	return prov.Exists(tctx, key)
+	try := func(k string) (bool, error) {
+		tctx, cancel := o.withTimeout(ctx, o.readTimeout)
+		defer cancel()
+		return prov.Exists(tctx, k)
+	}
+	ok, err := try(key)
+	if err != nil || ok {
+		return ok, err
+	}
+	if alt := legacyDownloaderTorrentKey(orig); alt != "" && alt != key {
+		return try(alt)
+	}
+	return false, nil
 }
 
 func (o *Orchestrator) Stat(ctx context.Context, key string) (contracts.ObjectInfo, error) {
@@ -557,14 +589,27 @@ func (o *Orchestrator) Stat(ctx context.Context, key string) (contracts.ObjectIn
 	if err := validateKey(key); err != nil {
 		return contracts.ObjectInfo{}, err
 	}
+	orig := key
 	key = namespaceKey(ctx, key)
 	prov, err := o.route(key)
 	if err != nil {
 		return contracts.ObjectInfo{}, err
 	}
-	tctx, cancel := o.withTimeout(ctx, o.readTimeout)
-	defer cancel()
-	return prov.Stat(tctx, key)
+	try := func(k string) (contracts.ObjectInfo, error) {
+		tctx, cancel := o.withTimeout(ctx, o.readTimeout)
+		defer cancel()
+		return prov.Stat(tctx, k)
+	}
+	info, err := try(key)
+	if err != nil && isNotFound(err) {
+		if alt := legacyDownloaderTorrentKey(orig); alt != "" && alt != key {
+			info, err = try(alt)
+			if err == nil {
+				info.Key = orig
+			}
+		}
+	}
+	return info, err
 }
 
 func (o *Orchestrator) Move(ctx context.Context, src, dst string) error {
@@ -596,14 +641,34 @@ func (o *Orchestrator) List(ctx context.Context, prefix string) ([]contracts.Obj
 	if err := validatePrefix(prefix); err != nil {
 		return nil, err
 	}
+	orig := prefix
 	prefix = namespaceKey(ctx, prefix)
 	prov, err := o.route(prefix)
 	if err != nil {
 		return nil, err
 	}
-	tctx, cancel := o.withTimeout(ctx, o.readTimeout)
-	defer cancel()
-	return prov.List(tctx, prefix)
+	try := func(p string) ([]contracts.ObjectInfo, error) {
+		tctx, cancel := o.withTimeout(ctx, o.readTimeout)
+		defer cancel()
+		return prov.List(tctx, p)
+	}
+	objs, err := try(prefix)
+	if err != nil {
+		return nil, err
+	}
+	if len(objs) == 0 {
+		if alt := legacyDownloaderTorrentKey(orig); alt != "" && alt != prefix {
+			objs, err = try(alt)
+			if err != nil {
+				return nil, err
+			}
+			const legacy = "downloader-native-torrent/"
+			for i := range objs {
+				objs[i].Key = strings.TrimPrefix(objs[i].Key, legacy)
+			}
+		}
+	}
+	return objs, nil
 }
 
 func (o *Orchestrator) ProviderCount() int {

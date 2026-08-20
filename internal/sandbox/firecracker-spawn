@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# firecracker-spawn — MuxCore Firecracker helper (microVM config + vsock).
+#
+# Usage:
+#   firecracker-spawn --module <id> [--rootfs <path>] [--kernel <path>] -- <module-bin> [args...]
+#
+# Env:
+#   MUXCORE_SANDBOX_FC_KERNEL — guest kernel (required unless MUXCORE_SANDBOX_FC_DRY_RUN=1)
+#   MUXCORE_SANDBOX_FC_VSOCK_CID — vsock guest CID (default 3)
+#   MUXCORE_SANDBOX_FC_VSOCK_UDS — host UDS path (default beside config)
+#   MUXCORE_SANDBOX_FC_DRY_RUN=1 — write config.json and exit 0 (CI/fixture)
+#   FIRECRACKER_BIN — firecracker binary (default firecracker)
+set -euo pipefail
+
+MODULE=""
+ROOTFS="${MUXCORE_SANDBOX_FC_ROOTFS:-}"
+KERNEL="${MUXCORE_SANDBOX_FC_KERNEL:-}"
+FC_BIN="${FIRECRACKER_BIN:-firecracker}"
+VSOCK_CID="${MUXCORE_SANDBOX_FC_VSOCK_CID:-3}"
+DRY_RUN="${MUXCORE_SANDBOX_FC_DRY_RUN:-}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --module)
+      MODULE="${2:-}"; shift 2 ;;
+    --rootfs)
+      ROOTFS="${2:-}"; shift 2 ;;
+    --kernel)
+      KERNEL="${2:-}"; shift 2 ;;
+    --)
+      shift; break ;;
+    *)
+      echo "firecracker-spawn: unknown arg: $1" >&2
+      exit 2 ;;
+  esac
+done
+
+if [[ -z "$ROOTFS" ]]; then
+  echo "firecracker-spawn: rootfs required (--rootfs or MUXCORE_SANDBOX_FC_ROOTFS)" >&2
+  exit 1
+fi
+if [[ ! -e "$ROOTFS" ]]; then
+  echo "firecracker-spawn: rootfs not found: $ROOTFS" >&2
+  exit 1
+fi
+if [[ $# -lt 1 ]]; then
+  echo "firecracker-spawn: module binary required after --" >&2
+  exit 2
+fi
+
+MOD_BIN="$1"
+shift || true
+
+CONF_DIR="$(mktemp -d "${TMPDIR:-/tmp}/muxcore-fc-XXXXXX")"
+trap 'rm -rf "$CONF_DIR"' EXIT
+CONF_JSON="$CONF_DIR/config.json"
+VSOCK_UDS="${MUXCORE_SANDBOX_FC_VSOCK_UDS:-$CONF_DIR/vsock.sock}"
+
+if [[ -z "$KERNEL" ]]; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    KERNEL="/dev/null"
+  else
+    echo "firecracker-spawn: MUXCORE_SANDBOX_FC_KERNEL required (or MUXCORE_SANDBOX_FC_DRY_RUN=1)" >&2
+    exit 1
+  fi
+fi
+
+cat >"$CONF_JSON" <<EOF
+{
+  "boot-source": {
+    "kernel_image_path": "$KERNEL",
+    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off"
+  },
+  "drives": [
+    {
+      "drive_id": "rootfs",
+      "path_on_host": "$ROOTFS",
+      "is_root_device": true,
+      "is_read_only": false
+    }
+  ],
+  "vsock": {
+    "guest_cid": ${VSOCK_CID},
+    "uds_path": "$VSOCK_UDS"
+  },
+  "machine-config": {
+    "vcpu_count": 1,
+    "mem_size_mib": 128,
+    "smt": false
+  }
+}
+EOF
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "firecracker-spawn: dry-run config written module=$MODULE rootfs=$ROOTFS vsock_cid=$VSOCK_CID" >&2
+  exit 0
+fi
+
+if ! command -v "$FC_BIN" >/dev/null 2>&1; then
+  echo "firecracker-spawn: $FC_BIN not found (install Firecracker)" >&2
+  echo "  module=${MODULE:-?} rootfs=$ROOTFS bin=$MOD_BIN" >&2
+  exit 1
+fi
+
+exec "$FC_BIN" --api-sock "$CONF_DIR/api.sock" --config-file "$CONF_JSON"

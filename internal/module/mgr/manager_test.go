@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/Muxcore-Media/core/internal/events"
 	modulemgr "github.com/Muxcore-Media/core/internal/module"
 	"github.com/Muxcore-Media/core/internal/registry"
+	"github.com/Muxcore-Media/core/internal/sandbox"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	modulev1 "github.com/Muxcore-Media/core/proto/gen/muxcore/module/v1"
 )
@@ -79,6 +81,24 @@ func TestVerifyChecksum_FileNotFound(t *testing.T) {
 	err := m.VerifyChecksum(bin, "abc123")
 	if err == nil {
 		t.Fatal("expected error when binary file does not exist")
+	}
+}
+
+func TestVerifySignature_OptionalOff(t *testing.T) {
+	t.Setenv("MUXCORE_SPOOL_REQUIRE_SIGNATURE", "")
+	t.Setenv("MUXCORE_SPOOL_PUBLIC_KEY", "")
+	m := &Manager{}
+	bin := &ModuleBinary{ID: "mod", Path: filepath.Join(t.TempDir(), "x")}
+	_ = os.WriteFile(bin.Path, []byte("x"), 0o600)
+	if err := m.VerifySignature(bin, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifySignature_NilBinary(t *testing.T) {
+	m := &Manager{}
+	if err := m.VerifySignature(nil, ""); err == nil {
+		t.Fatal("expected nil binary error")
 	}
 }
 
@@ -323,6 +343,38 @@ func TestSpawn(t *testing.T) {
 	if got := m.SpawnCount(); got != 1 {
 		t.Errorf("SpawnCount = %d, want 1", got)
 	}
+}
+
+func TestSpawnSandboxWrapFailsClosed(t *testing.T) {
+	m := NewManager("127.0.0.1:9090", nil, nil)
+	m.SetSandboxRunner(failSandbox{})
+	bin := &ModuleBinary{ID: "sandbox-fail", Path: "/bin/true"}
+	err := m.Spawn(context.Background(), bin)
+	if err == nil || !strings.Contains(err.Error(), "sandbox wrap") {
+		t.Fatalf("expected sandbox wrap error, got %v", err)
+	}
+}
+
+func TestSpawnGVisorModeFailsClosedWithoutRunsc(t *testing.T) {
+	t.Setenv("MUXCORE_MODULE_SANDBOX", "gvisor")
+	t.Setenv("MUXCORE_SANDBOX_GVISOR_BIN", filepath.Join(t.TempDir(), "missing-runsc"))
+	m := NewManager("127.0.0.1:9091", nil, nil)
+	m.SetSandboxRunner(sandbox.FromEnv())
+	err := m.Spawn(context.Background(), &ModuleBinary{ID: "gvisor-missing", Path: "/bin/true"})
+	if err == nil {
+		t.Fatal("expected fail-closed when runsc missing")
+	}
+	if !strings.Contains(err.Error(), "sandbox wrap") && !strings.Contains(err.Error(), "gvisor") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+type failSandbox struct{}
+
+func (failSandbox) Mode() sandbox.Mode { return sandbox.ModeGVisor }
+
+func (failSandbox) Wrap(ctx context.Context, spec sandbox.Spec) (sandbox.Result, error) {
+	return sandbox.Result{}, fmt.Errorf("refused")
 }
 
 func TestSpawn_Duplicate(t *testing.T) {
