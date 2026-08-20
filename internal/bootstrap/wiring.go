@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -388,7 +389,7 @@ func RunClusterEventListener(ctx context.Context, cluster contracts.Cluster, nod
 				case contracts.ClusterNodeLeft:
 					count := workerPool.FailNodeTasks(ctx, evt.Node.ID)
 					if count > 0 {
-						slog.Warn("workerpool: tasks failed due to node departure",
+						slog.Warn("workerpool: tasks released/failed due to node departure",
 							"node", evt.Node.ID,
 							"count", count,
 						)
@@ -408,7 +409,7 @@ func RunClusterEventListener(ctx context.Context, cluster contracts.Cluster, nod
 				case contracts.ClusterNodeDegraded:
 					count := workerPool.FailNodeTasks(ctx, evt.Node.ID)
 					if count > 0 {
-						slog.Warn("workerpool: tasks failed due to node degradation",
+						slog.Warn("workerpool: tasks released/failed due to node degradation",
 							"node", evt.Node.ID,
 							"count", count,
 						)
@@ -585,6 +586,11 @@ func AutoJoinSeedNodes(ctx context.Context, cfg *config.Config, creds credential
 			}
 			defer func() { _ = conn.Close() }()
 			client := discoveryv1.NewDiscoveryServiceClient(conn)
+			if cfg.GRPC.JoinToken != "" {
+				joinCtx = metadata.NewOutgoingContext(joinCtx, metadata.Pairs(
+					"x-cluster-join-token", cfg.GRPC.JoinToken,
+				))
+			}
 			resp, err := client.Join(joinCtx, &discoveryv1.JoinRequest{Node: localNode})
 			if err != nil {
 				slog.Warn("auto-join: join request failed", "seed", seedAddr, "error", err)

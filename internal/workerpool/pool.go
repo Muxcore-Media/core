@@ -213,13 +213,14 @@ func (p *Pool) reapStaleTasks(ctx context.Context) {
 	}
 }
 
-// FailNodeTasks marks all Running and Assigned tasks on the given node as
-// Failed. Returns the number of tasks failed.
+// FailNodeTasks releases Running/Assigned tasks on the given node back to
+// Pending for redispatch, incrementing RetryCount. Tasks that exceed MaxRetries
+// (when MaxRetries > 0) are marked Failed. Returns the number of tasks touched.
 func (p *Pool) FailNodeTasks(ctx context.Context, nodeID string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	var count int
+	var released, failed int
 	for _, task := range p.tasks {
 		if task.AssignedNode != nodeID {
 			continue
@@ -228,19 +229,29 @@ func (p *Pool) FailNodeTasks(ctx context.Context, nodeID string) int {
 		case contracts.WorkerTaskStatusPending,
 			contracts.WorkerTaskStatusAssigned,
 			contracts.WorkerTaskStatusRunning:
-			task.Status = contracts.WorkerTaskStatusFailed
-			task.Error = fmt.Sprintf("node %q left the cluster", nodeID)
-			task.CompletedAt = time.Now()
+			task.RetryCount++
+			task.AssignedNode = ""
+			if task.MaxRetries > 0 && task.RetryCount > task.MaxRetries {
+				task.Status = contracts.WorkerTaskStatusFailed
+				task.Error = fmt.Sprintf("node %q left the cluster; exceeded max retries (%d)", nodeID, task.MaxRetries)
+				task.CompletedAt = time.Now()
+				failed++
+			} else {
+				task.Status = contracts.WorkerTaskStatusPending
+				task.Error = fmt.Sprintf("node %q left the cluster; released for redispatch", nodeID)
+				task.CompletedAt = time.Time{}
+				released++
+			}
 			persistCtx, cancel := context.WithTimeout(context.Background(), persistTimeout)
 			p.persistTask(persistCtx, task) //nolint:contextcheck // background persist — don't inherit request context
 			cancel()
-			count++
 		}
 	}
 
+	count := released + failed
 	if count > 0 {
-		slog.Warn("workerpool: failed tasks for departed node",
-			"node", nodeID, "count", count)
+		slog.Warn("workerpool: released/failed tasks for departed node",
+			"node", nodeID, "released", released, "failed", failed)
 	}
 	return count
 }
