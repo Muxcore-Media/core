@@ -354,6 +354,10 @@ func initStorage(ctx context.Context, cfg *config.Config, reg *registry.Registry
 
 func initHTTPServer(cfg *config.Config, reg *registry.Registry, bus *events.MemoryBus, store *storage.Orchestrator, meshClient *grpcmesh.Client, discoveryGrpc *grpcmesh.DiscoveryServer, connPool *grpcmesh.ConnPool, workerPool *workerpool.Pool) (*api.Server, *api.MetricsProvider) {
 	srv := api.NewServer(cfg.Server.Addr, cfg.Server.CertFile, cfg.Server.KeyFile)
+	if len(cfg.Server.TrustedProxies) > 0 {
+		srv.SetTrustedProxies(cfg.Server.TrustedProxies)
+		slog.Info("trusted proxies configured", "cidrs", cfg.Server.TrustedProxies)
+	}
 
 	var metricsProvider *api.MetricsProvider
 	if os.Getenv("MUXCORE_METRICS_ENABLE") == "true" || os.Getenv("MUXCORE_METRICS_ENABLE") == "1" {

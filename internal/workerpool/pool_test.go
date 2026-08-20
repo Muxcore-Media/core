@@ -419,19 +419,26 @@ func TestFailNodeTasks_Running(t *testing.T) {
 		Type:         "download",
 		AssignedNode: "node-b",
 	})
-	p.UpdateStatus(context.Background(), id, contracts.WorkerTaskStatusRunning, "")
+	// Mark running without UpdateStatus (which rebinds AssignedNode to local node).
+	p.mu.Lock()
+	p.tasks[id].Status = contracts.WorkerTaskStatusRunning
+	p.tasks[id].AssignedNode = "node-b"
+	p.mu.Unlock()
 
 	count := p.FailNodeTasks(context.Background(), "node-b")
 	if count != 1 {
-		t.Fatalf("expected 1 failed task, got %d", count)
+		t.Fatalf("expected 1 released task, got %d", count)
 	}
 
 	task, _ := p.Status(context.Background(), id)
-	if task.Status != contracts.WorkerTaskStatusFailed {
-		t.Errorf("expected failed, got %s", task.Status)
+	if task.Status != contracts.WorkerTaskStatusPending {
+		t.Errorf("expected pending (redispatch), got %s", task.Status)
 	}
-	if task.Error == "" {
-		t.Error("expected non-empty error message")
+	if task.AssignedNode != "" {
+		t.Errorf("expected cleared AssignedNode, got %q", task.AssignedNode)
+	}
+	if task.RetryCount != 1 {
+		t.Errorf("expected RetryCount=1, got %d", task.RetryCount)
 	}
 }
 
@@ -444,12 +451,44 @@ func TestFailNodeTasks_Assigned(t *testing.T) {
 
 	count := p.FailNodeTasks(context.Background(), "node-b")
 	if count != 1 {
-		t.Fatalf("expected 1 failed task, got %d", count)
+		t.Fatalf("expected 1 released task, got %d", count)
 	}
 
 	task, _ := p.Status(context.Background(), id)
+	if task.Status != contracts.WorkerTaskStatusPending {
+		t.Errorf("expected pending, got %s", task.Status)
+	}
+}
+
+func TestFailNodeTasks_ExceedsMaxRetries(t *testing.T) {
+	p := New("node-a")
+	id, _ := p.Submit(context.Background(), contracts.WorkerTask{
+		Type:         "download",
+		AssignedNode: "node-b",
+		MaxRetries:   1,
+	})
+	p.mu.Lock()
+	p.tasks[id].Status = contracts.WorkerTaskStatusRunning
+	p.tasks[id].AssignedNode = "node-b"
+	p.mu.Unlock()
+
+	p.FailNodeTasks(context.Background(), "node-b")
+	task, _ := p.Status(context.Background(), id)
+	if task.Status != contracts.WorkerTaskStatusPending {
+		t.Fatalf("after first release: want pending, got %s", task.Status)
+	}
+
+	p.mu.Lock()
+	p.tasks[id].Status = contracts.WorkerTaskStatusAssigned
+	p.tasks[id].AssignedNode = "node-b"
+	p.mu.Unlock()
+	count := p.FailNodeTasks(context.Background(), "node-b")
+	if count != 1 {
+		t.Fatalf("expected 1 failed task, got %d", count)
+	}
+	task, _ = p.Status(context.Background(), id)
 	if task.Status != contracts.WorkerTaskStatusFailed {
-		t.Errorf("expected failed, got %s", task.Status)
+		t.Errorf("expected failed after max retries, got %s", task.Status)
 	}
 }
 

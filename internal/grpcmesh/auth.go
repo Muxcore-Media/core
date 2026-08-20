@@ -41,6 +41,7 @@ const (
 var moduleRegistrationMethods = map[string]bool{
 	"/muxcore.module.v1.ModuleRegistration/Register":          true,
 	"/muxcore.module.v1.ModuleRegistration/Unregister":        true,
+	"/muxcore.module.v1.ModuleRegistration/BootstrapRegister": true, // one-time token is the auth
 	"/muxcore.discovery.v1.DiscoveryService/FindByCapability": true,
 	"/muxcore.discovery.v1.DiscoveryService/FindById":         true,
 	"/muxcore.discovery.v1.DiscoveryService/FindByRole":       true,
@@ -50,10 +51,12 @@ var moduleRegistrationMethods = map[string]bool{
 	"/muxcore.discovery.v1.DiscoveryService/ListMembers":      true,
 	"/muxcore.discovery.v1.DiscoveryService/Watch":            true,
 	"/muxcore.discovery.v1.DiscoveryService/Resolve":          true,
+	"/muxcore.discovery.v1.DiscoveryService/Join":             true, // join-token metadata is the auth
+	"/muxcore.discovery.v1.DiscoveryService/Heartbeat":        true, // cluster liveness without Authorizer
 	"/muxcore.events.v1.EventService/Subscribe":               true,
 	"/muxcore.events.v1.EventService/Unsubscribe":             true,
 	"/muxcore.events.v1.EventService/GetStats":                true,
-	"/muxcore.events.v1.EventService/Publish":                 true,
+	"/muxcore.events.v1.EventService/Publish":                 true, // publish-policy still deny-by-default
 	"/muxcore.health.v1.HealthService/Check":                  true,
 }
 

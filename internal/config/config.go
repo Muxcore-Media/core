@@ -108,11 +108,12 @@ type GRPCConfig struct {
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Addr         string `json:"addr"`          // listen address, e.g. ":8080"
-	ReadTimeout  int    `json:"read_timeout"`  // seconds
-	WriteTimeout int    `json:"write_timeout"` // seconds
-	CertFile     string `json:"cert_file"`     // path to TLS certificate PEM
-	KeyFile      string `json:"key_file"`      // path to TLS private key PEM
+	Addr           string   `json:"addr"`            // listen address, e.g. ":8080"
+	ReadTimeout    int      `json:"read_timeout"`    // seconds
+	WriteTimeout   int      `json:"write_timeout"`   // seconds
+	CertFile       string   `json:"cert_file"`       // path to TLS certificate PEM
+	KeyFile        string   `json:"key_file"`        // path to TLS private key PEM
+	TrustedProxies []string `json:"trusted_proxies"` // CIDRs whose X-Forwarded-For is trusted; empty = loopback only
 }
 
 // LogConfig controls structured logging output.
@@ -281,6 +282,16 @@ func Load(path string) (*Config, error) { //nolint:gocyclo // config loading has
 	}
 	if v := os.Getenv("MUXCORE_SERVER_WRITE_TIMEOUT"); v != "" {
 		cfg.Server.WriteTimeout = parseInt(v)
+	}
+	if v := os.Getenv("MUXCORE_SERVER_TRUSTED_PROXIES"); v != "" {
+		parts := strings.Split(v, ",")
+		cfg.Server.TrustedProxies = cfg.Server.TrustedProxies[:0]
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				cfg.Server.TrustedProxies = append(cfg.Server.TrustedProxies, p)
+			}
+		}
 	}
 	if v := os.Getenv("MUXCORE_LOG_LEVEL"); v != "" {
 		cfg.Log.Level = v
