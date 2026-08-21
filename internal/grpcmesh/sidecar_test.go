@@ -464,6 +464,33 @@ func TestSidecarPublishPolicy_CanPublish_Allowed(t *testing.T) {
 	}
 }
 
+func TestSidecarPublishPolicy_CanPublishEvent_PassesPayload(t *testing.T) {
+	var gotPayload []byte
+	conn := startTestPolicyServer(t, &fakePolicyServer{
+		allowPublishFn: func(_ context.Context, req *policyv1.AllowPublishRequest) (*policyv1.AllowPublishResponse, error) {
+			gotPayload = append([]byte(nil), req.GetEventPayload()...)
+			if len(gotPayload) == 0 {
+				return &policyv1.AllowPublishResponse{Allowed: false, Reason: "payload required"}, nil
+			}
+			return &policyv1.AllowPublishResponse{Allowed: true}, nil
+		},
+	})
+	pp := NewSidecarPublishPolicy(conn)
+	ok, err := pp.CanPublishEvent(context.Background(), "mod-a", contracts.Event{
+		Type:    "event.created",
+		Payload: []byte(`{"id":"1"}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected allowed=true when payload forwarded")
+	}
+	if string(gotPayload) != `{"id":"1"}` {
+		t.Fatalf("payload = %q", gotPayload)
+	}
+}
+
 func TestSidecarPublishPolicy_CanPublish_GRPCError(t *testing.T) {
 	conn := startTestPolicyServer(t, &fakePolicyServer{
 		allowPublishFn: func(_ context.Context, _ *policyv1.AllowPublishRequest) (*policyv1.AllowPublishResponse, error) {
