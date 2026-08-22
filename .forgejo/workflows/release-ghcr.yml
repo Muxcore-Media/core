@@ -1,6 +1,5 @@
-# Publish muxcored to GHCR on version tags (origin path when desk lacks gh packages scope).
-# Builds on the host runner (Forgejo module fetch) then packages via Dockerfile.goreleaser.
-# Requires repo secret GHCR_TOKEN (PAT or gh token with write:packages) for push.
+# Publish muxcored to GHCR on version tags.
+# Host build (Forgejo module fetch) + Dockerfile.goreleaser; optional push via GHCR_TOKEN secret.
 name: Release GHCR
 on:
   push:
@@ -19,51 +18,39 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Go
+      - name: Build muxcored binary and OCI image
         run: |
           set -euo pipefail
-          ver=1.26.5
+          ver="${GITHUB_REF_NAME#v}"
           mkdir -p "$HOME/.local"
-          if [ ! -x "$HOME/.local/go/bin/go" ] || ! "$HOME/.local/go/bin/go" version | grep -q "$ver"; then
-            curl -fsSL "https://go.dev/dl/go${ver}.linux-amd64.tar.gz" | tar -C "$HOME/.local" -xz
+          if [ ! -x "$HOME/.local/go/bin/go" ]; then
+            curl -fsSL "https://go.dev/dl/go1.26.5.linux-amd64.tar.gz" | tar -C "$HOME/.local" -xz
           fi
-          echo "$HOME/.local/go/bin" >> "$GITHUB_PATH"
-
-      - name: Fetch MuxCore modules from Forgejo origin
-        run: |
+          export PATH="$HOME/.local/go/bin:$PATH"
           git config --global url."https://git.zem.systems/muxcore/".insteadOf "https://github.com/Muxcore-Media/"
-
-      - name: Build muxcored binary
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME#v}"
           CGO_ENABLED=0 go build \
-            -ldflags="-s -w -X github.com/Muxcore-Media/core/internal/version.Version=${TAG}" \
+            -ldflags="-s -w -X github.com/Muxcore-Media/core/internal/version.Version=${ver}" \
             -o muxcored ./cmd/muxcored
-
-      - name: Build muxcored OCI image
-        run: |
-          set -euo pipefail
-          podman build -t "localhost/muxcored:${GITHUB_REF_NAME}" -f Dockerfile.goreleaser .
+          PODMAN="${PODMAN:-/home/ender/.nix-profile/bin/podman}"
+          if ! "$PODMAN" version >/dev/null 2>&1; then
+            echo "podman unavailable for gitea-runner — use core/scripts/publish-muxcored-vault-ghcr.sh on vault"
+            exit 1
+          fi
+          "$PODMAN" build -t "localhost/muxcored:${GITHUB_REF_NAME}" -f Dockerfile.goreleaser .
 
       - name: Push to GHCR
-        env:
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: |
           set -euo pipefail
+          PODMAN="${PODMAN:-/home/ender/.nix-profile/bin/podman}"
           if [ -z "${GHCR_TOKEN:-}" ]; then
-            echo "GHCR_TOKEN not set — image built as localhost/muxcored:${GITHUB_REF_NAME} only"
+            echo "GHCR_TOKEN not set — image built as localhost/muxcored:${GITHUB_REF_NAME}"
             exit 0
           fi
-          echo "$GHCR_TOKEN" | podman login ghcr.io -u muxcore-media --password-stdin
-          podman tag "localhost/muxcored:${GITHUB_REF_NAME}" "ghcr.io/muxcore-media/muxcored:${GITHUB_REF_NAME}"
-          podman tag "localhost/muxcored:${GITHUB_REF_NAME}" "ghcr.io/muxcore-media/core:${GITHUB_REF_NAME}"
-          podman push "ghcr.io/muxcore-media/muxcored:${GITHUB_REF_NAME}"
-          podman push "ghcr.io/muxcore-media/core:${GITHUB_REF_NAME}"
-
-      - name: BUILD_ONLY notice
+          echo "$GHCR_TOKEN" | "$PODMAN" login ghcr.io -u muxcore-media --password-stdin
+          "$PODMAN" tag "localhost/muxcored:${GITHUB_REF_NAME}" "ghcr.io/muxcore-media/muxcored:${GITHUB_REF_NAME}"
+          "$PODMAN" tag "localhost/muxcored:${GITHUB_REF_NAME}" "ghcr.io/muxcore-media/core:${GITHUB_REF_NAME}"
+          "$PODMAN" push "ghcr.io/muxcore-media/muxcored:${GITHUB_REF_NAME}"
+          "$PODMAN" push "ghcr.io/muxcore-media/core:${GITHUB_REF_NAME}"
+          echo "published ghcr.io/muxcore-media/muxcored:${GITHUB_REF_NAME}"
         env:
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
-        run: |
-          if [ -n "${GHCR_TOKEN:-}" ]; then exit 0; fi
-          echo "Add GHCR_TOKEN (write:packages) in Forgejo repo secrets to enable GHCR push"
