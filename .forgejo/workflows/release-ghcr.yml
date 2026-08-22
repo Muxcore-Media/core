@@ -22,11 +22,13 @@ jobs:
         run: |
           set -euo pipefail
           ver="${GITHUB_REF_NAME#v}"
-          mkdir -p "$HOME/.local"
-          if [ ! -x "$HOME/.local/go/bin/go" ]; then
-            curl -fsSL "https://go.dev/dl/go1.26.5.linux-amd64.tar.gz" | tar -C "$HOME/.local" -xz
-          fi
           export PATH="$HOME/.local/go/bin:$PATH"
+          if ! command -v go >/dev/null; then
+            mkdir -p "$HOME/.local"
+            if [ ! -x "$HOME/.local/go/bin/go" ]; then
+              curl -fsSL "https://go.dev/dl/go1.26.5.linux-amd64.tar.gz" | tar -C "$HOME/.local" -xz
+            fi
+          fi
           git config --global url."https://git.zem.systems/muxcore/".insteadOf "https://github.com/Muxcore-Media/"
           CGO_ENABLED=0 go build \
             -ldflags="-s -w -X github.com/Muxcore-Media/core/internal/version.Version=${ver}" \

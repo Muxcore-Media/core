@@ -18,6 +18,9 @@ jobs:
         run: |
           set -euo pipefail
           ver=1.26.5
+          if command -v go >/dev/null && go version | grep -q "$ver"; then
+            exit 0
+          fi
           mkdir -p "$HOME/.local"
           if [ ! -x "$HOME/.local/go/bin/go" ] || ! "$HOME/.local/go/bin/go" version | grep -q "$ver"; then
             curl -fsSL "https://go.dev/dl/go${ver}.linux-amd64.tar.gz" | tar -C "$HOME/.local" -xz
@@ -37,6 +40,9 @@ jobs:
         run: |
           set -euo pipefail
           ver=1.26.5
+          if command -v go >/dev/null && go version | grep -q "$ver"; then
+            exit 0
+          fi
           mkdir -p "$HOME/.local"
           if [ ! -x "$HOME/.local/go/bin/go" ] || ! "$HOME/.local/go/bin/go" version | grep -q "$ver"; then
             curl -fsSL "https://go.dev/dl/go${ver}.linux-amd64.tar.gz" | tar -C "$HOME/.local" -xz
