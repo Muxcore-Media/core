@@ -6,6 +6,9 @@ FROM golang@sha256:2005724102f45917a63e9d092fc0e4ea56ea575048ce147caad5f5f61502c
 ARG VERSION=0.0.0-dev
 
 WORKDIR /src
+# Origin module fetch (Forgejo mirror of github.com/Muxcore-Media/*).
+RUN git config --global url."https://git.zem.systems/muxcore/".insteadOf "https://github.com/Muxcore-Media/"
+ENV GOPRIVATE=github.com/Muxcore-Media/*,git.zem.systems/*
 COPY go.mod go.sum ./
 COPY pkg/contracts/go.mod ./pkg/contracts/
 RUN go mod download
