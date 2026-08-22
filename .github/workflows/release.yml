@@ -19,6 +19,8 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          # Self-hosted runners may mirror Forgejo; pin to the GitHub event commit.
+          ref: ${{ github.sha }}
 
       - name: Set up Go
         uses: actions/setup-go@v7
