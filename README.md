@@ -1,10 +1,10 @@
 # MuxCore
 
-[![CI](https://github.com/Muxcore-Media/core/actions/workflows/ci.yml/badge.svg)](https://github.com/Muxcore-Media/core/actions)
+[![CI](https://git.zem.systems/muxcore/core/actions/workflows/ci.yml/badge.svg)](https://git.zem.systems/muxcore/core/actions)
 [![Go Version](https://img.shields.io/badge/Go-1.26-blue)](https://go.dev/)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/Muxcore-Media/core)](https://github.com/Muxcore-Media/core/releases)
-[![SLSA](https://img.shields.io/badge/SLSA-Provenance-brightgreen)](https://github.com/Muxcore-Media/core/actions/workflows/ci.yml)
+[![SLSA](https://img.shields.io/badge/SLSA-Provenance-brightgreen)](https://git.zem.systems/muxcore/core/actions/workflows/ci.yml)
 
 > **AI transparency:** Portions of this codebase may be written with AI
 > assistance. Every change — human, AI, or hybrid — goes through the same

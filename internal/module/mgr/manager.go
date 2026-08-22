@@ -361,6 +361,10 @@ func (m *Manager) Resolve(repoURL, version string) (*ModuleBinary, error) {
 // and config, producing a ModuleBinary with a compound ID if an instance
 // ID is set.
 func (m *Manager) ResolveTagModule(tm contracts.TagModule) (*ModuleBinary, error) {
+	if tm.Required && tm.Checksum == "" {
+		id := ModuleIDFromRepoWithInstance(tm.Repo, tm.InstanceID)
+		return nil, fmt.Errorf("required module %q missing checksum in spool tag", id)
+	}
 	return m.resolveWithInstance(tm.Repo, tm.Version, tm.InstanceID, tm.Config, tm.Checksum)
 }
 
@@ -406,9 +410,8 @@ func (m *Manager) resolveWithInstance(repoURL, version, instanceID string, confi
 		return nil, fmt.Errorf("clean build dir: %w", err2)
 	}
 
-	cloneCmd := exec.Command("git", "clone", "--depth", "1", "--branch", version, repoURL, buildDir) //nolint:gosec,noctx // repoURL/version from config; intended to build arbitrary modules
-	if out, err2 := cloneCmd.CombinedOutput(); err2 != nil {
-		return nil, fmt.Errorf("clone %s@%s: %w\n%s", repoURL, version, err2, out)
+	if err2 := cloneModuleRepo(repoURL, version, buildDir); err2 != nil {
+		return nil, err2
 	}
 
 	// Run contract reconciliation if the module declares non-canonical contracts.

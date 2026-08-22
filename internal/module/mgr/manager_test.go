@@ -1141,6 +1141,21 @@ func TestResolve_CacheHit(t *testing.T) {
 	}
 }
 
+func TestResolveTagModule_RequiredMissingChecksum(t *testing.T) {
+	m := NewManager("addr", nil, nil)
+	_, err := m.ResolveTagModule(contracts.TagModule{
+		Repo:     "https://github.com/Muxcore-Media/admin-ui",
+		Version:  "v1.0.0",
+		Required: true,
+	})
+	if err == nil {
+		t.Fatal("expected error for required module without checksum")
+	}
+	if !strings.Contains(err.Error(), "missing checksum") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestResolveTagModule_InvalidVersion(t *testing.T) {
 	m := NewManager("addr", nil, nil)
 	_, err := m.ResolveTagModule(contracts.TagModule{
