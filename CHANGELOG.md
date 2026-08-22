@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- `pkg/contracts` drops monorepo `replace` for `contracts-media`; publish nested tags via `scripts/tag-pkg-contracts.sh` (consumes `contracts-media` v0.1.0 from origin).
+- `pkg/contracts` drops monorepo `replace` for `contracts-media`; nested tag **`pkg/contracts/v0.5.8`** published (consumes `contracts-media` v0.1.0 from origin).
 
 ## [v0.5.7] — 2026-08-10 — Release workflow cosign 2.x
 
