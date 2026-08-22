@@ -1,0 +1,47 @@
+# Publish muxcored to GHCR on version tags (origin path when desk lacks gh packages scope).
+# Requires repo secret GHCR_TOKEN (PAT or gh auth token with write:packages).
+# Without the secret, BUILD_ONLY tags localhost/muxcored only.
+name: Release GHCR
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: native
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build muxcored OCI image
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          podman build -t "localhost/muxcored:${GITHUB_REF_NAME}" \
+            --build-arg "VERSION=${TAG}" \
+            -f Dockerfile .
+
+      - name: Push to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GHCR_TOKEN:-}" ]; then
+            echo "GHCR_TOKEN not set — image built as localhost/muxcored:${GITHUB_REF_NAME} only"
+            exit 0
+          fi
+          echo "$GHCR_TOKEN" | podman login ghcr.io -u muxcore-media --password-stdin
+          podman tag "localhost/muxcored:${GITHUB_REF_NAME}" "ghcr.io/muxcore-media/muxcored:${GITHUB_REF_NAME}"
+          podman tag "localhost/muxcored:${GITHUB_REF_NAME}" "ghcr.io/muxcore-media/core:${GITHUB_REF_NAME}"
+          podman push "ghcr.io/muxcore-media/muxcored:${GITHUB_REF_NAME}"
+          podman push "ghcr.io/muxcore-media/core:${GITHUB_REF_NAME}"
+
+      - name: BUILD_ONLY notice
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          if [ -n "${GHCR_TOKEN:-}" ]; then exit 0; fi
+          echo "Add GHCR_TOKEN (write:packages) in Forgejo repo secrets to enable GHCR push"
