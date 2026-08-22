@@ -1,11 +1,15 @@
 # Publish muxcored to GHCR on version tags (origin path when desk lacks gh packages scope).
-# Requires repo secret GHCR_TOKEN (PAT or gh auth token with write:packages).
-# Without the secret, BUILD_ONLY tags localhost/muxcored only.
+# Builds on the host runner (Forgejo module fetch) then packages via Dockerfile.goreleaser.
+# Requires repo secret GHCR_TOKEN (PAT or gh token with write:packages) for push.
 name: Release GHCR
 on:
   push:
     tags:
       - "v*"
+
+env:
+  GOPRIVATE: github.com/Muxcore-Media/*
+  GOPROXY: https://proxy.golang.org,direct
 
 jobs:
   publish:
@@ -15,14 +19,32 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Build muxcored OCI image
+      - name: Install Go
+        run: |
+          set -euo pipefail
+          ver=1.26.5
+          mkdir -p "$HOME/.local"
+          if [ ! -x "$HOME/.local/go/bin/go" ] || ! "$HOME/.local/go/bin/go" version | grep -q "$ver"; then
+            curl -fsSL "https://go.dev/dl/go${ver}.linux-amd64.tar.gz" | tar -C "$HOME/.local" -xz
+          fi
+          echo "$HOME/.local/go/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch MuxCore modules from Forgejo origin
+        run: |
+          git config --global url."https://git.zem.systems/muxcore/".insteadOf "https://github.com/Muxcore-Media/"
+
+      - name: Build muxcored binary
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME#v}"
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
-          podman build -t "localhost/muxcored:${GITHUB_REF_NAME}" \
-            --build-arg "VERSION=${TAG}" \
-            -f Dockerfile .
+          CGO_ENABLED=0 go build \
+            -ldflags="-s -w -X github.com/Muxcore-Media/core/internal/version.Version=${TAG}" \
+            -o muxcored ./cmd/muxcored
+
+      - name: Build muxcored OCI image
+        run: |
+          set -euo pipefail
+          podman build -t "localhost/muxcored:${GITHUB_REF_NAME}" -f Dockerfile.goreleaser .
 
       - name: Push to GHCR
         env:
