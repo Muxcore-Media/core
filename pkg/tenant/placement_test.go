@@ -43,8 +43,8 @@ func TestPlacerResolveGRPC(t *testing.T) {
 		t.Fatalf("got %q ok=%v", addr, ok)
 	}
 	addr, ok = p.ResolveGRPC(context.Background(), f, "unknown")
-	if !ok || addr != "10.0.0.1:9090" {
-		t.Fatalf("fallback expected us-east node, got %q ok=%v", addr, ok)
+	if ok {
+		t.Fatalf("unknown tenant should not resolve without nodes in local region, got %q", addr)
 	}
 }
 
