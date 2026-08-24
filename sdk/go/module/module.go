@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -54,6 +55,56 @@ const (
 
 	defaultShutdownTimeout = 10 * time.Second
 )
+
+func registerWithCore(reg modulev1.ModuleRegistrationClient, moduleID string, info contracts.ModuleInfo) (*modulev1.RegisterResponse, error) {
+	resp, err := reg.Register(context.Background(), &modulev1.RegisterRequest{
+		ModuleId: moduleID,
+		ModuleInfo: &modulev1.ModuleInfo{
+			Id:             info.ID,
+			Name:           info.Name,
+			Version:        info.Version,
+			Roles:          info.Roles,
+			Description:    info.Description,
+			Author:         info.Author,
+			Capabilities:   info.Capabilities,
+			DependsOn:      info.DependsOn,
+			MinCoreVersion: info.MinCoreVersion,
+			HttpAddr:       info.HTTPAddr,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("module: register RPC: %w", err)
+	}
+	if !resp.GetAccepted() {
+		return nil, fmt.Errorf("module: core rejected registration: %s", resp.GetError())
+	}
+	slog.Info("module registered with core",
+		"id", moduleID,
+		"version", info.Version,
+		"mesh_addr", resp.GetMeshAddr(),
+		"node_id", resp.GetNodeId(),
+	)
+	return resp, nil
+}
+
+// watchCoreRegistration re-registers after muxcored restarts and the gRPC connection recovers.
+func watchCoreRegistration(ctx context.Context, conn *grpc.ClientConn, reg modulev1.ModuleRegistrationClient, moduleID string, info contracts.ModuleInfo) {
+	var last connectivity.State
+	for {
+		state := conn.GetState()
+		if state == connectivity.Ready && last != connectivity.Ready && last != connectivity.Idle {
+			if _, err := registerWithCore(reg, moduleID, info); err != nil {
+				slog.Warn("module re-register failed", "id", moduleID, "error", err)
+			} else {
+				slog.Info("module re-registered with core", "id", moduleID)
+			}
+		}
+		last = state
+		if !conn.WaitForStateChange(ctx, state) {
+			return
+		}
+	}
+}
 
 func init() {
 	// Register mesh/TLS flags so core-spawned modules accept --muxcore-* args
@@ -130,34 +181,15 @@ func Run(cfg Config) error {
 	info := cfg.Module.Info()
 	info.ID = moduleID
 
-	resp, err := reg.Register(context.Background(), &modulev1.RegisterRequest{
-		ModuleId: moduleID,
-		ModuleInfo: &modulev1.ModuleInfo{
-			Id:             info.ID,
-			Name:           info.Name,
-			Version:        info.Version,
-			Roles:          info.Roles,
-			Description:    info.Description,
-			Author:         info.Author,
-			Capabilities:   info.Capabilities,
-			DependsOn:      info.DependsOn,
-			MinCoreVersion: info.MinCoreVersion,
-			HttpAddr:       info.HTTPAddr,
-		},
-	})
+	resp, err := registerWithCore(reg, moduleID, info)
 	if err != nil {
-		return fmt.Errorf("module: register RPC: %w", err)
+		return err
 	}
-	if !resp.GetAccepted() {
-		return fmt.Errorf("module: core rejected registration: %s", resp.GetError())
-	}
+	_ = resp
 
-	slog.Info("module registered with core",
-		"id", moduleID,
-		"version", info.Version,
-		"mesh_addr", resp.GetMeshAddr(),
-		"node_id", resp.GetNodeId(),
-	)
+	watchCtx, watchCancel := context.WithCancel(context.Background())
+	defer watchCancel()
+	go watchCoreRegistration(watchCtx, conn, reg, moduleID, info)
 
 	if err := cfg.Module.Init(context.Background()); err != nil {
 		return fmt.Errorf("module: init: %w", err)

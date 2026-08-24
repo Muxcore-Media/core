@@ -361,7 +361,7 @@ func (m *Manager) Resolve(repoURL, version string) (*ModuleBinary, error) {
 // and config, producing a ModuleBinary with a compound ID if an instance
 // ID is set.
 func (m *Manager) ResolveTagModule(tm contracts.TagModule) (*ModuleBinary, error) {
-	if tm.Required && tm.Checksum == "" {
+	if tm.Required && strings.TrimSpace(tm.Checksum) == "" {
 		id := ModuleIDFromRepoWithInstance(tm.Repo, tm.InstanceID)
 		return nil, fmt.Errorf("required module %q missing checksum in spool tag", id)
 	}

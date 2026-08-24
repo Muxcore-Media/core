@@ -258,10 +258,8 @@ func DialWithAddrs(addrs []string, opts ...Option) (*Client, error) {
 	}
 	c.Audit, c.Discovery, c.Events, c.Storage, c.Health, c.Mesh = initServiceClients(conn)
 
-	// Start the reconnect loop if there are fallback addresses or more than one.
-	if len(allAddrs) > 1 {
-		go c.reconnectLoop()
-	}
+	// Start the reconnect loop so a single-address client recovers from core restarts.
+	go c.reconnectLoop()
 
 	return c, nil
 }

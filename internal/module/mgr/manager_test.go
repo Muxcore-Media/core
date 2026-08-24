@@ -1143,16 +1143,46 @@ func TestResolve_CacheHit(t *testing.T) {
 
 func TestResolveTagModule_RequiredMissingChecksum(t *testing.T) {
 	m := NewManager("addr", nil, nil)
-	_, err := m.ResolveTagModule(contracts.TagModule{
-		Repo:     "https://github.com/Muxcore-Media/admin-ui",
-		Version:  "v1.0.0",
-		Required: true,
-	})
-	if err == nil {
-		t.Fatal("expected error for required module without checksum")
+	cases := []struct {
+		name     string
+		checksum string
+		instance string
+		wantID   string
+	}{
+		{
+			name:   "empty checksum",
+			wantID: "admin-ui",
+		},
+		{
+			name:     "whitespace checksum",
+			checksum: "   \t",
+			wantID:   "admin-ui",
+		},
+		{
+			name:     "instance id in error",
+			instance: "secondary",
+			wantID:   "admin-ui-secondary",
+		},
 	}
-	if !strings.Contains(err.Error(), "missing checksum") {
-		t.Fatalf("unexpected error: %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := m.ResolveTagModule(contracts.TagModule{
+				Repo:       "https://github.com/Muxcore-Media/admin-ui",
+				Version:    "v1.0.0",
+				Required:   true,
+				Checksum:   tc.checksum,
+				InstanceID: tc.instance,
+			})
+			if err == nil {
+				t.Fatal("expected error for required module without checksum")
+			}
+			if !strings.Contains(err.Error(), "missing checksum") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantID) {
+				t.Fatalf("error %q should mention module id %q", err, tc.wantID)
+			}
+		})
 	}
 }
 
