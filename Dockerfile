@@ -1,4 +1,4 @@
-FROM golang@sha256:2005724102f45917a63e9d092fc0e4ea56ea575048ce147caad5f5f61502c365 AS build
+FROM golang@sha256:65b6f280bf050ec5af12716857e8ea8439d694dbba8f31ceeb7630670071f2bb AS build
 
 # VERSION is injected at docker build time:
 #   docker build --build-arg VERSION=1.0.0 -t muxcore:1.0.0 .
