@@ -38,6 +38,8 @@ import (
 )
 
 // Spec describes the module process to place in a bundle.
+//
+//nolint:govet // fieldalignment: ModuleID first for readability
 type Spec struct {
 	ModuleID string
 	BinPath  string
@@ -66,7 +68,7 @@ func WriteBundle(dir string, spec Spec) (*Bundle, error) {
 		return nil, fmt.Errorf("oci bundle: dir required")
 	}
 	rootfsDir := filepath.Join(dir, "rootfs")
-	if err := os.MkdirAll(rootfsDir, 0o755); err != nil {
+	if err := os.MkdirAll(rootfsDir, 0o755); err != nil { //nolint:gosec // container rootfs layout
 		return nil, err
 	}
 	if _, err := rootfs.ApplyToDir(rootfsDir); err != nil {
@@ -99,7 +101,7 @@ func WriteBundle(dir string, spec Spec) (*Bundle, error) {
 			return nil, err
 		}
 		if override := seccomp.PathOverride(); override != "" {
-			raw, err := os.ReadFile(override)
+			raw, err := os.ReadFile(override) //nolint:gosec // MUXCORE_SANDBOX_SECCOMP_PROFILE from operator env
 			if err != nil {
 				return nil, fmt.Errorf("seccomp profile override: %w", err)
 			}
@@ -132,7 +134,7 @@ func WriteBundle(dir string, spec Spec) (*Bundle, error) {
 		return nil, err
 	}
 	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, raw, 0o644); err != nil {
+	if err := os.WriteFile(configPath, raw, 0o644); err != nil { //nolint:gosec // OCI config.json in operator bundle dir
 		return nil, err
 	}
 	return &Bundle{Dir: dir, ConfigPath: configPath, Rootfs: rootfsDir, Binary: destBin}, nil
@@ -146,7 +148,7 @@ func ValidateBundle(dir string) error {
 			return fmt.Errorf("oci bundle incomplete: %s: %w", name, err)
 		}
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	raw, err := os.ReadFile(filepath.Join(dir, "config.json")) //nolint:gosec // bundle dir from caller
 	if err != nil {
 		return err
 	}
@@ -190,39 +192,42 @@ func LookPathRunsc(bin string) (string, error) {
 
 // TryRunscValidate shells out to runsc spec validate when available.
 // Returns (skipped=true, nil) when runsc is not on PATH.
-func TryRunscValidate(runscBin, bundleDir string) (skipped bool, err error) {
-	path, err := LookPathRunsc(runscBin)
-	if err != nil {
-		return true, nil
+func TryRunscValidate(runscBin, bundleDir string) (bool, error) {
+	path, lookErr := LookPathRunsc(runscBin)
+	if lookErr != nil {
+		return true, nil //nolint:nilerr // missing runsc is an intentional skip, not failure
 	}
 	args := RunscValidateArgs(path, bundleDir)
-	cmd := exec.Command(args[0], args[1:]...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
+	cmd := exec.Command(args[0], args[1:]...) //nolint:gosec,noctx // argv from RunscValidateArgs (runsc + fixed flags)
+	out, runErr := cmd.CombinedOutput()
+	if runErr != nil {
 		// Some runsc builds lack `spec validate`; treat as soft skip with note.
-		if strings.Contains(string(out), "unknown") || strings.Contains(err.Error(), "unknown") {
+		if strings.Contains(string(out), "unknown") || strings.Contains(runErr.Error(), "unknown") {
 			return true, nil
 		}
-		return false, fmt.Errorf("runsc validate: %w (%s)", err, strings.TrimSpace(string(out)))
+		return false, fmt.Errorf("runsc validate: %w (%s)", runErr, strings.TrimSpace(string(out)))
 	}
 	return false, nil
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {
-	in, err := os.Open(src)
+	in, err := os.Open(src) //nolint:gosec // src is module binary path from caller
 	if err != nil {
 		return err
 	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode) //nolint:gosec // dst under OCI bundle rootfs
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	if _, err := io.Copy(out, in); err != nil {
 		return err
 	}
-	return out.Close()
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func sanitizeHostname(id string) string {

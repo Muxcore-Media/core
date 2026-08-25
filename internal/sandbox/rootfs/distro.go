@@ -53,14 +53,14 @@ func applyAlpineMinimalLayout(dir string) error {
 		"etc/ssl/certs",
 	}
 	for _, d := range extra {
-		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil { //nolint:gosec // container rootfs layout
 			return err
 		}
 	}
 	osRelease := "NAME=\"MuxCore Alpine-minimal\"\nID=muxcore-alpine\nVERSION=1.0\n"
-	if err := os.WriteFile(filepath.Join(dir, "etc", "os-release"), []byte(osRelease), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "etc", "os-release"), []byte(osRelease), 0o644); err != nil { //nolint:gosec // fixture os-release for sandbox
 		return err
 	}
 	apkRepos := "# MuxCore fixture alpine-minimal — operator supplies real apk repos\n"
-	return os.WriteFile(filepath.Join(dir, "etc", "apk", "repositories"), []byte(apkRepos), 0o644)
+	return os.WriteFile(filepath.Join(dir, "etc", "apk", "repositories"), []byte(apkRepos), 0o644) //nolint:gosec // fixture apk repos for sandbox
 }

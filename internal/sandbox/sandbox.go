@@ -48,6 +48,8 @@ type Spec struct {
 }
 
 // Result is the rewritten exec path/args after wrapping.
+//
+//nolint:govet // fieldalignment: Path/Args first for spawn hot path
 type Result struct {
 	Path string
 	Args []string
@@ -168,7 +170,8 @@ func (r FirecrackerRunner) Wrap(ctx context.Context, spec Spec) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
-	args := []string{"--module", spec.ModuleID, "--rootfs", rootfsPath, "--", spec.BinPath}
+	args := make([]string, 0, 6+len(spec.Args))
+	args = append(args, "--module", spec.ModuleID, "--rootfs", rootfsPath, "--", spec.BinPath)
 	args = append(args, spec.Args...)
 	return Result{Path: bin, Args: args, Env: append([]string{}, spec.Env...), Mode: ModeFirecracker}, nil
 }
@@ -178,7 +181,7 @@ func (r FirecrackerRunner) Wrap(ctx context.Context, spec Spec) (Result, error) 
 func resolveFirecrackerRootfs() (string, error) {
 	rootfsPath := strings.TrimSpace(os.Getenv("MUXCORE_SANDBOX_FC_ROOTFS"))
 	if rootfsPath != "" {
-		if _, err := os.Stat(rootfsPath); err != nil {
+		if _, err := os.Stat(rootfsPath); err != nil { //nolint:gosec // MUXCORE_SANDBOX_FC_ROOTFS from operator env
 			return "", fmt.Errorf("firecracker sandbox rootfs %q: %w", rootfsPath, err)
 		}
 		return rootfsPath, nil

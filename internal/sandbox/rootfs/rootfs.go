@@ -58,6 +58,7 @@ case "$prog" in
 esac
 `
 
+//nolint:gosec // fixture /etc/passwd stub for sandbox rootfs
 const passwdContents = `root:x:0:0:root:/root:/bin/sh
 `
 
@@ -80,11 +81,11 @@ func MakeRootfs(dir string) error {
 		return fmt.Errorf("rootfs: dir required")
 	}
 	for _, d := range layoutDirs {
-		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil { //nolint:gosec // world-readable dirs for container rootfs
 			return err
 		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "etc", "passwd"), []byte(passwdContents), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "etc", "passwd"), []byte(passwdContents), 0o644); err != nil { //nolint:gosec // fixture passwd for sandbox
 		return err
 	}
 	busyboxPath := filepath.Join(dir, "bin", "busybox")
@@ -178,7 +179,7 @@ func CopyTree(src, dest string) error {
 				return err
 			}
 			_ = os.Remove(target)
-			return os.Symlink(link, target)
+			return os.Symlink(link, target) //nolint:gosec // preserve symlinks when copying template tree
 		}
 		return copyFile(path, target, fi.Mode().Perm())
 	})
@@ -191,47 +192,50 @@ func installBusybox(dest string) error {
 	if url := strings.TrimSpace(os.Getenv("MUXCORE_SANDBOX_ROOTFS_BUSYBOX_URL")); url != "" {
 		return downloadFile(url, dest, 0o755)
 	}
-	return os.WriteFile(dest, []byte(StubBusybox), 0o755)
+	return os.WriteFile(dest, []byte(StubBusybox), 0o755) //nolint:gosec // executable stub busybox fixture
 }
 
 func downloadFile(url, dest string, mode os.FileMode) error {
 	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := client.Get(url) //nolint:gosec // operator-controlled MUXCORE_SANDBOX_ROOTFS_BUSYBOX_URL
 	if err != nil {
 		return fmt.Errorf("rootfs busybox download: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("rootfs busybox download: HTTP %d", resp.StatusCode)
 	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
+	if mkdirErr := os.MkdirAll(filepath.Dir(dest), 0o755); mkdirErr != nil { //nolint:gosec // container rootfs layout
+		return mkdirErr
 	}
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode) //nolint:gosec // dest under controlled rootfs dir
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	if _, err := io.Copy(out, resp.Body); err != nil {
 		return err
 	}
-	return out.Close()
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil { //nolint:gosec // container rootfs layout
 		return err
 	}
-	in, err := os.Open(src)
+	in, err := os.Open(src) //nolint:gosec // src under controlled rootfs or operator path
 	if err != nil {
 		return err
 	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode) //nolint:gosec // dst under controlled rootfs dir
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	if _, err := io.Copy(out, in); err != nil {
 		return err
 	}

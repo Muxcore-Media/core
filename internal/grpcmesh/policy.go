@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	policyv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/policy/v1"
 	"github.com/Muxcore-Media/core/pkg/contracts"
+	policyv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/policy/v1"
 	"google.golang.org/grpc"
 )
 

@@ -10,10 +10,12 @@ import (
 )
 
 // VMConfig is a minimal Firecracker JSON config with boot, rootfs, and vsock.
+//
+//nolint:govet // fieldalignment: JSON field order matches Firecracker schema
 type VMConfig struct {
-	BootSource   BootSource   `json:"boot-source"`
-	Drives       []Drive      `json:"drives"`
-	Vsock        *Vsock       `json:"vsock,omitempty"`
+	BootSource    BootSource    `json:"boot-source"`
+	Drives        []Drive       `json:"drives"`
+	Vsock         *Vsock        `json:"vsock,omitempty"`
 	MachineConfig MachineConfig `json:"machine-config"`
 }
 
@@ -29,8 +31,9 @@ type Drive struct {
 	IsReadOnly   bool   `json:"is_read_only"`
 }
 
+//nolint:govet // fieldalignment: guest_cid before uds_path matches Firecracker JSON
 type Vsock struct {
-	GuestCID int `json:"guest_cid"`
+	GuestCID int    `json:"guest_cid"`
 	UDSPath  string `json:"uds_path"`
 }
 
@@ -41,6 +44,8 @@ type MachineConfig struct {
 }
 
 // Options for WriteConfig.
+//
+//nolint:govet // fieldalignment: ModuleID first for operator readability
 type Options struct {
 	ModuleID   string
 	RootfsPath string
@@ -104,7 +109,7 @@ func WriteConfig(dir string, opt Options) (string, error) {
 		Drives: []Drive{{
 			DriveID: "rootfs", PathOnHost: rootfs, IsRootDevice: true, IsReadOnly: false,
 		}},
-		Vsock: &Vsock{GuestCID: cid, UDSPath: uds},
+		Vsock:         &Vsock{GuestCID: cid, UDSPath: uds},
 		MachineConfig: MachineConfig{VcpuCount: vcpu, MemSizeMib: mem, SMT: false},
 	}
 	path := filepath.Join(dir, "config.json")
@@ -121,7 +126,7 @@ func WriteConfig(dir string, opt Options) (string, error) {
 
 // ValidateConfig checks required fields in a written config.json.
 func ValidateConfig(path string) error {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // path is a written config under operator bundle dir
 	if err != nil {
 		return err
 	}

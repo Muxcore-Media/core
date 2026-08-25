@@ -54,7 +54,7 @@ func WriteTemp() (path string, err error) {
 		return "", err
 	}
 	path = filepath.Join(dir, "default.json")
-	if err := os.WriteFile(path, defaultJSON, 0o644); err != nil {
+	if err := os.WriteFile(path, defaultJSON, 0o644); err != nil { //nolint:gosec // embedded public seccomp profile, not secret
 		_ = os.RemoveAll(dir)
 		return "", err
 	}
