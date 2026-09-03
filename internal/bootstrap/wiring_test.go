@@ -290,7 +290,7 @@ func TestInitHealthProbes(t *testing.T) {
 		reg := registry.New()
 		cfgMu := &sync.Mutex{}
 
-		checker := InitHealthProbes(ctx, bus, discoveryGrpc, store, cfg, reg, cfgMu)
+		checker := InitHealthProbes(ctx, bus, discoveryGrpc, store, cfg, reg, cfgMu, nil)
 		if checker == nil {
 			t.Error("InitHealthProbes() returned nil")
 		}

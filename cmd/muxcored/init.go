@@ -16,10 +16,12 @@ import (
 	"github.com/Muxcore-Media/core/internal/api"
 	"github.com/Muxcore-Media/core/internal/audit"
 	"github.com/Muxcore-Media/core/internal/bootstrap"
+	"github.com/Muxcore-Media/core/internal/trace"
 	"github.com/Muxcore-Media/core/internal/config"
 	"github.com/Muxcore-Media/core/internal/deadletter"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/eventstore"
+	corehealth "github.com/Muxcore-Media/core/internal/health"
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
 	"github.com/Muxcore-Media/core/internal/idempotency"
 	modlifecycle "github.com/Muxcore-Media/core/internal/module"
@@ -246,6 +248,7 @@ func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus
 
 	grpcOpts = append(grpcOpts,
 		grpc.ChainUnaryInterceptor(
+			trace.UnaryServerInterceptor,
 			bootstrap.GRPCLoggingInterceptor,
 			bootstrap.GRPCPanicRecoveryInterceptor,
 			authInterceptor.UnaryInterceptor(),
@@ -440,9 +443,12 @@ func initAudit(cfg *config.Config, bus *events.MemoryBus, store *storage.Orchest
 	return auditLogger
 }
 
-func initModuleManager(cfg *config.Config, reg *registry.Registry, bus *events.MemoryBus, auditLogger *audit.FileLogger, grpcSrv *grpc.Server, metricsProvider *api.MetricsProvider, watchdogPath string, authInterceptor *grpcmesh.AuthInterceptor, certAuth *grpcmesh.CertAuthority) (*modulemgr.Manager, *modlifecycle.Manager) {
+func initModuleManager(cfg *config.Config, reg *registry.Registry, bus *events.MemoryBus, auditLogger *audit.FileLogger, grpcSrv *grpc.Server, metricsProvider *api.MetricsProvider, watchdogPath string, authInterceptor *grpcmesh.AuthInterceptor, certAuth *grpcmesh.CertAuthority, healthHistory *corehealth.History) (*modulemgr.Manager, *modlifecycle.Manager) {
 	lifecycleMgr := modlifecycle.NewManager(reg, bus)
 	lifecycleMgr.SetAuditLogger(auditLogger)
+	if healthHistory != nil {
+		lifecycleMgr.SetHealthHistory(healthHistory)
+	}
 	modMgr := modulemgr.NewManager(cfg.GRPC.Addr, reg, lifecycleMgr)
 	modMgr.RegisterModuleService(grpcSrv)
 	if watchdogPath != "" {

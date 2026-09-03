@@ -10,6 +10,7 @@ import (
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 
+	"github.com/Muxcore-Media/core/internal/health"
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/version"
 	"github.com/google/uuid"
@@ -28,14 +29,25 @@ type Restarter interface {
 }
 
 type Manager struct {
-	registry  *registry.Registry
-	bus       contracts.EventBus
-	audit     contracts.AuditLogger
-	restarter Restarter
+	registry      *registry.Registry
+	bus           contracts.EventBus
+	audit         contracts.AuditLogger
+	restarter     Restarter
+	healthHistory *health.History
 }
 
 func NewManager(reg *registry.Registry, bus contracts.EventBus) *Manager {
 	return &Manager{registry: reg, bus: bus}
+}
+
+// SetHealthHistory attaches a rolling health history store.
+func (m *Manager) SetHealthHistory(h *health.History) {
+	m.healthHistory = h
+}
+
+// HealthHistory returns the attached health history store, or nil.
+func (m *Manager) HealthHistory() *health.History {
+	return m.healthHistory
 }
 
 // SetRestarter attaches a Restarter for health-triggered module restarts.
@@ -63,7 +75,7 @@ func (m *Manager) Register(ctx context.Context, mod contracts.Module, deps []str
 	}
 
 	if err := m.registry.Register(mod, deps); err != nil {
-		return err
+		return fmt.Errorf("register module %q: %w", info.ID, err)
 	}
 
 	m.auditLifecycle(ctx, "module.register", info.ID, map[string]string{"version": info.Version})
@@ -72,13 +84,16 @@ func (m *Manager) Register(ctx context.Context, mod contracts.Module, deps []str
 }
 
 func (m *Manager) Unregister(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("unregister: module ID is required")
+	}
 	entry, err := m.registry.Get(id)
 	if err != nil {
-		return err
+		return fmt.Errorf("unregister %q: %w", id, err)
 	}
 
 	if err := m.registry.Unregister(id); err != nil {
-		return err
+		return fmt.Errorf("unregister %q: %w", id, err)
 	}
 
 	m.auditLifecycle(ctx, "module.unregister", id, nil)
@@ -91,21 +106,21 @@ func (m *Manager) InitAll(ctx context.Context) error {
 
 	order, err := m.startupOrder(entries)
 	if err != nil {
-		return fmt.Errorf("resolving startup order: %w", err)
+		slog.Warn("startup order resolution failed, using registration order", "error", err)
+		order = entries
 	}
 
 	for _, entry := range order {
 		if _, err := m.registry.ResolveDeps(entry.Info.ID); err != nil {
 			slog.Warn("unresolved dependencies, skipping module", "id", entry.Info.ID, "error", err)
-			if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateDegraded); setErr != nil {
-				slog.Error("failed to set module state", "id", entry.Info.ID, "state", contracts.ModuleStateDegraded, "error", setErr)
-			}
-			m.publishModuleDegraded(ctx, entry.Info, err)
+			m.markDegraded(ctx, entry, err)
 			continue
 		}
 		slog.Info("initializing module", "id", entry.Info.ID, "version", entry.Info.Version)
 		if err := m.initOne(ctx, entry); err != nil {
-			return fmt.Errorf("init %q: %w", entry.Info.ID, err)
+			slog.Warn("module init failed, marking degraded", "id", entry.Info.ID, "error", err)
+			m.markDegraded(ctx, entry, err)
+			continue
 		}
 	}
 	return nil
@@ -116,21 +131,25 @@ func (m *Manager) StartAll(ctx context.Context) error {
 
 	order, err := m.startupOrder(entries)
 	if err != nil {
-		return fmt.Errorf("resolving startup order: %w", err)
+		slog.Warn("startup order resolution failed, using registration order", "error", err)
+		order = entries
 	}
 
 	for _, entry := range order {
 		if _, err := m.registry.ResolveDeps(entry.Info.ID); err != nil {
 			slog.Warn("unresolved dependencies, skipping module", "id", entry.Info.ID, "error", err)
-			if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateDegraded); setErr != nil {
-				slog.Error("failed to set module state", "id", entry.Info.ID, "state", contracts.ModuleStateDegraded, "error", setErr)
-			}
-			m.publishModuleDegraded(ctx, entry.Info, err)
+			m.markDegraded(ctx, entry, err)
+			continue
+		}
+		if entry.State == contracts.ModuleStateDegraded {
+			slog.Debug("skipping start for degraded module", "id", entry.Info.ID)
 			continue
 		}
 		slog.Info("starting module", "id", entry.Info.ID)
 		if err := m.startOne(ctx, entry); err != nil {
-			return fmt.Errorf("start %q: %w", entry.Info.ID, err)
+			slog.Warn("module start failed, marking degraded", "id", entry.Info.ID, "error", err)
+			m.markDegraded(ctx, entry, err)
+			continue
 		}
 	}
 	return nil
@@ -219,17 +238,46 @@ func (m *Manager) healthCheckAndRemediate(ctx context.Context) {
 func (m *Manager) HealthCheck(ctx context.Context) map[string]error {
 	results := make(map[string]error)
 	for _, entry := range m.registry.List() {
+		start := time.Now()
 		err := entry.Module.Health(ctx)
+		duration := time.Since(start)
+		if m.healthHistory != nil {
+			m.healthHistory.Record(entry.Info.ID, err == nil, err, duration)
+		}
 		if setErr := m.registry.SetHealth(entry.Info.ID, err); setErr != nil {
 			slog.Error("failed to set module health", "id", entry.Info.ID, "error", setErr)
 		}
 		results[entry.Info.ID] = err
 		if err != nil {
+			if entry.State != contracts.ModuleStateDegraded {
+				if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateDegraded); setErr != nil {
+					slog.Error("failed to set module state", "id", entry.Info.ID, "state", contracts.ModuleStateDegraded, "error", setErr)
+				}
+			}
 			m.auditLifecycle(ctx, "module.degraded", entry.Info.ID, map[string]string{"error": err.Error()})
 			m.publishModuleDegraded(ctx, entry.Info, err)
+			continue
+		}
+		if entry.State == contracts.ModuleStateDegraded {
+			if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateRunning); setErr != nil {
+				slog.Debug("module health restored but state transition skipped", "id", entry.Info.ID, "error", setErr)
+			}
 		}
 	}
 	return results
+}
+
+func (m *Manager) markDegraded(ctx context.Context, entry *registry.Entry, err error) {
+	if entry.State != contracts.ModuleStateDegraded {
+		if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateDegraded); setErr != nil {
+			slog.Error("failed to set module state", "id", entry.Info.ID, "state", contracts.ModuleStateDegraded, "error", setErr)
+		}
+	}
+	if setErr := m.registry.SetHealth(entry.Info.ID, err); setErr != nil {
+		slog.Error("failed to set module health", "id", entry.Info.ID, "error", setErr)
+	}
+	m.auditLifecycle(ctx, "module.degraded", entry.Info.ID, map[string]string{"error": err.Error()})
+	m.publishModuleDegraded(ctx, entry.Info, err)
 }
 
 func (m *Manager) initOne(ctx context.Context, entry *registry.Entry) error {
@@ -240,7 +288,7 @@ func (m *Manager) initOne(ctx context.Context, entry *registry.Entry) error {
 		return fmt.Errorf("set state %s for %q: %w", contracts.ModuleStateStarting, entry.Info.ID, setErr)
 	}
 	if err := entry.Module.Init(ctx); err != nil {
-		return err
+		return fmt.Errorf("init module %q: %w", entry.Info.ID, err)
 	}
 	m.auditLifecycle(ctx, "module.init", entry.Info.ID, map[string]string{"version": entry.Info.Version})
 	return nil
@@ -260,7 +308,7 @@ func (m *Manager) startOne(ctx context.Context, entry *registry.Entry) error {
 		return fmt.Errorf("start: invalid state %q for %q", entry.State, entry.Info.ID)
 	}
 	if err := entry.Module.Start(ctx); err != nil {
-		return err
+		return fmt.Errorf("start module %q: %w", entry.Info.ID, err)
 	}
 	if setErr := m.registry.SetState(entry.Info.ID, contracts.ModuleStateRunning); setErr != nil {
 		slog.Error("failed to set module state", "id", entry.Info.ID, "state", contracts.ModuleStateRunning, "error", setErr)

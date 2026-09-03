@@ -20,6 +20,7 @@ import (
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
 	corehealth "github.com/Muxcore-Media/core/internal/health"
+	modlifecycle "github.com/Muxcore-Media/core/internal/module"
 	modulemgr "github.com/Muxcore-Media/core/internal/module/mgr"
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/spool"
@@ -427,7 +428,8 @@ func RunClusterEventListener(ctx context.Context, cluster contracts.Cluster, nod
 }
 
 // InitHealthProbes creates the health check function for the HTTP server.
-func InitHealthProbes(ctx context.Context, bus *events.MemoryBus, discoveryGrpc *grpcmesh.DiscoveryServer, store *storage.Orchestrator, cfg *config.Config, reg *registry.Registry, cfgMu *sync.Mutex) func() map[string]error {
+// lifecycleMgr runs per-module Health() checks; when nil, only registry state is inspected.
+func InitHealthProbes(ctx context.Context, bus *events.MemoryBus, discoveryGrpc *grpcmesh.DiscoveryServer, store *storage.Orchestrator, cfg *config.Config, reg *registry.Registry, cfgMu *sync.Mutex, lifecycleMgr *modlifecycle.Manager) func() map[string]error {
 	startTime := time.Now()
 	coreH := corehealth.New()
 	coreH.RegisterProbe("event_bus", func(ctx context.Context) error {
@@ -475,14 +477,43 @@ func InitHealthProbes(ctx context.Context, bus *events.MemoryBus, discoveryGrpc 
 		for name, err := range coreH.Check(ctx) {
 			results["core."+name] = err
 		}
-		for _, entry := range reg.ListAll() {
-			if entry.State == contracts.ModuleStateDegraded {
-				results[entry.Info.ID] = fmt.Errorf("module degraded")
+		if lifecycleMgr != nil {
+			for moduleID, err := range lifecycleMgr.HealthCheck(ctx) {
+				results[moduleID] = err
+			}
+		} else {
+			for _, entry := range reg.ListAll() {
+				if entry.State == contracts.ModuleStateDegraded {
+					results[entry.Info.ID] = fmt.Errorf("module degraded")
+				}
 			}
 		}
 		results["_uptime"] = fmt.Errorf("%s", time.Since(startTime).Round(time.Second))
 		results["_version"] = fmt.Errorf("ok")
 		return results
+	}
+}
+
+// ModuleResourceCollector returns a snapshot of per-module resource usage.
+// Sidecar modules report process memory; in-process modules may optionally
+// implement health.ResourceStatsProvider for goroutine counts.
+func ModuleResourceCollector(reg *registry.Registry, procMgr *modulemgr.Manager) func() map[string]corehealth.ModuleResourceStats {
+	return func() map[string]corehealth.ModuleResourceStats {
+		stats := make(map[string]corehealth.ModuleResourceStats)
+		if procMgr != nil {
+			for id, s := range procMgr.ProcessResourceStats() {
+				stats[id] = s
+			}
+		}
+		for _, entry := range reg.List() {
+			if rp, ok := entry.Module.(corehealth.ResourceStatsProvider); ok {
+				stats[entry.Info.ID] = rp.ResourceStats()
+			}
+		}
+		if len(stats) == 0 {
+			return nil
+		}
+		return stats
 	}
 }
 
@@ -514,7 +545,16 @@ func LoadAndSpawnModules(ctx context.Context, tagName, spoolURL string, modMgr *
 			continue
 		}
 		if len(tm.Config) > 0 {
-			bin.Config = tm.Config
+			sanitized, sanitizeErr := api.SanitizeModuleConfig(tm.Config)
+			if sanitizeErr != nil {
+				if tm.Required {
+					return fmt.Errorf("sanitize config for required module %s: %w", tm.Repo, sanitizeErr)
+				}
+				slog.Warn("sanitize config failed, skipping optional module",
+					"repo", tm.Repo, "error", sanitizeErr)
+				continue
+			}
+			bin.Config = sanitized
 		}
 		if err := modMgr.VerifyChecksum(bin, tm.Checksum); err != nil {
 			if tm.Required {

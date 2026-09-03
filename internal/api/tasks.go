@@ -37,12 +37,24 @@ func (h *TaskHandlers) handleListTasks(w http.ResponseWriter, r *http.Request) {
 
 	filter := &contracts.WorkerTaskFilter{}
 	if s := r.URL.Query().Get("status"); s != "" {
+		if err := ValidateQueryParam("status", s); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 		filter.Status = contracts.WorkerTaskStatus(s)
 	}
 	if t := r.URL.Query().Get("type"); t != "" {
+		if err := ValidateQueryParam("type", t); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 		filter.Type = t
 	}
 	if n := r.URL.Query().Get("node"); n != "" {
+		if err := ValidateNodeID(n); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 		filter.AssignedNode = n
 	}
 
@@ -66,8 +78,8 @@ func (h *TaskHandlers) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 	parts := strings.SplitN(path, "/", 2)
 
 	taskID := parts[0]
-	if taskID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "task ID is required"})
+	if err := ValidateTaskID(taskID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -117,8 +129,8 @@ func (h *TaskHandlers) handleReassignTask(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid JSON body: %v", err)})
 		return
 	}
-	if body.Node == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "node is required in JSON body"})
+	if err := ValidateNodeID(body.Node); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 

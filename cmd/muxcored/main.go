@@ -6,9 +6,12 @@ import (
 	"os"
 	"sync"
 
+	"github.com/Muxcore-Media/core/internal/api"
 	"github.com/Muxcore-Media/core/internal/bootstrap"
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
+	corehealth "github.com/Muxcore-Media/core/internal/health"
 	modlifecycle "github.com/Muxcore-Media/core/internal/module"
+	modmetrics "github.com/Muxcore-Media/core/internal/module"
 	"github.com/Muxcore-Media/core/internal/spool"
 	"github.com/Muxcore-Media/core/internal/startup"
 	"github.com/Muxcore-Media/core/internal/version"
@@ -134,7 +137,19 @@ func main() {
 
 	discoveryGrpc.SetRegistry(reg)
 
-	modMgr, lifecycleMgr := initModuleManager(cfg, reg, bus, auditLogger, grpcSrv, metricsProvider, *watchdogPath, authInterceptor, certAuth)
+	healthHistory := corehealth.NewHistory(60)
+	rpcMetrics := modmetrics.NewRPCMetrics()
+	meshClient.SetRPCMetrics(rpcMetrics)
+	if metricsProvider != nil {
+		metricsProvider.ModuleRPCMetrics = rpcMetrics.Snapshot
+	}
+
+	modMgr, lifecycleMgr := initModuleManager(cfg, reg, bus, auditLogger, grpcSrv, metricsProvider, *watchdogPath, authInterceptor, certAuth, healthHistory)
+	(&api.InfraHandlers{
+		Registry:   reg,
+		History:    healthHistory,
+		RPCMetrics: rpcMetrics,
+	}).RegisterRoutes(srv)
 	modMgr.PostRegisterHook = func(moduleID string, caps []string) {
 		_ = bootstrap.WireCallPolicy(reg, meshClient, storageGrpc, creds, maxMsgBytes)
 		_ = bootstrap.WirePublishPolicy(reg, bus, creds, maxMsgBytes)
@@ -167,7 +182,8 @@ func main() {
 
 	slog.Info("module registry ready", "count", reg.Count())
 
-	srv.SetHealthChecker(bootstrap.InitHealthProbes(ctx, bus, discoveryGrpc, store, cfg, reg, &cfgMu))
+	srv.SetHealthChecker(bootstrap.InitHealthProbes(ctx, bus, discoveryGrpc, store, cfg, reg, &cfgMu, lifecycleMgr))
+	srv.SetResourceChecker(bootstrap.ModuleResourceCollector(reg, modMgr))
 
 	fatalErr := startHTTPAndGRPC(cfg, srv, grpcSrv)
 

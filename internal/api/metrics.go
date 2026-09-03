@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
+
+	modmetrics "github.com/Muxcore-Media/core/internal/module"
 )
 
 // MetricsProvider supplies runtime metrics for the /metrics endpoint.
@@ -35,6 +38,7 @@ type MetricsProvider struct {
 	StatusHTTP2xx        func() int64
 	StatusHTTP4xx        func() int64
 	StatusHTTP5xx        func() int64
+	ModuleRPCMetrics     func() map[string]modmetrics.RPCStats
 }
 
 // MetricsHandler returns an http.HandlerFunc that emits Prometheus-format
@@ -237,8 +241,34 @@ func MetricsHandler(p *MetricsProvider) http.HandlerFunc {
 				float64(p.StatusHTTP5xx()))
 		}
 
+		if p.ModuleRPCMetrics != nil {
+			for _, moduleID := range sortedRPCModuleIDs(p.ModuleRPCMetrics) {
+				stats := p.ModuleRPCMetrics()[moduleID]
+				labels := fmt.Sprintf(`module="%s"`, moduleID)
+				counter("muxcore_module_rpc_calls_total",
+					"Total mesh RPC calls received by module.",
+					float64(stats.CallCount), labels)
+				counter("muxcore_module_rpc_errors_total",
+					"Total mesh RPC errors for module.",
+					float64(stats.ErrorCount), labels)
+				gauge("muxcore_module_rpc_avg_latency_ms",
+					"Average mesh RPC latency in milliseconds.",
+					stats.AvgLatencyMs, labels)
+			}
+		}
+
 		if _, err := fmt.Fprint(w, sb.String()); err != nil {
 			slog.Debug("metrics write failed", "error", err)
 		}
 	}
+}
+
+func sortedRPCModuleIDs(fn func() map[string]modmetrics.RPCStats) []string {
+	stats := fn()
+	ids := make([]string, 0, len(stats))
+	for id := range stats {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }

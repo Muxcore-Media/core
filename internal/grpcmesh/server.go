@@ -18,6 +18,7 @@ import (
 
 	"github.com/Muxcore-Media/core/internal/callerid"
 	"github.com/Muxcore-Media/core/internal/config"
+	"github.com/Muxcore-Media/core/internal/module"
 	"github.com/Muxcore-Media/core/internal/trace"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	meshv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/mesh/v1"
@@ -55,6 +56,8 @@ type Server struct {
 	audit contracts.AuditLogger
 	// nodeID identifies this node in audit entries.
 	nodeID string
+	// rpcMetrics collects per-module call latency and error rates.
+	rpcMetrics *module.RPCMetrics
 }
 
 // NewServer creates a new mesh server.
@@ -92,15 +95,34 @@ func (s *Server) SetNodeID(id string) {
 	s.nodeID = id
 }
 
+// SetRPCMetrics attaches a per-module RPC metrics collector.
+func (s *Server) SetRPCMetrics(m *module.RPCMetrics) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rpcMetrics = m
+}
+
 // RegisterWithGRPC registers this server with a gRPC server.
 func (s *Server) RegisterWithGRPC(srv *grpc.Server) {
 	meshv1.RegisterModuleMeshServer(srv, s)
 }
 
 // Call handles an incoming gRPC Call request.
-func (s *Server) Call(ctx context.Context, req *meshv1.CallRequest) (*meshv1.CallResponse, error) {
+func (s *Server) Call(ctx context.Context, req *meshv1.CallRequest) (resp *meshv1.CallResponse, handlerErr error) {
 	target := req.GetTargetModule()
 	method := req.GetMethod()
+
+	ctx, span := trace.ModuleCallSpan(ctx, target, method)
+	start := time.Now()
+	defer func() {
+		span.End(handlerErr)
+		s.mu.RLock()
+		metrics := s.rpcMetrics
+		s.mu.RUnlock()
+		if metrics != nil {
+			metrics.RecordCall(target, method, time.Since(start), handlerErr)
+		}
+	}()
 
 	s.mu.RLock()
 	handler, ok := s.handlers[target]
@@ -142,6 +164,7 @@ func (s *Server) Call(ctx context.Context, req *meshv1.CallRequest) (*meshv1.Cal
 
 	result, err := handler.HandleCall(ctx, method, req.GetPayload())
 	if err != nil {
+		handlerErr = err
 		slog.Error("module call handler error", "target", target, "method", method, "error", err)
 		return &meshv1.CallResponse{Error: "handler error"}, nil
 	}
@@ -252,16 +275,9 @@ func (c *Client) routeToNode(ctx context.Context, member contracts.NodeInfo, tar
 	defer func() { _ = conn.Close() }()
 
 	// Propagate caller identity and trace ID via gRPC metadata.
-	callCtx := ctx
-	var mdPairs []string
+	callCtx := trace.InjectOutgoing(ctx)
 	if callerID := callerid.Get(ctx); callerID != "" {
-		mdPairs = append(mdPairs, "x-caller-id", callerID)
-	}
-	if traceID := trace.FromContext(ctx); traceID != "" {
-		mdPairs = append(mdPairs, "x-trace-id", traceID)
-	}
-	if len(mdPairs) > 0 {
-		callCtx = metadata.NewOutgoingContext(ctx, metadata.Pairs(mdPairs...))
+		callCtx = metadata.AppendToOutgoingContext(callCtx, "x-caller-id", callerID)
 	}
 
 	client := meshv1.NewModuleMeshClient(conn)
@@ -304,6 +320,7 @@ type Client struct { //nolint:gocritic // type definition placement is intention
 	nodeID         string
 	callCount      atomic.Int64
 	circuitBreaker *CircuitBreakerSet
+	rpcMetrics     *module.RPCMetrics
 }
 
 // NewClient creates a mesh client backed by the given server.
@@ -412,12 +429,34 @@ func (c *Client) SetNodeID(id string) {
 	c.nodeID = id
 }
 
+// SetRPCMetrics attaches a per-module RPC metrics collector.
+func (c *Client) SetRPCMetrics(m *module.RPCMetrics) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.rpcMetrics = m
+	if c.server != nil {
+		c.server.SetRPCMetrics(m)
+	}
+}
+
 // Call dispatches a call to the target module.
 // Local modules are called in-process. Remote modules go over gRPC.
 // When no call policy is configured, all calls are denied (deny-by-default).
 // Deploy a module implementing "call.policy" to open access selectively.
-func (c *Client) Call(ctx context.Context, targetModule, method string, payload []byte) ([]byte, error) {
+func (c *Client) Call(ctx context.Context, targetModule, method string, payload []byte) (result []byte, err error) {
 	c.callCount.Add(1)
+
+	ctx, span := trace.ModuleCallSpan(ctx, targetModule, method)
+	start := time.Now()
+	defer func() {
+		span.End(err)
+		c.mu.RLock()
+		metrics := c.rpcMetrics
+		c.mu.RUnlock()
+		if metrics != nil {
+			metrics.RecordCall(targetModule, method, time.Since(start), err)
+		}
+	}()
 
 	c.mu.RLock()
 	callPolicy := c.callPolicy

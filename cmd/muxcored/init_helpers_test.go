@@ -17,6 +17,7 @@ import (
 	"github.com/Muxcore-Media/core/internal/config"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
+	corehealth "github.com/Muxcore-Media/core/internal/health"
 	modlifecycle "github.com/Muxcore-Media/core/internal/module"
 	modulemgr "github.com/Muxcore-Media/core/internal/module/mgr"
 	"github.com/Muxcore-Media/core/internal/registry"
@@ -235,7 +236,7 @@ func TestInitStorageAndHTTPAndAuditAndModuleMgr(t *testing.T) {
 
 	grpcSrv := grpc.NewServer()
 	auth := grpcmesh.NewAuthInterceptor()
-	modMgr, lifeMgr := initModuleManager(cfg, reg, bus, auditLogger, grpcSrv, metrics, "/bin/false", auth, nil)
+	modMgr, lifeMgr := initModuleManager(cfg, reg, bus, auditLogger, grpcSrv, metrics, "/bin/false", auth, nil, corehealth.NewHistory(10))
 	if modMgr == nil || lifeMgr == nil {
 		t.Fatal("initModuleManager")
 	}

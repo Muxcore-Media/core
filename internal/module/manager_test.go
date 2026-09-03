@@ -171,9 +171,17 @@ func TestCircularDependency(t *testing.T) {
 	mgr.Register(context.Background(), makeMod("B"), []string{"A"})
 
 	ctx := context.Background()
-	err := mgr.InitAll(ctx)
-	if err == nil {
-		t.Fatal("expected circular dependency error")
+	if err := mgr.InitAll(ctx); err != nil {
+		t.Fatalf("InitAll: %v", err)
+	}
+	for _, id := range []string{"A", "B"} {
+		entry, err := reg.Get(id)
+		if err != nil {
+			t.Fatalf("Get %s: %v", id, err)
+		}
+		if entry.State != contracts.ModuleStateDegraded {
+			t.Errorf("%s state = %q, want degraded", id, entry.State)
+		}
 	}
 }
 
@@ -469,9 +477,16 @@ func TestInitAll_DegradedOnUnresolvedDeps(t *testing.T) {
 	mgr.Register(context.Background(), orphan, nil)
 
 	ctx := context.Background()
-	err := mgr.InitAll(ctx)
-	if err == nil {
-		t.Fatal("expected error from InitAll with unresolvable deps")
+	if err := mgr.InitAll(ctx); err != nil {
+		t.Fatalf("InitAll: %v", err)
+	}
+
+	entry, err := reg.Get("base-mod")
+	if err != nil {
+		t.Fatalf("Get base-mod: %v", err)
+	}
+	if entry.State != contracts.ModuleStateDegraded {
+		t.Errorf("base-mod state = %q, want degraded", entry.State)
 	}
 }
 

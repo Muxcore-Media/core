@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	headerOrigin = "Origin"
-	headerVary   = "Vary"
+	headerOrigin        = "Origin"
+	headerVary          = "Vary"
+	headerXAPIVersion   = "X-API-Version"
+	headerXMuxCoreVer   = "X-MuxCore-Version"
 )
 
 // contextKey is used for storing values in request context.
@@ -371,4 +373,42 @@ func auditMiddleware(auditLogger contracts.AuditLogger, nodeID string, publicPat
 			}
 		})
 	}
+}
+
+// versionHeadersMiddleware sets API and core version headers on every response.
+func versionHeadersMiddleware(apiVersion, muxcoreVersion string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(headerXAPIVersion, apiVersion)
+			w.Header().Set(headerXMuxCoreVer, muxcoreVersion)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// structuredLoggingMiddleware logs every HTTP request with method, path, status,
+// duration, and trace ID using slog.
+func structuredLoggingMiddleware(next http.Handler, reqCounter *atomic.Int64, statusCnt *[6]*atomic.Int64) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if reqCounter != nil {
+			reqCounter.Add(1)
+		}
+		start := time.Now()
+		sr := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK, statusCnt: statusCnt}
+		next.ServeHTTP(sr, r)
+		duration := time.Since(start)
+		level := slog.LevelInfo
+		if sr.statusCode >= 500 {
+			level = slog.LevelError
+		} else if sr.statusCode >= 400 {
+			level = slog.LevelWarn
+		}
+		slog.Log(r.Context(), level, "http request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", sr.statusCode,
+			"duration", duration,
+			"trace_id", trace.FromContext(r.Context()),
+		)
+	})
 }

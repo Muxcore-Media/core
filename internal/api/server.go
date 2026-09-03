@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/config"
+	"github.com/Muxcore-Media/core/internal/health"
 	"github.com/Muxcore-Media/core/internal/trace"
 	"github.com/Muxcore-Media/core/internal/version"
 	"github.com/Muxcore-Media/core/pkg/contracts"
@@ -24,14 +25,18 @@ const (
 	headerXForwardedFor = "X-Forwarded-For"
 	headerXRealIP       = "X-Real-IP"
 	headerHXRequest     = "HX-Request"
+	// apiVersion is the HTTP API revision exposed via X-API-Version.
+	apiVersion = "v1"
 )
 
 type Server struct {
 	http             *http.Server
 	mux              *http.ServeMux
 	healthChecker    func() map[string]error
+	resourceChecker  func() map[string]health.ModuleResourceStats
 	AuthFunc         func(r *http.Request) (*contracts.Session, error)
 	rateLimiter      contracts.RateLimiterProvider
+	configMutLimiter *DefaultRateLimiter
 	authorizer       contracts.Authorizer
 	auditLogger      contracts.AuditLogger
 	nodeID           string
@@ -74,6 +79,7 @@ func NewServer(addr, certFile, keyFile string) *Server {
 		authFailures:       make(map[string]*authFailureRecord),
 		trustedProxies:     []net.IPNet{{IP: net.IPv4(127, 0, 0, 0), Mask: net.CIDRMask(8, 32)}, {IP: net.ParseIP("::1"), Mask: net.CIDRMask(128, 128)}},
 		rateLimiter:        NewDefaultRateLimiter(100, 200),
+		configMutLimiter:   NewDefaultRateLimiter(defaultConfigMutationRate, defaultConfigMutationBurst),
 	}
 	// Start auth failure cleanup ticker once, not per rebuildChain call.
 	go s.authFailureCleanupLoop()
@@ -241,6 +247,11 @@ func (s *Server) SetHealthChecker(fn func() map[string]error) {
 	s.healthChecker = fn
 }
 
+// SetResourceChecker sets a function that returns per-module resource usage.
+func (s *Server) SetResourceChecker(fn func() map[string]health.ModuleResourceStats) {
+	s.resourceChecker = fn
+}
+
 // SetAuthFunc sets the authentication function for the middleware chain.
 func (s *Server) SetAuthFunc(fn func(r *http.Request) (*contracts.Session, error)) {
 	s.AuthFunc = fn
@@ -295,7 +306,8 @@ func (s *Server) AddPublicPath(path string) {
 }
 
 // rebuildChain constructs the middleware chain.
-// Order: MaxBytesReader (outermost) → security headers → recovery → rate limit → auth → authz → audit → logging → trace.
+// Order: MaxBytesReader (outermost) → version headers → security headers → recovery →
+// config mutation rate limit → rate limit → auth → authz → audit → logging → trace.
 // In Go HTTP middleware, the last wrapper applied executes first, so the build
 // order is the reverse of the execution order.
 func (s *Server) rebuildChain() {
@@ -303,17 +315,16 @@ func (s *Server) rebuildChain() {
 
 	var h http.Handler = s.mux
 	trusted := replicateSlice(s.trustedProxies)
+	statusCnt := &[6]*atomic.Int64{
+		1: &s.statusHTTP2xx,
+		2: &s.statusHTTP3xx,
+		3: &s.statusHTTP4xx,
+		4: &s.statusHTTP5xx,
+	}
 	// Build from innermost to outermost:
-	// trace (innermost, executes last before handler)
 	h = trace.HTTPMiddleware(h)
-	h = withLogging(h, &s.requestCount)
+	h = structuredLoggingMiddleware(h, &s.requestCount, statusCnt)
 	if s.auditLogger != nil {
-		statusCnt := &[6]*atomic.Int64{
-			1: &s.statusHTTP2xx,
-			2: &s.statusHTTP3xx,
-			3: &s.statusHTTP4xx,
-			4: &s.statusHTTP5xx,
-		}
 		h = auditMiddleware(s.auditLogger, s.nodeID, s.publicPaths, trusted, statusCnt)(h)
 	}
 	if s.authorizer != nil {
@@ -325,8 +336,12 @@ func (s *Server) rebuildChain() {
 	if s.rateLimiter != nil {
 		h = rateLimitMiddleware(s.rateLimiter, s.publicPaths, trusted)(h)
 	}
+	if s.configMutLimiter != nil {
+		h = configMutationRateLimitMiddleware(s.configMutLimiter, s.publicPaths, trusted)(h)
+	}
 	h = recoveryMiddleware(h)
 	h = securityHeadersMiddleware(h, s.cspHeader, tlsActive, s.trustedOrigins)
+	h = versionHeadersMiddleware(apiVersion, version.String())(h)
 	h = maxBodyMiddleware(h)
 	s.http.Handler = h
 }
@@ -401,11 +416,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		writeJSON(w, httpStatus, map[string]any{
-			"status":  status,
-			"time":    time.Now().UTC().Format(time.RFC3339),
-			"modules": modules,
-		})
+		writeJSON(w, httpStatus, s.healthPayload(status, modules))
 		return
 	}
 
@@ -441,23 +452,26 @@ func devTLSSkipCheck() bool {
 	return config.InsecureTLSSkipEnabled()
 }
 
+func (s *Server) healthPayload(status string, modules map[string]string) map[string]any {
+	payload := map[string]any{
+		"status":  status,
+		"time":    time.Now().UTC().Format(time.RFC3339),
+		"modules": modules,
+	}
+	if s.resourceChecker != nil {
+		if resources := s.resourceChecker(); len(resources) > 0 {
+			payload["resources"] = resources
+		}
+	}
+	return payload
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		slog.Error("writeJSON: encode failed", "error", err)
 	}
-}
-
-func withLogging(next http.Handler, reqCounter *atomic.Int64) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if reqCounter != nil {
-			reqCounter.Add(1)
-		}
-		start := time.Now()
-		next.ServeHTTP(w, r)
-		slog.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start), "trace_id", trace.FromContext(r.Context()))
-	})
 }
 
 func rateLimitMiddleware(limiter contracts.RateLimiterProvider, publicPaths map[string]bool, trustedProxies []net.IPNet) func(http.Handler) http.Handler {

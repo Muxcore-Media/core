@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/Muxcore-Media/contracts-reconciler/reconciler"
+	"github.com/Muxcore-Media/core/internal/api"
 	modulemgr "github.com/Muxcore-Media/core/internal/module"
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/sandbox"
@@ -43,10 +44,6 @@ const (
 	// RestartAlways restarts the module on any exit (including clean exit 0).
 	RestartAlways RestartPolicy = "always"
 )
-
-// maxRestartAttempts is the maximum number of consecutive restarts before
-// the manager gives up and logs a permanent failure.
-const maxRestartAttempts = 5
 
 // ScanPolicy controls which dangerous patterns are rejected versus warned
 // during pre-build source scanning. All rejection flags default to true
@@ -107,6 +104,7 @@ type ModuleBinary struct {
 	Path          string
 	Repo          string
 	RestartPolicy RestartPolicy
+	RestartConfig RestartConfig
 	InstanceID    string
 	// Config is instance-specific configuration passed as environment
 	// variables (prefixed with MUXCORE_CFG_) to the module binary.
@@ -264,6 +262,9 @@ func (m *Manager) SetTag(tag *contracts.TagDefinition) {
 // Returns an error if the module is already running locally, not in the tag,
 // or if resolution/spawning fails.
 func (m *Manager) ResurrectOrphan(ctx context.Context, moduleID string) error {
+	if err := api.ValidateModuleID(moduleID); err != nil {
+		return fmt.Errorf("resurrect orphan: %w", err)
+	}
 	tm, ok := m.tagModules[moduleID]
 	if !ok {
 		return fmt.Errorf("module %q not found in tag cache", moduleID)
@@ -370,6 +371,12 @@ func (m *Manager) resolveWithInstance(repoURL, version, instanceID string, confi
 		return nil, fmt.Errorf("invalid module version %q — must match semver pattern %s", version, versionPattern.String())
 	}
 
+	sanitizedConfig, err := api.SanitizeModuleConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("module config: %w", err)
+	}
+	config = sanitizedConfig
+
 	// Validate repo URL against allowed host list (supply chain protection).
 	parsed, err := url.Parse(repoURL)
 	if err != nil {
@@ -396,7 +403,8 @@ func (m *Manager) resolveWithInstance(repoURL, version, instanceID string, confi
 	cachedPath := filepath.Join(m.cacheDir, moduleID, version, "muxcore-module")
 	if _, err2 := os.Stat(cachedPath); err2 == nil {
 		slog.Info("module found in cache", "id", moduleID, "version", version)
-		return &ModuleBinary{ID: moduleID, Version: version, Path: cachedPath, Repo: repoURL, InstanceID: instanceID}, nil
+		policy, restartCfg := ParseRestartConfig(RestartNever, config)
+		return &ModuleBinary{ID: moduleID, Version: version, Path: cachedPath, Repo: repoURL, InstanceID: instanceID, Config: config, RestartPolicy: policy, RestartConfig: restartCfg}, nil
 	}
 
 	slog.Info("module not in cache, building from source", "id", moduleID, "repo", repoURL)
@@ -466,13 +474,24 @@ func (m *Manager) resolveWithInstance(repoURL, version, instanceID string, confi
 	}
 
 	slog.Info("module built and cached", "id", moduleID, "version", version)
-	return &ModuleBinary{ID: moduleID, Version: version, Path: cacheBinPath, Repo: repoURL, InstanceID: instanceID}, nil
+	policy, restartCfg := ParseRestartConfig(RestartNever, config)
+	return &ModuleBinary{ID: moduleID, Version: version, Path: cacheBinPath, Repo: repoURL, InstanceID: instanceID, Config: config, RestartPolicy: policy, RestartConfig: restartCfg}, nil
 }
 
 // Spawn starts a module binary as a child process.
 func (m *Manager) Spawn(ctx context.Context, bin *ModuleBinary) error {
 	if bin == nil {
 		return fmt.Errorf("module binary is nil")
+	}
+	if err := api.ValidateModuleID(bin.ID); err != nil {
+		return fmt.Errorf("spawn: %w", err)
+	}
+	if len(bin.Config) > 0 {
+		sanitized, err := api.SanitizeModuleConfig(bin.Config)
+		if err != nil {
+			return fmt.Errorf("spawn %s config: %w", bin.ID, err)
+		}
+		bin.Config = sanitized
 	}
 	m.spawnCount.Add(1)
 	m.mu.Lock()
@@ -717,15 +736,7 @@ func (m *Manager) watchProcess(ctx context.Context, cmd *exec.Cmd, bin *ModuleBi
 		}
 
 		cleanExit := err == nil
-		shouldRestart := false
-		switch bin.RestartPolicy {
-		case RestartAlways:
-			shouldRestart = attempt < maxRestartAttempts
-		case RestartOnFailure:
-			shouldRestart = !cleanExit && attempt < maxRestartAttempts
-		default:
-			shouldRestart = false
-		}
+		shouldRestart := bin.RestartConfig.ShouldRestart(bin.RestartPolicy, cleanExit, attempt)
 
 		if !cleanExit {
 			slog.Error("module exited unexpectedly",
@@ -738,10 +749,7 @@ func (m *Manager) watchProcess(ctx context.Context, cmd *exec.Cmd, bin *ModuleBi
 			return
 		}
 
-		backoff := time.Duration(1<<attempt) * time.Second
-		if backoff > 30*time.Second {
-			backoff = 30 * time.Second
-		}
+		backoff := bin.RestartConfig.BackoffDuration(attempt)
 		m.restartCount.Add(1)
 		slog.Info("restarting module", "id", bin.ID, "backoff", backoff, "attempt", attempt+1)
 
@@ -783,6 +791,9 @@ func (m *Manager) watchProcess(ctx context.Context, cmd *exec.Cmd, bin *ModuleBi
 // were spawned directly (not via watchdog). Returns an error if the module
 // is not found or the spawn fails.
 func (m *Manager) RestartModule(ctx context.Context, moduleID string) error {
+	if err := api.ValidateModuleID(moduleID); err != nil {
+		return fmt.Errorf("restart module: %w", err)
+	}
 	m.mu.Lock()
 	cmd, hasProcess := m.processes[moduleID]
 	bin, hasBinary := m.binaries[moduleID]
@@ -1050,6 +1061,9 @@ func (s *registrationServer) Register(ctx context.Context, req *modulev1.Registe
 	if info.ID == "" {
 		return &modulev1.RegisterResponse{MeshAddr: s.mgr.meshAddr, Accepted: false, Error: "module ID is required"}, nil
 	}
+	if err := api.ValidateModuleID(info.ID); err != nil {
+		return &modulev1.RegisterResponse{MeshAddr: s.mgr.meshAddr, Accepted: false, Error: err.Error()}, nil
+	}
 	if info.Name == "" {
 		info.Name = info.ID
 		slog.Warn("module registered without a name, using ID as name", "module_id", info.ID)
@@ -1067,7 +1081,7 @@ func (s *registrationServer) Register(ctx context.Context, req *modulev1.Registe
 	deps := info.DependsOn
 	if err := s.mgr.modMgr.Register(ctx, proxy, deps); err != nil {
 		slog.Error("module registration: registry", "id", info.ID, "error", err)
-		return &modulev1.RegisterResponse{MeshAddr: s.mgr.meshAddr, Accepted: false, Error: err.Error()}, nil
+		return &modulev1.RegisterResponse{MeshAddr: s.mgr.meshAddr, Accepted: false, Error: fmt.Sprintf("register module: %v", err)}, nil
 	}
 
 	slog.Info("module registered via gRPC and added to registry",
@@ -1106,6 +1120,12 @@ func (s *registrationServer) BootstrapRegister(ctx context.Context, req *modulev
 	}
 
 	// Verify the claimed module ID matches the token's target.
+	if err := api.ValidateModuleID(req.GetModuleId()); err != nil {
+		return &modulev1.BootstrapRegisterResponse{
+			Accepted: false,
+			Error:    err.Error(),
+		}, nil
+	}
 	if claimedID != req.GetModuleId() {
 		return &modulev1.BootstrapRegisterResponse{
 			Accepted: false,
@@ -1148,6 +1168,10 @@ func (s *registrationServer) BootstrapRegister(ctx context.Context, req *modulev
 }
 
 func (s *registrationServer) Unregister(ctx context.Context, req *modulev1.UnregisterRequest) (*modulev1.UnregisterResponse, error) {
+	if err := api.ValidateModuleID(req.GetModuleId()); err != nil {
+		slog.Warn("module unregistration rejected", "error", err)
+		return &modulev1.UnregisterResponse{Acknowledged: false}, nil
+	}
 	if err := s.mgr.modMgr.Unregister(ctx, req.ModuleId); err != nil {
 		slog.Warn("module unregistration failed", "id", req.ModuleId, "error", err)
 		return &modulev1.UnregisterResponse{Acknowledged: false}, nil
