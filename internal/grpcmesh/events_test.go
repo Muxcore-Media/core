@@ -5,9 +5,11 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Muxcore-Media/core/internal/callerid"
 	"github.com/Muxcore-Media/core/internal/events"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
@@ -18,13 +20,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// testAuthCtx returns a context with a test caller ID set in gRPC metadata
-// so that the auth interceptor permits the call during testing.
-func testAuthCtx() context.Context {
-	return metadata.NewOutgoingContext(context.Background(),
-		metadata.Pairs("x-caller-id", "test-runner"))
-}
-
 // allowAllPublishPolicy permits all event publication for testing.
 type allowAllPublishPolicy struct{}
 
@@ -32,16 +27,53 @@ func (allowAllPublishPolicy) CanPublish(_ context.Context, _, _ string) (bool, e
 	return true, nil
 }
 
+// allowCallerPublishPolicy permits only the configured caller module ID.
+type allowCallerPublishPolicy struct {
+	allowed string
+}
+
+func (p allowCallerPublishPolicy) CanPublish(_ context.Context, callerID, _ string) (bool, error) {
+	return callerID == p.allowed, nil
+}
+
+type eventServerTestConfig struct {
+	identityID    string
+	publishPolicy contracts.PublishPolicyProvider
+	withAuth      bool
+}
+
 func startEventServer(t *testing.T) (eventsv1.EventServiceClient, *events.MemoryBus) {
 	t.Helper()
-	return startEventServerWithReplayer(t, nil)
+	return startEventServerWithConfig(t, eventServerTestConfig{
+		identityID:    "test-runner",
+		publishPolicy: allowAllPublishPolicy{},
+		withAuth:      true,
+	})
 }
 
 func startEventServerWithReplayer(t *testing.T, replayer WALReplayer) (eventsv1.EventServiceClient, *events.MemoryBus) {
 	t.Helper()
+	return startEventServerWithConfigAndReplayer(t, eventServerTestConfig{
+		identityID:    "test-runner",
+		publishPolicy: allowAllPublishPolicy{},
+		withAuth:      true,
+	}, replayer)
+}
+
+func startEventServerWithConfig(t *testing.T, cfg eventServerTestConfig) (eventsv1.EventServiceClient, *events.MemoryBus) {
+	t.Helper()
+	return startEventServerWithConfigAndReplayer(t, cfg, nil)
+}
+
+func startEventServerWithConfigAndReplayer(t *testing.T, cfg eventServerTestConfig, replayer WALReplayer) (eventsv1.EventServiceClient, *events.MemoryBus) {
+	t.Helper()
 
 	bus := events.NewMemoryBus()
-	bus.SetPublishPolicy(allowAllPublishPolicy{})
+	if cfg.publishPolicy != nil {
+		bus.SetPublishPolicy(cfg.publishPolicy)
+	} else {
+		bus.SetPublishPolicy(allowAllPublishPolicy{})
+	}
 
 	srv := NewEventServer(bus)
 	if replayer != nil {
@@ -52,7 +84,25 @@ func startEventServerWithReplayer(t *testing.T, replayer WALReplayer) (eventsv1.
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	grpcSrv := grpc.NewServer()
+
+	var grpcOpts []grpc.ServerOption
+	if cfg.withAuth {
+		auth := NewAuthInterceptor()
+		auth.SetAuthorizer(&stubAuthorizer{allow: true})
+		if cfg.identityID != "" {
+			auth.SetIdentityProvider(&stubIdentityProvider{
+				identity: &contracts.Identity{ID: cfg.identityID, Roles: []string{"module"}},
+			})
+		} else {
+			auth.SetIdentityProvider(&stubIdentityProvider{identity: nil})
+		}
+		grpcOpts = append(grpcOpts,
+			grpc.UnaryInterceptor(auth.UnaryInterceptor()),
+			grpc.StreamInterceptor(auth.StreamInterceptor()),
+		)
+	}
+
+	grpcSrv := grpc.NewServer(grpcOpts...)
 	srv.RegisterWithGRPC(grpcSrv)
 	go grpcSrv.Serve(lis)
 	t.Cleanup(grpcSrv.GracefulStop)
@@ -65,6 +115,18 @@ func startEventServerWithReplayer(t *testing.T, replayer WALReplayer) (eventsv1.
 	t.Cleanup(func() { conn.Close() })
 
 	return eventsv1.NewEventServiceClient(conn), bus
+}
+
+// testAuthCtx returns a baseline context for gRPC calls in tests where the
+// auth interceptor supplies verified caller identity.
+func testAuthCtx() context.Context {
+	return context.Background()
+}
+
+// spoofedCallerCtx returns a context that carries a client-spoofable x-caller-id.
+func spoofedCallerCtx(callerID string) context.Context {
+	return metadata.NewOutgoingContext(context.Background(),
+		metadata.Pairs("x-caller-id", callerID))
 }
 
 func TestEventServer_Publish_Relay(t *testing.T) {
@@ -374,7 +436,15 @@ func TestEventServer_Replay_RealWAL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	grpcSrv := grpc.NewServer()
+	auth := NewAuthInterceptor()
+	auth.SetAuthorizer(&stubAuthorizer{allow: true})
+	auth.SetIdentityProvider(&stubIdentityProvider{
+		identity: &contracts.Identity{ID: "test-runner", Roles: []string{"module"}},
+	})
+	grpcSrv := grpc.NewServer(
+		grpc.UnaryInterceptor(auth.UnaryInterceptor()),
+		grpc.StreamInterceptor(auth.StreamInterceptor()),
+	)
 	srv.RegisterWithGRPC(grpcSrv)
 	go grpcSrv.Serve(lis)
 	t.Cleanup(grpcSrv.GracefulStop)
@@ -410,5 +480,157 @@ func TestEventServer_Replay_RealWAL(t *testing.T) {
 
 	if count != 3 {
 		t.Errorf("expected 3 replayed events, got %d", count)
+	}
+}
+
+func TestEventServer_CheckVerifiedAuth_RejectsPublicAndEmpty(t *testing.T) {
+	srv := NewEventServer(nil)
+
+	tests := []struct {
+		name   string
+		caller string
+		setID  bool
+		want   codes.Code
+	}{
+		{"empty caller", "", false, codes.PermissionDenied},
+		{"public caller", "_public", true, codes.PermissionDenied},
+		{"verified caller", "mod-a", true, codes.OK},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			if tc.setID {
+				ctx = callerid.Set(ctx, tc.caller)
+			}
+			err := srv.checkVerifiedAuth(ctx)
+			if tc.want == codes.OK {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if status.Code(err) != tc.want {
+				t.Errorf("expected %s, got %s", tc.want, status.Code(err))
+			}
+		})
+	}
+}
+
+func TestAuthInterceptor_EventPublish_RequiresVerifiedIdentity(t *testing.T) {
+	a := NewAuthInterceptor()
+	a.SetAuthorizer(&stubAuthorizer{allow: true})
+	a.SetIdentityProvider(&stubIdentityProvider{identity: nil})
+
+	interceptor := a.UnaryInterceptor()
+	ctx := metadata.NewOutgoingContext(context.Background(),
+		metadata.Pairs("x-caller-id", "trusted-module"))
+
+	_, err := interceptor(ctx, nil,
+		fakeUnaryInfo("/muxcore.events.v1.EventService/Publish"),
+		fakeHandler(nil, nil))
+	if err == nil {
+		t.Fatal("expected Publish to require verified identity")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %s", st.Code())
+	}
+}
+
+func TestEventServer_Publish_SpoofedCallerID_DeniedByPolicy(t *testing.T) {
+	client, _ := startEventServerWithConfig(t, eventServerTestConfig{
+		identityID:    "attacker-module",
+		publishPolicy: allowCallerPublishPolicy{allowed: "trusted-module"},
+		withAuth:      true,
+	})
+
+	_, err := client.Publish(spoofedCallerCtx("trusted-module"), &eventsv1.PublishRequest{
+		Event: &eventsv1.Event{
+			Type:   "sensitive.event",
+			Source: "trusted-module",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected publish denied when verified identity does not match policy")
+	}
+	if !strings.Contains(err.Error(), "publish denied") {
+		t.Errorf("expected publish denied error, got: %v", err)
+	}
+}
+
+func TestEventServer_Publish_SpoofedEventSource_DeniedByPolicy(t *testing.T) {
+	client, _ := startEventServerWithConfig(t, eventServerTestConfig{
+		identityID:    "attacker-module",
+		publishPolicy: allowCallerPublishPolicy{allowed: "trusted-module"},
+		withAuth:      true,
+	})
+
+	_, err := client.Publish(testAuthCtx(), &eventsv1.PublishRequest{
+		Event: &eventsv1.Event{
+			Type:   "sensitive.event",
+			Source: "trusted-module",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected publish denied when event.Source does not override verified identity")
+	}
+	if !strings.Contains(err.Error(), "publish denied") {
+		t.Errorf("expected publish denied error, got: %v", err)
+	}
+}
+
+func TestEventServer_Publish_UnauthenticatedDenied(t *testing.T) {
+	client, _ := startEventServerWithConfig(t, eventServerTestConfig{
+		identityID:    "",
+		publishPolicy: allowAllPublishPolicy{},
+		withAuth:      true,
+	})
+
+	_, err := client.Publish(testAuthCtx(), &eventsv1.PublishRequest{
+		Event: &eventsv1.Event{Type: "test.event", Source: "any"},
+	})
+	if err == nil {
+		t.Fatal("expected unauthenticated Publish to be denied")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.Unauthenticated {
+		t.Errorf("expected Unauthenticated, got %s", st.Code())
+	}
+}
+
+func TestEventServer_Publish_VerifiedIdentityAllowed(t *testing.T) {
+	client, bus := startEventServerWithConfig(t, eventServerTestConfig{
+		identityID:    "trusted-module",
+		publishPolicy: allowCallerPublishPolicy{allowed: "trusted-module"},
+		withAuth:      true,
+	})
+
+	received := make(chan contracts.Event, 1)
+	bus.Subscribe(context.Background(), "allowed.event", func(ctx context.Context, e contracts.Event) error {
+		received <- e
+		return nil
+	})
+
+	_, err := client.Publish(testAuthCtx(), &eventsv1.PublishRequest{
+		Event: &eventsv1.Event{
+			Type:   "allowed.event",
+			Source: "trusted-module",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected allowed publish, got: %v", err)
+	}
+
+	select {
+	case ev := <-received:
+		if ev.Type != "allowed.event" {
+			t.Errorf("unexpected event type %q", ev.Type)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for allowed event")
 	}
 }

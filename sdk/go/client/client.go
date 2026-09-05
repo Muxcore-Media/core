@@ -224,8 +224,9 @@ func DialWithAddrs(addrs []string, opts ...Option) (*Client, error) {
 	)
 	do.grpcOpts = append([]grpc.DialOption{msgSizeOpt}, do.grpcOpts...)
 
-	// Identify this process as a mesh module when MUXCORE_MODULE_ID is set so
-	// EventService/Publish (and other gated RPCs) can attribute the caller.
+	// When MUXCORE_MODULE_ID is set, attach x-caller-id as a hint for the
+	// identity provider. Publish authorization uses verified mesh/TLS identity
+	// from the auth interceptor, not this metadata alone.
 	if mid := strings.TrimSpace(os.Getenv("MUXCORE_MODULE_ID")); mid != "" {
 		do.grpcOpts = append(do.grpcOpts, grpc.WithUnaryInterceptor(func(
 			ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption,

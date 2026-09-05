@@ -56,7 +56,8 @@ var moduleRegistrationMethods = map[string]bool{
 	"/muxcore.events.v1.EventService/Subscribe":               true,
 	"/muxcore.events.v1.EventService/Unsubscribe":             true,
 	"/muxcore.events.v1.EventService/GetStats":                true,
-	"/muxcore.events.v1.EventService/Publish":                 true, // publish-policy still deny-by-default
+	// Publish requires verified identity via the auth interceptor; publish-policy
+	// enforces caller authorization at the event bus layer.
 	"/muxcore.health.v1.HealthService/Check":                  true,
 }
 
