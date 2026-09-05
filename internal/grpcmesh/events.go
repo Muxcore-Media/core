@@ -10,7 +10,6 @@ import (
 	eventsv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/events/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -42,19 +41,25 @@ func (s *EventServer) SetWALReplayer(r WALReplayer) {
 	s.walReplayer = r
 }
 
+// checkAuth validates caller identity for read-oriented EventService RPCs
+// (Subscribe). The auth interceptor stamps "_public" for allowlisted methods;
+// that is sufficient for passive subscriptions.
 func (s *EventServer) checkAuth(ctx context.Context) error {
-	id := callerid.Get(ctx)
-	if id != "" {
+	if callerid.Get(ctx) != "" {
 		return nil
 	}
-	// Fallback: check gRPC metadata directly for caller identity.
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if ids := md.Get("x-caller-id"); len(ids) > 0 && ids[0] != "" {
-			return nil
-		}
+	return status.Error(codes.PermissionDenied, "events: authentication required")
+}
+
+// checkVerifiedAuth requires a verified caller identity from the auth
+// interceptor. Client-supplied x-caller-id metadata and event.Source are
+// never trusted for authorization decisions.
+func (s *EventServer) checkVerifiedAuth(ctx context.Context) error {
+	callerID := callerid.Get(ctx)
+	if callerID == "" || callerID == "_public" {
+		return status.Error(codes.PermissionDenied, "events: authentication required")
 	}
-	return status.Error(codes.PermissionDenied,
-		"events: authentication required")
+	return nil
 }
 
 // RegisterWithGRPC registers this server with a gRPC server.
@@ -66,26 +71,12 @@ const maxEventPayloadSize = 10 << 20 // 10 MB
 
 // Publish receives an event from a remote node and publishes it locally.
 func (s *EventServer) Publish(ctx context.Context, req *eventsv1.PublishRequest) (*eventsv1.PublishResponse, error) {
-	if err := s.checkAuth(ctx); err != nil {
+	if err := s.checkVerifiedAuth(ctx); err != nil {
 		return nil, err
-	}
-	// Allowlist path stamps callerid "_public"; prefer module identity from
-	// metadata / event source so publish-policy can authorize the real caller.
-	if id := callerid.Get(ctx); id == "" || id == "_public" {
-		if md, ok := metadata.FromIncomingContext(ctx); ok {
-			if ids := md.Get("x-caller-id"); len(ids) > 0 && ids[0] != "" {
-				ctx = callerid.Set(ctx, ids[0])
-			}
-		}
 	}
 	pb := req.GetEvent()
 	if pb == nil {
 		return nil, status.Error(codes.InvalidArgument, "event is required")
-	}
-	if id := callerid.Get(ctx); id == "" || id == "_public" {
-		if pb.GetSource() != "" {
-			ctx = callerid.Set(ctx, pb.GetSource())
-		}
 	}
 	if len(pb.GetPayload()) > maxEventPayloadSize {
 		return nil, status.Errorf(codes.InvalidArgument, "event payload exceeds maximum size %d bytes", maxEventPayloadSize)
@@ -201,6 +192,9 @@ func (s *EventServer) Subscribe(req *eventsv1.SubscribeRequest, stream eventsv1.
 
 // Request sends a request event and waits for a single reply.
 func (s *EventServer) Request(ctx context.Context, req *eventsv1.RequestEvent) (*eventsv1.Event, error) {
+	if err := s.checkVerifiedAuth(ctx); err != nil {
+		return nil, err
+	}
 	pb := req.GetEvent()
 
 	md := pb.GetMetadata()
@@ -242,7 +236,7 @@ func (s *EventServer) Request(ctx context.Context, req *eventsv1.RequestEvent) (
 // Replay streams historical events from the WAL starting at since_seq.
 // Returns Unimplemented if no WAL replayer is configured on this node.
 func (s *EventServer) Replay(req *eventsv1.ReplayRequest, stream eventsv1.EventService_ReplayServer) error {
-	if err := s.checkAuth(stream.Context()); err != nil {
+	if err := s.checkVerifiedAuth(stream.Context()); err != nil {
 		return err
 	}
 	if s.walReplayer == nil {
