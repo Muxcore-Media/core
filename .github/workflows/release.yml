@@ -16,9 +16,10 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
         with:
-          fetch-depth: 0
+          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
+          depth: "0"
 
       - name: Set up Go
         uses: actions/setup-go@v7
