@@ -58,7 +58,7 @@ var moduleRegistrationMethods = map[string]bool{
 	"/muxcore.events.v1.EventService/GetStats":                true,
 	// Publish requires verified identity via the auth interceptor; publish-policy
 	// enforces caller authorization at the event bus layer.
-	"/muxcore.health.v1.HealthService/Check":                  true,
+	"/muxcore.health.v1.HealthService/Check": true,
 }
 
 // AuthInterceptor provides gRPC unary and stream interceptors that enforce

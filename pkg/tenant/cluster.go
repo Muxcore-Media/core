@@ -19,7 +19,7 @@ import (
 )
 
 // Router maps tenant IDs to remote muxcored gRPC addresses.
-type Router struct {
+type Router struct { //nolint:govet // router config groups tenant dial settings
 	// Map is tenant_id → one or more "host:port" (comma-separated allowed in values).
 	Map map[string][]string
 	// Strict fails ResolveDial when a mapped remote cannot be dialed (TCP).

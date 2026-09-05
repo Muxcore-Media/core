@@ -21,6 +21,7 @@
 package rootfs
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -196,22 +197,26 @@ func installBusybox(dest string) error {
 
 func downloadFile(url, dest string, mode os.FileMode) error {
 	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
 	if err != nil {
 		return fmt.Errorf("rootfs busybox download: %w", err)
 	}
-	defer resp.Body.Close()
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("rootfs busybox download: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("rootfs busybox download: HTTP %d", resp.StatusCode)
 	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
+	if mkErr := os.MkdirAll(filepath.Dir(dest), 0o755); mkErr != nil {
+		return mkErr
 	}
 	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	if _, err := io.Copy(out, resp.Body); err != nil {
 		return err
 	}
@@ -226,12 +231,12 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	if _, err := io.Copy(out, in); err != nil {
 		return err
 	}

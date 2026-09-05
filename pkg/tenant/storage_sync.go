@@ -19,7 +19,7 @@ import (
 )
 
 // StorageSyncPolicy describes how a tenant partition is replicated.
-type StorageSyncPolicy struct {
+type StorageSyncPolicy struct { //nolint:govet // JSON-tagged sync policy fields
 	// Targets are destination URIs: file:///path or s3://bucket/prefix
 	Targets []string `json:"targets"`
 	// Mode is mirror (push all files) or pull (reserved; mirror only today).
@@ -70,7 +70,7 @@ func PolicyFor(m map[string]StorageSyncPolicy, tenantID string) StorageSyncPolic
 }
 
 // SyncReport summarizes one mirror run.
-type SyncReport struct {
+type SyncReport struct { //nolint:govet // JSON report fields follow operator-facing schema
 	TenantID   string    `json:"tenant_id"`
 	Source     string    `json:"source"`
 	Copied     int       `json:"copied"`
@@ -155,23 +155,23 @@ func MirrorTenant(ctx context.Context, tenantID, sourceDir string, policy Storag
 }
 
 func mirrorFile(src, dst string) error {
-	in, err := os.Open(src)
+	in, err := os.Open(src) //nolint:gosec // mirror copies operator-configured tenant partition files
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	st, err := in.Stat()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return err
+	if mkErr := os.MkdirAll(filepath.Dir(dst), 0o700); mkErr != nil {
+		return mkErr
 	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, st.Mode().Perm())
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, st.Mode().Perm()) //nolint:gosec // mirror target is derived from sync policy
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	if _, err := io.Copy(out, in); err != nil {
 		return err
 	}

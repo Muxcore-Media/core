@@ -110,7 +110,7 @@ func VerifyArtifactSignature(artifactPath, inlineSignature string) error {
 		return nil
 	}
 
-	data, err := os.ReadFile(artifactPath)
+	data, err := os.ReadFile(artifactPath) //nolint:gosec // artifact path comes from validated spool layout
 	if err != nil {
 		return fmt.Errorf("read artifact for signature: %w", err)
 	}
@@ -145,7 +145,7 @@ const (
 	sigMinisign
 )
 
-type sigMaterial struct {
+type sigMaterial struct { //nolint:govet // groups parsed signature bytes for verification
 	rawSig  []byte
 	minisig *minisignDetached
 }
@@ -167,7 +167,7 @@ func resolveSignatureMaterial(artifactPath, inline string) (sigKind, sigMaterial
 	}
 	for _, ext := range []string{".sig", ".minisig"} {
 		path := artifactPath + ext
-		raw, readErr := os.ReadFile(path)
+		raw, readErr := os.ReadFile(path) //nolint:gosec // signature sidecar path is derived from artifact path
 		if readErr != nil {
 			if os.IsNotExist(readErr) {
 				continue
@@ -273,7 +273,7 @@ func LoadTrustedPublicKeys() ([]ed25519.PublicKey, error) {
 
 // LoadPublicKey reads an ed25519 public key from path.
 func LoadPublicKey(path string) (ed25519.PublicKey, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // trusted key path comes from operator env configuration //nolint:gosec // trusted key path comes from operator env configuration
 	if err != nil {
 		return nil, err
 	}
@@ -347,7 +347,7 @@ func parseMinisignPublicKey(text string) (ed25519.PublicKey, error) {
 
 // minisignDetached is a parsed minisign signature file.
 // See https://jedisct1.github.io/minisign/
-type minisignDetached struct {
+type minisignDetached struct { //nolint:govet // mirrors on-disk minisign signature layout
 	algo            [2]byte // "Ed" legacy or "ED" hashed
 	keyID           [8]byte
 	sig             [ed25519.SignatureSize]byte
@@ -437,8 +437,8 @@ func verifyMinisign(pub ed25519.PublicKey, data []byte, ms *minisignDetached) er
 		return fmt.Errorf("minisig: nil signature")
 	}
 	var message []byte
-	switch {
-	case ms.algo == [2]byte{'E', 'D'}:
+	switch ms.algo {
+	case [2]byte{'E', 'D'}:
 		// Hashed mode: Ed25519(Blake2b-512(data))
 		h, err := blake2b.New512(nil)
 		if err != nil {
@@ -446,7 +446,7 @@ func verifyMinisign(pub ed25519.PublicKey, data []byte, ms *minisignDetached) er
 		}
 		_, _ = h.Write(data)
 		message = h.Sum(nil)
-	case ms.algo == [2]byte{'E', 'd'}:
+	case [2]byte{'E', 'd'}:
 		message = data
 	default:
 		return fmt.Errorf("minisig: unsupported algorithm %q", string(ms.algo[:]))

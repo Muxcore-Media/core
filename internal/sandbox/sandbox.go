@@ -48,7 +48,7 @@ type Spec struct {
 }
 
 // Result is the rewritten exec path/args after wrapping.
-type Result struct {
+type Result struct { //nolint:govet // sandbox wrap result groups runner invocation fields
 	Path string
 	Args []string
 	Env  []string
@@ -168,7 +168,8 @@ func (r FirecrackerRunner) Wrap(ctx context.Context, spec Spec) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
-	args := []string{"--module", spec.ModuleID, "--rootfs", rootfsPath, "--", spec.BinPath}
+	args := make([]string, 0, 6+len(spec.Args))
+	args = append(args, "--module", spec.ModuleID, "--rootfs", rootfsPath, "--", spec.BinPath)
 	args = append(args, spec.Args...)
 	return Result{Path: bin, Args: args, Env: append([]string{}, spec.Env...), Mode: ModeFirecracker}, nil
 }
