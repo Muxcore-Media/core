@@ -21,7 +21,7 @@ jobs:
           token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.6"
           cache: false
       - run: go mod verify
       - run: go mod tidy -diff
@@ -55,7 +55,7 @@ jobs:
           token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.6"
           cache: false
       - run: go vet ./internal/... ./pkg/... ./cmd/... ./sdk/...
       - name: Install staticcheck
@@ -90,7 +90,7 @@ jobs:
           token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.6"
           cache: false
       - run: go test -count=1 -timeout 120s ./internal/... ./pkg/...
       - run: go test -count=1 -timeout 30s ./cmd/...
@@ -128,7 +128,7 @@ jobs:
           token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.6"
           cache: false
       - run: go test -count=1 -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/... ./cmd/...
       - name: Check coverage threshold
@@ -159,7 +159,7 @@ jobs:
           token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.6"
           cache: false
       - run: go build -ldflags="-s -w -X github.com/Muxcore-Media/core/internal/version.Version=$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)" -o muxcored ./cmd/muxcored
       - name: Verify binary starts
@@ -184,7 +184,7 @@ jobs:
           token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.6"
           cache: false
       - name: Build binary for provenance
         run: |
@@ -210,7 +210,7 @@ jobs:
                   }
                 },
                 internalParameters: {
-                  builderImage: "go:1.26.5",
+                  builderImage: "go:1.26.6",
                   buildFlags: ["-ldflags=-s -w"]
                 },
                 resolvedDependencies: []
@@ -272,7 +272,7 @@ jobs:
           token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.6"
           cache: false
       - run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
       - name: Run govulncheck

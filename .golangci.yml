@@ -96,6 +96,11 @@ linters:
       - linters:
           - nolintlint
         source: '//nolint:gosec'
+      # Module sandbox builds operator-controlled OCI rootfs and microVM configs.
+      - path: 'internal/sandbox/'
+        linters:
+          - gosec
+          - contextcheck
 
 formatters:
   enable:

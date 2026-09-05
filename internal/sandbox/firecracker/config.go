@@ -10,10 +10,10 @@ import (
 )
 
 // VMConfig is a minimal Firecracker JSON config with boot, rootfs, and vsock.
-type VMConfig struct {
-	BootSource   BootSource   `json:"boot-source"`
-	Drives       []Drive      `json:"drives"`
-	Vsock        *Vsock       `json:"vsock,omitempty"`
+type VMConfig struct { //nolint:govet // JSON field order follows Firecracker schema
+	BootSource    BootSource    `json:"boot-source"`
+	Drives        []Drive       `json:"drives"`
+	Vsock         *Vsock        `json:"vsock,omitempty"`
 	MachineConfig MachineConfig `json:"machine-config"`
 }
 
@@ -29,8 +29,8 @@ type Drive struct {
 	IsReadOnly   bool   `json:"is_read_only"`
 }
 
-type Vsock struct {
-	GuestCID int `json:"guest_cid"`
+type Vsock struct { //nolint:govet // JSON field order follows Firecracker schema
+	GuestCID int    `json:"guest_cid"`
 	UDSPath  string `json:"uds_path"`
 }
 
@@ -41,7 +41,7 @@ type MachineConfig struct {
 }
 
 // Options for WriteConfig.
-type Options struct {
+type Options struct { //nolint:govet // option struct groups related sandbox settings
 	ModuleID   string
 	RootfsPath string
 	KernelPath string
@@ -104,7 +104,7 @@ func WriteConfig(dir string, opt Options) (string, error) {
 		Drives: []Drive{{
 			DriveID: "rootfs", PathOnHost: rootfs, IsRootDevice: true, IsReadOnly: false,
 		}},
-		Vsock: &Vsock{GuestCID: cid, UDSPath: uds},
+		Vsock:         &Vsock{GuestCID: cid, UDSPath: uds},
 		MachineConfig: MachineConfig{VcpuCount: vcpu, MemSizeMib: mem, SMT: false},
 	}
 	path := filepath.Join(dir, "config.json")

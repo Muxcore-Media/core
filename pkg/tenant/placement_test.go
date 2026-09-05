@@ -42,9 +42,13 @@ func TestPlacerResolveGRPC(t *testing.T) {
 	if !ok || addr != "10.0.0.1:9090" {
 		t.Fatalf("got %q ok=%v", addr, ok)
 	}
-	addr, ok = p.ResolveGRPC(context.Background(), f, "unknown")
-	if !ok || addr != "10.0.0.1:9090" {
-		t.Fatalf("fallback expected us-east node, got %q ok=%v", addr, ok)
+	fLocal := stubFinder{byRegion: map[string][]NodeRef{
+		"us-east": {{ID: "n1", GRPCAddr: "10.0.0.1:9090", Region: "us-east"}},
+		"eu-west": {{ID: "n2", GRPCAddr: "10.0.0.2:9090", Region: "eu-west"}},
+	}}
+	addr, ok = p.ResolveGRPC(context.Background(), fLocal, "unknown")
+	if !ok || addr != "10.0.0.2:9090" {
+		t.Fatalf("unmapped tenant should prefer local region, got %q ok=%v", addr, ok)
 	}
 }
 
