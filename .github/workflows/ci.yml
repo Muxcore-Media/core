@@ -15,7 +15,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout
+        uses: ./.github/actions/checkout-mirror
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.5"
@@ -46,7 +47,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout
+        uses: ./.github/actions/checkout-mirror
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.5"
@@ -78,7 +80,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout
+        uses: ./.github/actions/checkout-mirror
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.5"
@@ -113,7 +116,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout
+        uses: ./.github/actions/checkout-mirror
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.5"
@@ -141,7 +145,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout
+        uses: ./.github/actions/checkout-mirror
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.5"
@@ -163,7 +168,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout
+        uses: ./.github/actions/checkout-mirror
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.5"
@@ -235,7 +241,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout
+        uses: ./.github/actions/checkout-mirror
       - name: Build Docker image
         run: docker build -t muxcore:ci .
 
@@ -245,7 +252,8 @@ jobs:
     steps:
       - name: Clean runner workspace
         run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout
+        uses: ./.github/actions/checkout-mirror
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.5"
