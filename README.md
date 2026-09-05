@@ -77,7 +77,7 @@ JSON Schema for editor validation: [`muxcore.schema.json`](muxcore.schema.json)
 
 ## Local / self-hosted `muxcored` image
 
-Dockerfile is at the repo root. Laptop path:
+`Dockerfile` is at the repo root (standalone `core` checkout). Laptop path:
 
 ```bash
 # Preferred: workspace helper (starts localhost:5000 registry when needed)
@@ -89,6 +89,27 @@ CONTAINER_RUNTIME=docker ./scripts/local-image.sh v0.5.4
 ```
 
 Image default: `localhost:5000/muxcore/muxcored:<tag>`.
+
+### Monorepo / GHCR smoke (no `write:packages`)
+
+When `core` sits beside `contracts-media` and `contracts-reconciler`, `mvp/scripts/publish-muxcored-ghcr.sh` builds with `core/Dockerfile.monorepo` and the workspace parent as context (local siblings replace the private `contracts-reconciler` module fetch).
+
+```bash
+# From mvp/ — build image only; skips gh auth and GHCR push
+BUILD_ONLY=1 ./scripts/publish-muxcored-ghcr.sh v0.5.8
+
+# Shortcut wrapper
+./scripts/smoke-ghcr-build.sh v0.5.8
+```
+
+Manual equivalent from the monorepo root:
+
+```bash
+docker build -f core/Dockerfile.monorepo \
+  --build-arg VERSION=0.5.8 \
+  -t localhost/muxcored:v0.5.8 \
+  .
+```
 
 ---
 
