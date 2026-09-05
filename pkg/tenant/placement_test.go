@@ -69,9 +69,3 @@ func TestResolveDialWithPlacement(t *testing.T) {
 		t.Fatalf("router fallback: got %q err=%v", got, err)
 	}
 }
-
-func TestClusterAdapterNil(t *testing.T) {
-	if ClusterAdapter(nil) != nil {
-		t.Fatal("expected nil")
-	}
-}

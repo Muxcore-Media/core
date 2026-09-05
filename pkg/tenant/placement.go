@@ -13,34 +13,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/Muxcore-Media/core/pkg/contracts"
 )
 
-// NodeFinder resolves cluster nodes by label (implemented by grpcmesh.Cluster).
+// NodeFinder resolves cluster nodes by label (implemented by grpcmesh.TenantNodeFinder).
 type NodeFinder interface {
 	FindNodesByLabel(ctx context.Context, label, value string) []NodeRef
-}
-
-// ClusterAdapter adapts contracts.Cluster to NodeFinder.
-func ClusterAdapter(c contracts.Cluster) NodeFinder {
-	if c == nil {
-		return nil
-	}
-	return clusterAdapter{c: c}
-}
-
-type clusterAdapter struct {
-	c contracts.Cluster
-}
-
-func (a clusterAdapter) FindNodesByLabel(ctx context.Context, label, value string) []NodeRef {
-	nodes := a.c.FindNodesByLabel(ctx, label, value)
-	out := make([]NodeRef, 0, len(nodes))
-	for _, n := range nodes {
-		out = append(out, NodeRef{ID: n.ID, GRPCAddr: n.GRPCAddr, Region: n.Labels["region"]})
-	}
-	return out
 }
 
 // NodeRef is the minimal node fields placement needs.
