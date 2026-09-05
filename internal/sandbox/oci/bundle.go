@@ -25,6 +25,7 @@
 package oci
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,7 +39,7 @@ import (
 )
 
 // Spec describes the module process to place in a bundle.
-type Spec struct {
+type Spec struct { //nolint:govet // OCI bundle spec groups module spawn metadata
 	ModuleID string
 	BinPath  string
 	Args     []string
@@ -193,10 +194,10 @@ func LookPathRunsc(bin string) (string, error) {
 func TryRunscValidate(runscBin, bundleDir string) (skipped bool, err error) {
 	path, err := LookPathRunsc(runscBin)
 	if err != nil {
-		return true, nil
+		return true, nil //nolint:nilerr // missing runsc binary is an expected soft-skip, not a failure
 	}
 	args := RunscValidateArgs(path, bundleDir)
-	cmd := exec.Command(args[0], args[1:]...)
+	cmd := exec.CommandContext(context.Background(), args[0], args[1:]...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// Some runsc builds lack `spec validate`; treat as soft skip with note.
@@ -213,12 +214,12 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	if _, err := io.Copy(out, in); err != nil {
 		return err
 	}

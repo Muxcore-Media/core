@@ -531,7 +531,7 @@ func (m *Manager) Spawn(ctx context.Context, bin *ModuleBinary) error {
 		return fmt.Errorf("sandbox wrap %s: %w", bin.ID, wrapErr)
 	}
 	if wrapped.Mode != sandbox.ModeNone {
-		cmd = m.cmdRunner.CommandContext(ctx, wrapped.Path, wrapped.Args...) //nolint:gosec
+		cmd = m.cmdRunner.CommandContext(ctx, wrapped.Path, wrapped.Args...) //nolint:gosec // sandbox runner path is validated by internal/sandbox
 		cmd.Env = wrapped.Env
 		slog.Info("module spawn sandboxed", "id", bin.ID, "mode", wrapped.Mode, "runner", wrapped.Path)
 	}
