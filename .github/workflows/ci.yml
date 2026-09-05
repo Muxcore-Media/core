@@ -18,7 +18,7 @@ jobs:
       - name: Checkout
         uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
         with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN }}
+          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.5"
@@ -52,7 +52,7 @@ jobs:
       - name: Checkout
         uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
         with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN }}
+          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.5"
@@ -87,7 +87,7 @@ jobs:
       - name: Checkout
         uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
         with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN }}
+          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.5"
@@ -125,7 +125,7 @@ jobs:
       - name: Checkout
         uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
         with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN }}
+          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.5"
@@ -156,7 +156,7 @@ jobs:
       - name: Checkout
         uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
         with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN }}
+          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.5"
@@ -181,7 +181,7 @@ jobs:
       - name: Checkout
         uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
         with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN }}
+          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.5"
@@ -256,7 +256,7 @@ jobs:
       - name: Checkout
         uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
         with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN }}
+          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
       - name: Build Docker image
         run: docker build -t muxcore:ci .
 
@@ -269,7 +269,7 @@ jobs:
       - name: Checkout
         uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
         with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN }}
+          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.5"
