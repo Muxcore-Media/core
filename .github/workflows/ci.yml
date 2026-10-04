@@ -207,13 +207,17 @@ jobs:
               predicateType: "https://slsa.dev/provenance/v1",
               predicate: $pred[0]
             }' > provenance.json
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.8.2
+        with:
+          cosign-release: v2.4.3
       - name: Sign provenance with cosign
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           if [ -n "$COSIGN_PRIVATE_KEY" ]; then
-            cosign attest-blob --key env://COSIGN_PRIVATE_KEY --predicate provenance-predicate.json --type slsaprovenance1 muxcored
+            cosign attest-blob --yes --key env://COSIGN_PRIVATE_KEY --predicate provenance-predicate.json --type slsaprovenance1 muxcored
           else
             echo "COSIGN_PRIVATE_KEY not set â€” skipping attestation"
           fi

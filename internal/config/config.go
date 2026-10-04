@@ -239,7 +239,7 @@ func InsecureTLSSkipEnabled() bool {
 // Load reads configuration from a JSON file, overlays environment variable
 // overrides, and validates the result. If path is empty, only defaults and
 // env vars are used.
-func Load(path string) (*Config, error) { //nolint:gocyclo // config loading has many validation branches
+func Load(path string) (*Config, error) {
 	cfg := Default()
 
 	if path != "" {
@@ -271,7 +271,7 @@ func Load(path string) (*Config, error) { //nolint:gocyclo // config loading has
 // normalizes case-sensitive fields. Exported so callers that bypass Load
 // (e.g. falling back to Default() when no config file exists) still pick up
 // env var overrides.
-func ApplyEnvOverrides(cfg *Config) {
+func ApplyEnvOverrides(cfg *Config) { //nolint:gocyclo // one branch per supported env var
 	// Prefer MUXCORE_SERVER_ADDR over deprecated MUXCORE_ADDR.
 	if v := os.Getenv("MUXCORE_SERVER_ADDR"); v != "" {
 		cfg.Server.Addr = v
