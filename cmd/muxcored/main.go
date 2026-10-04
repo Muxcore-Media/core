@@ -13,6 +13,7 @@ import (
 	"github.com/Muxcore-Media/core/internal/startup"
 	"github.com/Muxcore-Media/core/internal/version"
 	"github.com/Muxcore-Media/core/internal/workerpool"
+	"github.com/Muxcore-Media/core/pkg/sys"
 	"google.golang.org/grpc"
 )
 
@@ -50,6 +51,7 @@ const securityDisclaimer = `╔════════════════�
 ╚══════════════════════════════════════════════════════════════╝`
 
 func main() {
+	sys.SetGOMAXPROCSFromCgroup()
 	tagName, spoolURL, watchdogPath, taskDir, idempotencyDir, deadletterDir, printVersion, dryRun := parseFlags()
 
 	if *printVersion {
@@ -113,7 +115,9 @@ func main() {
 	workerPool.Start(ctx)
 	slog.Info("worker pool initialized")
 
-	workerpool.NewDispatcher(workerPool, reg, meshClient).Start(ctx)
+	disp := workerpool.NewDispatcher(workerPool, reg, meshClient)
+	disp.SetNodeResolver(workerpool.NewClusterNodeResolver(cluster))
+	disp.Start(ctx)
 	slog.Info("task dispatcher started")
 
 	_ = initIdempotency(ctx, reg, nodeID, *idempotencyDir)

@@ -441,3 +441,19 @@ func TestWaitForSidecarPolicies_EmptyFast(t *testing.T) {
 	waitForSidecarPolicies(reg, meshClient, storageGrpc, bus, srv, auth, nil, 32<<20)
 }
 
+func TestResolveAddr(t *testing.T) {
+	if got := resolveAddr("10.0.0.5:9090"); got != "10.0.0.5:9090" {
+		t.Errorf("addr with host must be unchanged, got %q", got)
+	}
+	if got := resolveAddr("not-an-addr"); got != "not-an-addr" {
+		t.Errorf("unparseable addr must be unchanged, got %q", got)
+	}
+	got := resolveAddr(":9090")
+	host, port, err := net.SplitHostPort(got)
+	if err != nil || port != "9090" {
+		t.Fatalf("bare port should resolve to host:9090, got %q (err %v)", got, err)
+	}
+	if h := resolveHost(); h != "" && host != h {
+		t.Errorf("expected host %q, got %q", h, host)
+	}
+}
