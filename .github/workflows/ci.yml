@@ -11,14 +11,10 @@ permissions: read-all
 jobs:
   verify:
     name: Go Mod Verify
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
-      - name: Clean runner workspace
-        run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
       - name: Checkout
-        uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
-        with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
+        uses: actions/checkout@v6
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.6"
@@ -45,14 +41,10 @@ jobs:
 
   lint:
     name: Lint & Static Analysis
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
-      - name: Clean runner workspace
-        run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
       - name: Checkout
-        uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
-        with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
+        uses: actions/checkout@v6
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.6"
@@ -80,14 +72,10 @@ jobs:
 
   test:
     name: Test
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
-      - name: Clean runner workspace
-        run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
       - name: Checkout
-        uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
-        with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
+        uses: actions/checkout@v6
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.6"
@@ -118,14 +106,10 @@ jobs:
 
   coverage:
     name: Coverage
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
-      - name: Clean runner workspace
-        run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
       - name: Checkout
-        uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
-        with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
+        uses: actions/checkout@v6
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.6"
@@ -149,14 +133,12 @@ jobs:
 
   build:
     name: Build
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
-      - name: Clean runner workspace
-        run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
       - name: Checkout
-        uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
+        uses: actions/checkout@v6
         with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.6"
@@ -169,19 +151,15 @@ jobs:
 
   provenance:
     name: SLSA Provenance
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: build
     permissions:
       id-token: write
       contents: read
       actions: read
     steps:
-      - name: Clean runner workspace
-        run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
       - name: Checkout
-        uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
-        with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
+        uses: actions/checkout@v6
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.6"
@@ -229,15 +207,19 @@ jobs:
               predicateType: "https://slsa.dev/provenance/v1",
               predicate: $pred[0]
             }' > provenance.json
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.8.2
+        with:
+          cosign-release: v2.4.3
       - name: Sign provenance with cosign
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           if [ -n "$COSIGN_PRIVATE_KEY" ]; then
-            cosign attest-blob --key env://COSIGN_PRIVATE_KEY --predicate provenance-predicate.json --type slsaprovenance1 muxcored
+            cosign attest-blob --yes --key env://COSIGN_PRIVATE_KEY --predicate provenance-predicate.json --type slsaprovenance1 muxcored
           else
-            echo "COSIGN_PRIVATE_KEY not set — skipping attestation"
+            echo "COSIGN_PRIVATE_KEY not set â€” skipping attestation"
           fi
       - name: Upload provenance
         uses: actions/upload-artifact@v7 # v4.6.2
@@ -249,27 +231,19 @@ jobs:
 
   docker:
     name: Docker Build Test
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
-      - name: Clean runner workspace
-        run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
       - name: Checkout
-        uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
-        with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
+        uses: actions/checkout@v6
       - name: Build Docker image
         run: docker build -t muxcore:ci .
 
   vulncheck:
     name: Vulnerability Scan
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
-      - name: Clean runner workspace
-        run: rm -rf "${GITHUB_WORKSPACE}/"* "${RUNNER_TEMP}/"* 2>/dev/null; true
       - name: Checkout
-        uses: Muxcore-Media/mvp/.github/actions/checkout-mirror@main
-        with:
-          token: ${{ secrets.MUXCORE_CI_TOKEN || github.token }}
+        uses: actions/checkout@v6
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5.4.0
         with:
           go-version: "1.26.6"

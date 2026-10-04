@@ -277,3 +277,169 @@ func TestDispatcher_SetIntervalIgnoresNegative(t *testing.T) {
 		t.Fatalf("expected default interval %s, got %s", defaultDispatchInterval, disp.interval)
 	}
 }
+
+type mockNodeResolver map[string]string
+
+func (m mockNodeResolver) NodeForModule(moduleID string) string {
+	return m[moduleID]
+}
+
+func TestDispatcher_AssignedNodeFromResolver(t *testing.T) {
+	pool := dispatcherTestPool(t)
+	ctx := context.Background()
+
+	id, err := pool.Submit(ctx, contracts.WorkerTask{
+		Type:       "download",
+		MaxRetries: 3,
+	})
+	if err != nil {
+		t.Fatalf("Submit failed: %v", err)
+	}
+
+	reg := &mockRegistry{
+		entries: map[string][]contracts.ModuleEntry{
+			"executor.download": {
+				{Info: contracts.ModuleInfo{ID: "downloader-test"}},
+			},
+		},
+	}
+	mockMesh := &mockMeshCaller{
+		callFn: func(_ context.Context, targetModule, method string, _ []byte) ([]byte, error) {
+			if targetModule != "downloader-test" {
+				t.Fatalf("unexpected target %s", targetModule)
+			}
+			return []byte(`ok`), nil
+		},
+	}
+
+	disp := NewDispatcher(pool, reg, mockMesh)
+	disp.SetNodeResolver(mockNodeResolver{"downloader-test": "node-host-1"})
+	disp.dispatchOnce(ctx)
+
+	task, err := pool.Status(ctx, id)
+	if err != nil {
+		t.Fatalf("Status failed: %v", err)
+	}
+	if task.Status != contracts.WorkerTaskStatusCompleted {
+		t.Fatalf("expected Completed, got %s", task.Status)
+	}
+	if task.AssignedNode != "node-host-1" {
+		t.Errorf("expected AssignedNode node-host-1, got %q", task.AssignedNode)
+	}
+	if task.Meta == nil || task.Meta[metaExecutorKey] != "downloader-test" {
+		t.Errorf("expected Meta[%q]=downloader-test, got %v", metaExecutorKey, task.Meta)
+	}
+}
+
+func TestDispatcher_SkipsUnknownHost(t *testing.T) {
+	pool := dispatcherTestPool(t)
+	ctx := context.Background()
+
+	id, err := pool.Submit(ctx, contracts.WorkerTask{Type: "download", MaxRetries: 3})
+	if err != nil {
+		t.Fatalf("Submit failed: %v", err)
+	}
+
+	reg := &mockRegistry{
+		entries: map[string][]contracts.ModuleEntry{
+			"executor.download": {
+				{Info: contracts.ModuleInfo{ID: "dead-executor"}},
+				{Info: contracts.ModuleInfo{ID: "live-executor"}},
+			},
+		},
+	}
+	var called string
+	mockMesh := &mockMeshCaller{
+		callFn: func(_ context.Context, targetModule, _ string, _ []byte) ([]byte, error) {
+			called = targetModule
+			return []byte(`ok`), nil
+		},
+	}
+
+	disp := NewDispatcher(pool, reg, mockMesh)
+	disp.SetNodeResolver(mockNodeResolver{"live-executor": "node-alive"})
+	disp.dispatchOnce(ctx)
+
+	if called != "live-executor" {
+		t.Fatalf("expected live-executor, got %q", called)
+	}
+	task, _ := pool.Status(ctx, id)
+	if task.AssignedNode != "node-alive" {
+		t.Errorf("expected node-alive, got %q", task.AssignedNode)
+	}
+}
+
+func TestDispatcher_AllHostsUnknownLeavesPending(t *testing.T) {
+	pool := dispatcherTestPool(t)
+	ctx := context.Background()
+
+	id, err := pool.Submit(ctx, contracts.WorkerTask{Type: "download"})
+	if err != nil {
+		t.Fatalf("Submit failed: %v", err)
+	}
+
+	reg := &mockRegistry{
+		entries: map[string][]contracts.ModuleEntry{
+			"executor.download": {
+				{Info: contracts.ModuleInfo{ID: "ghost-executor"}},
+			},
+		},
+	}
+	mockMesh := &mockMeshCaller{
+		callFn: func(_ context.Context, _, _ string, _ []byte) ([]byte, error) {
+			t.Fatal("Call should not run when host is unknown")
+			return nil, nil
+		},
+	}
+
+	disp := NewDispatcher(pool, reg, mockMesh)
+	disp.SetNodeResolver(mockNodeResolver{})
+	disp.dispatchOnce(ctx)
+
+	task, _ := pool.Status(ctx, id)
+	if task.Status != contracts.WorkerTaskStatusPending {
+		t.Fatalf("expected Pending, got %s", task.Status)
+	}
+}
+
+func TestClusterNodeResolver_NodeForModule(t *testing.T) {
+	r := NewClusterNodeResolver(&stubCluster{
+		members: []contracts.NodeInfo{
+			{ID: "n1", ModuleIDs: []string{"mod-a"}},
+			{ID: "n2", ModuleIDs: []string{"mod-b", "mod-c"}},
+		},
+	})
+	if got := r.NodeForModule("mod-b"); got != "n2" {
+		t.Errorf("expected n2, got %q", got)
+	}
+	if got := r.NodeForModule("missing"); got != "" {
+		t.Errorf("expected empty, got %q", got)
+	}
+}
+
+func TestClusterNodeResolver_PrefersLiveLocalNode(t *testing.T) {
+	r := NewClusterNodeResolver(&stubCluster{
+		local:   contracts.NodeInfo{ID: "self", ModuleIDs: []string{"late-mod"}},
+		members: []contracts.NodeInfo{{ID: "self"}},
+	})
+	if got := r.NodeForModule("late-mod"); got != "self" {
+		t.Errorf("expected self, got %q", got)
+	}
+}
+
+type stubCluster struct {
+	members []contracts.NodeInfo
+	local   contracts.NodeInfo
+}
+
+func (s *stubCluster) Start(context.Context) error           { return nil }
+func (s *stubCluster) Stop(context.Context) error            { return nil }
+func (s *stubCluster) Members() []contracts.NodeInfo         { return s.members }
+func (s *stubCluster) Leader() *contracts.NodeInfo           { return nil }
+func (s *stubCluster) LocalNode() contracts.NodeInfo         { return s.local }
+func (s *stubCluster) Events() <-chan contracts.ClusterEvent { return nil }
+func (s *stubCluster) Health(context.Context) error          { return nil }
+func (s *stubCluster) FindNodesByLabel(context.Context, string, string) []contracts.NodeInfo {
+	return nil
+}
+func (s *stubCluster) FindNodesByModule(context.Context, string) []contracts.NodeInfo { return nil }

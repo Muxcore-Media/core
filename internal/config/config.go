@@ -239,7 +239,7 @@ func InsecureTLSSkipEnabled() bool {
 // Load reads configuration from a JSON file, overlays environment variable
 // overrides, and validates the result. If path is empty, only defaults and
 // env vars are used.
-func Load(path string) (*Config, error) { //nolint:gocyclo // config loading has many validation branches
+func Load(path string) (*Config, error) {
 	cfg := Default()
 
 	if path != "" {
@@ -259,6 +259,19 @@ func Load(path string) (*Config, error) { //nolint:gocyclo // config loading has
 	}
 
 	// Environment variable overrides — highest precedence.
+	ApplyEnvOverrides(cfg)
+
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// ApplyEnvOverrides overrides config fields from environment variables and
+// normalizes case-sensitive fields. Exported so callers that bypass Load
+// (e.g. falling back to Default() when no config file exists) still pick up
+// env var overrides.
+func ApplyEnvOverrides(cfg *Config) { //nolint:gocyclo // one branch per supported env var
 	// Prefer MUXCORE_SERVER_ADDR over deprecated MUXCORE_ADDR.
 	if v := os.Getenv("MUXCORE_SERVER_ADDR"); v != "" {
 		cfg.Server.Addr = v
@@ -386,11 +399,6 @@ func Load(path string) (*Config, error) { //nolint:gocyclo // config loading has
 	// mixed case from env vars or config files.
 	cfg.Log.Level = strings.ToLower(cfg.Log.Level)
 	cfg.Log.Format = strings.ToLower(cfg.Log.Format)
-
-	if err := cfg.validate(); err != nil {
-		return nil, err
-	}
-	return cfg, nil
 }
 
 // validate returns an error if the config has conflicting or invalid fields.
