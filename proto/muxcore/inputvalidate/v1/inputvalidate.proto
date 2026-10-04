@@ -1,0 +1,25 @@
+syntax = "proto3";
+package muxcore.inputvalidate.v1;
+option go_package = "github.com/Muxcore-Media/core/proto/gen/muxcore/inputvalidate/v1;inputvalidatev1";
+
+service InputValidateService {
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+  rpc SupportedSchemas(SupportedSchemasRequest) returns (SupportedSchemasResponse);
+}
+
+message ValidateRequest {
+  bytes data = 1;
+  string schema = 2;
+}
+
+message ValidateResponse {
+  bool valid = 1;
+  bytes sanitized = 2;
+  repeated string errors = 3;
+}
+
+message SupportedSchemasRequest {}
+
+message SupportedSchemasResponse {
+  repeated string schemas = 1;
+}

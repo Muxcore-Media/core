@@ -3,6 +3,7 @@ package workerpool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -11,12 +12,21 @@ import (
 
 const defaultDispatchInterval = 5 * time.Second
 
+const metaExecutorKey = "executor"
+
+// NodeResolver maps an executor module ID to the cluster node that hosts it.
+// Returns "" when the module's host is unknown or not a current member.
+type NodeResolver interface {
+	NodeForModule(moduleID string) string
+}
+
 // Dispatcher polls the WorkerPool for pending tasks and routes them to
 // registered executor modules via the gRPC mesh.
 type Dispatcher struct {
 	pool     *Pool
 	registry contracts.Registry
 	mesh     MeshCaller
+	nodes    NodeResolver
 	interval time.Duration
 }
 
@@ -33,6 +43,12 @@ func NewDispatcher(pool *Pool, registry contracts.Registry, mesh MeshCaller) *Di
 		mesh:     mesh,
 		interval: defaultDispatchInterval,
 	}
+}
+
+// SetNodeResolver attaches a resolver used to set AssignedNode and skip
+// executors whose host is unknown or departed.
+func (d *Dispatcher) SetNodeResolver(r NodeResolver) {
+	d.nodes = r
 }
 
 // SetInterval overrides the default dispatch polling interval.
@@ -98,11 +114,15 @@ func (d *Dispatcher) dispatchTask(ctx context.Context, task contracts.WorkerTask
 		return
 	}
 
-	targetID := candidates[0].Info.ID
+	targetID, assignedNode := d.pickExecutor(candidates)
+	if targetID == "" {
+		slog.Debug("dispatcher: no live executors for task type",
+			"task_id", task.ID, "type", task.Type)
+		return
+	}
 
-	if err := d.pool.UpdateStatus(ctx, task.ID,
-		contracts.WorkerTaskStatusRunning, ""); err != nil {
-		slog.Warn("dispatcher: update status to running",
+	if err := d.pool.beginDispatch(ctx, task.ID, assignedNode, targetID); err != nil {
+		slog.Warn("dispatcher: begin dispatch",
 			"task_id", task.ID, "error", err)
 		return
 	}
@@ -134,4 +154,50 @@ func (d *Dispatcher) dispatchTask(ctx context.Context, task contracts.WorkerTask
 		contracts.WorkerTaskStatusCompleted, "")
 	slog.Debug("dispatcher: task completed",
 		"task_id", task.ID, "executor", targetID)
+}
+
+// pickExecutor selects the first candidate whose host is known when a
+// NodeResolver is configured. Without a resolver, the first candidate wins.
+func (d *Dispatcher) pickExecutor(candidates []contracts.ModuleEntry) (moduleID, nodeID string) {
+	for _, c := range candidates {
+		id := c.Info.ID
+		if d.nodes == nil {
+			return id, ""
+		}
+		host := d.nodes.NodeForModule(id)
+		if host == "" {
+			continue
+		}
+		return id, host
+	}
+	return "", ""
+}
+
+// beginDispatch marks a pending task Running and records assignment metadata.
+func (p *Pool) beginDispatch(ctx context.Context, taskID, assignedNode, executorID string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	task, ok := p.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("workerpool: task %q not found", taskID)
+	}
+	if task.Status != contracts.WorkerTaskStatusPending {
+		return fmt.Errorf("workerpool: task %q is not pending (state: %s)", taskID, task.Status)
+	}
+
+	task.Status = contracts.WorkerTaskStatusRunning
+	task.StartedAt = time.Now()
+	task.Error = ""
+	if assignedNode != "" {
+		task.AssignedNode = assignedNode
+	}
+	if executorID != "" {
+		if task.Meta == nil {
+			task.Meta = make(map[string]any)
+		}
+		task.Meta[metaExecutorKey] = executorID
+	}
+	p.persistTask(ctx, task)
+	return nil
 }

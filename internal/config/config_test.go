@@ -402,3 +402,16 @@ func TestLoad_InvalidGRPCMessageSize_File(t *testing.T) {
 		t.Fatal("expected validation error for message size > 512")
 	}
 }
+
+func TestApplyEnvOverrides_OnDefaults(t *testing.T) {
+	t.Setenv("MUXCORE_LOG_LEVEL", "DEBUG")
+	t.Setenv("MUXCORE_GRPC_JOIN_TOKEN", "tok")
+	cfg := Default()
+	ApplyEnvOverrides(cfg)
+	if cfg.Log.Level != "debug" {
+		t.Errorf("Log.Level = %q, want normalized %q", cfg.Log.Level, "debug")
+	}
+	if cfg.GRPC.JoinToken != "tok" {
+		t.Errorf("GRPC.JoinToken = %q, want %q", cfg.GRPC.JoinToken, "tok")
+	}
+}
