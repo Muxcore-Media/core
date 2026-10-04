@@ -57,7 +57,7 @@ type ConnPool struct {
 // rather than waiting the full idle timeout.
 func NewConnPool(dialOpts ...grpc.DialOption) *ConnPool {
 	// Prepend message size limits and keepalive params so callers can override if needed.
-	kpOpts := make([]grpc.DialOption, 0, 2+len(dialOpts))
+	kpOpts := make([]grpc.DialOption, 0, 3+len(dialOpts))
 	kpOpts = append(kpOpts,
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(maxClientMsgSize),

@@ -5,6 +5,7 @@ import (
 	"expvar"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http/pprof"
 	"os"
 	"os/signal"
@@ -60,6 +61,7 @@ func loadConfig() (*config.Config, string) {
 		if os.IsNotExist(err) {
 			slog.Warn("no config file found, using defaults", "path", configPath)
 			cfg = config.Default()
+			config.ApplyEnvOverrides(cfg)
 		} else {
 			slog.Error("load config", "error", err)
 			os.Exit(1)
@@ -284,11 +286,16 @@ func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus
 	}
 	eventGrpc.RegisterWithGRPC(grpcSrv)
 
-	nodeID = "muxcore-" + cfg.GRPC.Addr
+	// Resolve address: if the configured addr has no host (bare port),
+	// prepend the local hostname so the node is reachable in the cluster.
+	grpcAddr := resolveAddr(cfg.GRPC.Addr)
+	httpAddr := resolveAddr(cfg.Server.Addr)
+	nodeID = "muxcore-" + grpcAddr
+
 	discoveryGrpc = grpcmesh.NewDiscoveryServer(
 		nodeID,
-		cfg.GRPC.Addr,
-		cfg.Server.Addr,
+		grpcAddr,
+		httpAddr,
 		cfg.GRPC.JoinToken,
 		func() ([]string, map[string]string) {
 			entries := reg.List()
@@ -304,7 +311,7 @@ func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus
 		},
 	)
 	discoveryGrpc.RegisterWithGRPC(grpcSrv)
-	slog.Info("discovery server created", "node_id", nodeID, "grpc_addr", cfg.GRPC.Addr)
+	slog.Info("discovery server created", "node_id", nodeID, "grpc_addr", grpcAddr, "http_addr", httpAddr)
 
 	cluster = grpcmesh.NewCluster(discoveryGrpc)
 	meshClient.SetCluster(cluster)
@@ -469,4 +476,37 @@ func initModuleManager(cfg *config.Config, reg *registry.Registry, bus *events.M
 	}
 
 	return modMgr, lifecycleMgr
+}
+
+// resolveAddr returns a full addr (host:port) from a possibly bare port.
+// If addr already has a host it is returned unchanged. Bare ports like
+// ":9090" get the local hostname prepended.
+func resolveAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host != "" {
+		return addr
+	}
+	hostname := resolveHost()
+	if hostname == "" {
+		return addr
+	}
+	return net.JoinHostPort(hostname, port)
+}
+
+// resolveHost returns a stable hostname for this node. Tries os.Hostname
+// first, then falls back to the first non-loopback IPv4 address.
+func resolveHost() string {
+	if host, err := os.Hostname(); err == nil && host != "" {
+		return host
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, a := range addrs {
+		if ipnet, ok := a.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && ipnet.IP.To4() != nil {
+			return ipnet.IP.String()
+		}
+	}
+	return ""
 }

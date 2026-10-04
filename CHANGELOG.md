@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Cgroup-aware `GOMAXPROCS` at startup (`pkg/sys`).
+- `backup`, `executor` and `inputvalidate` v1 protos with generated Go code.
+- `workerpool.NodeResolver` / `ClusterNodeResolver`: dispatcher records `AssignedNode` and skips executors whose host is unknown.
+
+### Fixed
+- Config: env var overrides now apply when no config file exists (`config.ApplyEnvOverrides`).
+- Node ID and advertised addresses resolve a bare-port listen address to the local hostname instead of `muxcore-:PORT`.
+- Explicit 5s `MinConnectTimeout` on `ConnPool` and `DialSidecar` connections.
+
 ### Security
 - **EventService/Publish authz**: Removed `EventService/Publish` from the gRPC auth allowlist. Publish, Request, and Replay now require verified caller identity from the auth interceptor (mTLS or validated bearer token). Client-supplied `x-caller-id` metadata and `event.Source` are no longer trusted for publish-policy decisions. **Migration**: Remote publishers must authenticate via mesh mTLS or an identity provider; setting `MUXCORE_MODULE_ID` / `x-caller-id` alone is insufficient when `MUXCORE_INSECURE_DISABLE_TLS` is enabled.
 

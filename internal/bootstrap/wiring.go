@@ -95,6 +95,9 @@ func DialSidecar(addr string, creds credentials.TransportCredentials, maxMsgByte
 			grpc.MaxCallRecvMsgSize(maxMsgBytes),
 			grpc.MaxCallSendMsgSize(maxMsgBytes),
 		),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			MinConnectTimeout: 5 * time.Second,
+		}),
 	}
 	if creds != nil {
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
