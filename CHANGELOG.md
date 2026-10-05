@@ -5,6 +5,11 @@ All notable changes to the MuxCore project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.4] — 2026-10-05 — harness caller identity
+
+### Fixed
+- `integsupport`: the harness stamps the caller from the SDK's `x-caller-id` metadata (test-only stand-in for the auth interceptor), so module event publish/subscribe work; `Close` uses `Stop` so long-lived Subscribe streams cannot block teardown.
+
 ## [v0.6.3] — 2026-10-05 — integration harness
 
 ### Added
