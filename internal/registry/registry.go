@@ -3,8 +3,10 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
@@ -17,6 +19,30 @@ type Registry struct {
 	mu       sync.RWMutex
 	modules  map[string]*Entry
 	capIndex map[string]map[string]bool // capability -> moduleID -> true
+	// nextSeq is the registration sequence counter (see Entry.seq).
+	nextSeq uint64
+}
+
+// ErrAlreadyRegistered is returned (wrapped) when a module ID is already
+// registered and the registration does not ask for a replace.
+var ErrAlreadyRegistered = errors.New("already registered")
+
+// ErrExclusiveConflict is returned (wrapped) by RegisterWith when the module
+// declares an exclusive capability that another module ID already provides.
+var ErrExclusiveConflict = errors.New("exclusive capability already provided")
+
+// RegisterOptions controls RegisterWith.
+type RegisterOptions struct {
+	// Replace atomically replaces an existing entry with the same ID instead
+	// of failing with ErrAlreadyRegistered. The replacement keeps the old
+	// entry's registration order, so it stays the provider of record for its
+	// capabilities (ADR-0018: the same verified ID re-registers).
+	Replace bool
+	// Exclusive lists capabilities that may have only one provider. When the
+	// module declares one of them and a module with a different ID already
+	// provides it, RegisterWith fails with ErrExclusiveConflict and registers
+	// nothing.
+	Exclusive []string
 }
 
 // Entry holds a registered module and its metadata.
@@ -26,6 +52,10 @@ type Entry struct {
 	State  contracts.ModuleState
 	Health error
 	Deps   []string
+	// seq is the registration order: lower registered earlier. A replace
+	// keeps the original value. Listing methods sort by it (then by ID), so
+	// the first-registered provider of a capability is always listed first.
+	seq uint64
 }
 
 // New creates an empty Registry.
@@ -37,23 +67,54 @@ func New() *Registry {
 }
 
 // Register adds a module to the registry. Returns an error if the module ID
-// is empty, the module name is empty, or the ID is already registered.
+// is empty, the module name is empty, or the ID is already registered
+// (wrapping ErrAlreadyRegistered).
 // Core performs no interface validation — that responsibility belongs to
 // consumer modules, contract repos, and the marketplace compatibility checker.
 func (r *Registry) Register(module contracts.Module, deps []string) error {
+	_, err := r.RegisterWith(module, deps, RegisterOptions{})
+	return err
+}
+
+// RegisterWith is Register with options. It reports whether an existing
+// entry was replaced (opts.Replace). All checks and the update happen under
+// one lock, so concurrent registrations cannot both claim an exclusive
+// capability and a replace is never observed half-done.
+func (r *Registry) RegisterWith(module contracts.Module, deps []string, opts RegisterOptions) (replaced bool, err error) {
 	info := module.Info()
 	if info.ID == "" {
-		return fmt.Errorf("module ID is required")
+		return false, fmt.Errorf("module ID is required")
 	}
 	if info.Name == "" {
-		return fmt.Errorf("module name is required")
+		return false, fmt.Errorf("module name is required")
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.modules[info.ID]; exists {
-		return fmt.Errorf("module %q already registered", info.ID)
+	old, exists := r.modules[info.ID]
+	if exists && !opts.Replace {
+		return false, fmt.Errorf("module %q %w", info.ID, ErrAlreadyRegistered)
+	}
+
+	for _, capability := range opts.Exclusive {
+		if !hasString(info.Capabilities, capability) {
+			continue
+		}
+		for id := range r.capIndex[capability] {
+			if id != info.ID {
+				return false, fmt.Errorf("%w: %q is provided by %q, refusing %q",
+					ErrExclusiveConflict, capability, id, info.ID)
+			}
+		}
+	}
+
+	seq := r.nextSeq
+	if exists {
+		seq = old.seq
+		r.removeCapsLocked(info.ID, old.Info.Capabilities)
+	} else {
+		r.nextSeq++
 	}
 
 	r.modules[info.ID] = &Entry{
@@ -61,6 +122,7 @@ func (r *Registry) Register(module contracts.Module, deps []string) error {
 		Info:   info,
 		State:  contracts.ModuleStateRegistered,
 		Deps:   deps,
+		seq:    seq,
 	}
 
 	// Populate capability index.
@@ -76,8 +138,41 @@ func (r *Registry) Register(module contracts.Module, deps []string) error {
 		"name", info.Name,
 		"version", info.Version,
 		"capabilities", info.Capabilities,
+		"replaced", exists,
 	)
-	return nil
+	return exists, nil
+}
+
+func hasString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// removeCapsLocked removes id from the capability index for caps. Must be
+// called with r.mu held for writing.
+func (r *Registry) removeCapsLocked(id string, caps []string) {
+	for _, capability := range caps {
+		if mods, ok := r.capIndex[capability]; ok {
+			delete(mods, id)
+			if len(mods) == 0 {
+				delete(r.capIndex, capability)
+			}
+		}
+	}
+}
+
+// sortEntries orders entries by registration order, then by ID.
+func sortEntries(entries []*Entry) {
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].seq != entries[j].seq {
+			return entries[i].seq < entries[j].seq
+		}
+		return entries[i].Info.ID < entries[j].Info.ID
+	})
 }
 
 // Unregister removes a module and cleans up its capability index entries.
@@ -91,14 +186,7 @@ func (r *Registry) Unregister(id string) error {
 	}
 
 	// Clean up capability index.
-	for _, capability := range entry.Info.Capabilities {
-		if mods, ok := r.capIndex[capability]; ok {
-			delete(mods, id)
-			if len(mods) == 0 {
-				delete(r.capIndex, capability)
-			}
-		}
-	}
+	r.removeCapsLocked(id, entry.Info.Capabilities)
 
 	delete(r.modules, id)
 	return nil
@@ -123,6 +211,7 @@ func (r *Registry) List() []*Entry {
 	for _, e := range r.modules {
 		entries = append(entries, e)
 	}
+	sortEntries(entries)
 	return entries
 }
 
@@ -139,9 +228,13 @@ func (r *Registry) ListByRole(role string) []*Entry {
 			}
 		}
 	}
+	sortEntries(entries)
 	return entries
 }
 
+// ListByCapability returns the modules that declare capability, in a stable
+// order: registration order (earliest first), then module ID. The first
+// entry is the provider of record (see Provider).
 func (r *Registry) ListByCapability(capability string) []*Entry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -153,9 +246,23 @@ func (r *Registry) ListByCapability(capability string) []*Entry {
 				entries = append(entries, e)
 			}
 		}
+		sortEntries(entries)
 		return entries
 	}
 	return nil
+}
+
+// Provider returns the provider of record for capability: the earliest
+// registered module that still declares it (a same-ID replace keeps its
+// place). Core wires exclusive capabilities (call/publish policy, auth,
+// authorizer, identity) to this provider, never to an arbitrary one
+// (ADR-0018, NFR-SEC-002).
+func (r *Registry) Provider(capability string) (*Entry, bool) {
+	entries := r.ListByCapability(capability)
+	if len(entries) == 0 {
+		return nil, false
+	}
+	return entries[0], true
 }
 
 func (r *Registry) Discover(ctx context.Context, role string) []contracts.ModuleInfo {
@@ -291,12 +398,12 @@ func (r *Registry) resolveDeps(entry *Entry, resolved, visiting map[string]bool)
 // Modules in DependsOn appear before the module that depends on them.
 // Returns an error if a dependency cycle is detected.
 func (r *Registry) StartupOrder() ([]string, error) {
-	r.mu.RLock()
-	ids := make([]string, 0, len(r.modules))
-	for id := range r.modules {
-		ids = append(ids, id)
+	// Visit in registration order so the result is deterministic.
+	listed := r.List()
+	ids := make([]string, 0, len(listed))
+	for _, e := range listed {
+		ids = append(ids, e.Info.ID)
 	}
-	r.mu.RUnlock()
 
 	// Build adjacency: for each module, resolve its deps
 	resolved := make(map[string]bool)

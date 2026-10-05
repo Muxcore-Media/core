@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -25,12 +26,15 @@ import (
 
 	"github.com/Muxcore-Media/contracts-reconciler/reconciler"
 	modulemgr "github.com/Muxcore-Media/core/internal/module"
+	"github.com/Muxcore-Media/core/internal/peerid"
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/sandbox"
 	"github.com/Muxcore-Media/core/internal/spool"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	modulev1 "github.com/Muxcore-Media/core/proto/gen/muxcore/module/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // RestartPolicy controls how the manager handles unexpected module exits.
@@ -179,6 +183,53 @@ type Manager struct {
 	// marketplace DeployTag and orphan resurrection (household profile,
 	// FR-EXT-003). Boot-time curated tags are not affected.
 	requireMarketplaceSigs atomic.Bool
+	// regPolicy holds the ADR-0018 registration rules (nil = dev).
+	regPolicy atomic.Pointer[RegistrationPolicy]
+}
+
+// SecurityCapabilities are the capabilities whose provider core wires into
+// its own security path. Registering one requires a verified module
+// certificate in household, and each may have only one provider
+// (ADR-0018, NFR-SEC-002).
+var SecurityCapabilities = []string{
+	contracts.CapabilityCallPolicy,
+	contracts.CapabilityPublishPolicy,
+	contracts.CapabilityAuthorizer,
+	contracts.CapabilityIdentity,
+	contracts.CapabilityAuth,
+}
+
+// RegistrationPolicy selects the ADR-0018 registration rules applied by the
+// ModuleRegistration service.
+//
+//	Rule                                         dev                    household
+//	cert CN != registering module ID             reject                 reject
+//	no cert, security capability                 warn                   reject (PermissionDenied)
+//	no cert, other capabilities                  allow                  warn; reject if RequireModuleCerts
+//	2nd provider (other ID) of a security cap    warn, first kept       reject (FailedPrecondition)
+//	same verified ID re-registers                atomic replace         atomic replace
+//	Unregister                                   open                   requires cert CN == ID
+type RegistrationPolicy struct {
+	// Household applies the household column; false applies dev.
+	Household bool
+	// RequireModuleCerts is ADR-0018 stage 2 (MUXCORE_REQUIRE_MODULE_CERTS):
+	// in household, reject every registration without a verified
+	// certificate. Ignored in dev.
+	RequireModuleCerts bool
+}
+
+// SetRegistrationPolicy sets the ADR-0018 registration rules. Until it is
+// called the dev rules apply; muxcored always sets it from the profile.
+func (m *Manager) SetRegistrationPolicy(p RegistrationPolicy) {
+	m.regPolicy.Store(&p)
+}
+
+// RegistrationPolicy returns the active registration rules.
+func (m *Manager) RegistrationPolicy() RegistrationPolicy {
+	if p := m.regPolicy.Load(); p != nil {
+		return *p
+	}
+	return RegistrationPolicy{}
 }
 
 // CertIssuer is the interface for issuing module certificates and
@@ -1142,6 +1193,12 @@ func (s *registrationServer) Register(ctx context.Context, req *modulev1.Registe
 	if info.ID == "" {
 		return &modulev1.RegisterResponse{MeshAddr: s.mgr.meshAddr, Accepted: false, Error: "module ID is required"}, nil
 	}
+
+	opts, err := s.mgr.authorizeRegistration(ctx, info)
+	if err != nil {
+		return nil, err
+	}
+
 	if info.Name == "" {
 		info.Name = info.ID
 		slog.Warn("module registered without a name, using ID as name", "module_id", info.ID)
@@ -1153,14 +1210,22 @@ func (s *registrationServer) Register(ctx context.Context, req *modulev1.Registe
 
 	// Create a proxy that satisfies contracts.Module for registry registration.
 	proxy := NewSidecarProxy(info)
-	s.mgr.TrackProxy(info.ID, proxy)
 
-	// Register with the module lifecycle manager (adds to registry, publishes events).
+	// Register with the module lifecycle manager (adds to registry, publishes
+	// events). The proxy is tracked only once the registration is accepted,
+	// so a rejected registration never displaces the registered module's.
 	deps := info.DependsOn
-	if err := s.mgr.modMgr.Register(ctx, proxy, deps); err != nil {
+	replaced, err := s.mgr.modMgr.RegisterWith(ctx, proxy, deps, opts)
+	if err != nil {
+		if errors.Is(err, registry.ErrExclusiveConflict) {
+			slog.Warn("module registration rejected: exclusive security capability already provided",
+				"id", info.ID, "error", err)
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
 		slog.Error("module registration: registry", "id", info.ID, "error", err)
 		return &modulev1.RegisterResponse{MeshAddr: s.mgr.meshAddr, Accepted: false, Error: err.Error()}, nil
 	}
+	s.mgr.TrackProxy(info.ID, proxy)
 
 	slog.Info("module registered via gRPC and added to registry",
 		"id", info.ID,
@@ -1169,6 +1234,7 @@ func (s *registrationServer) Register(ctx context.Context, req *modulev1.Registe
 		"roles", info.Roles,
 		"capabilities", info.Capabilities,
 		"deps", deps,
+		"replaced", replaced,
 	)
 
 	if hook := s.mgr.PostRegisterHook; hook != nil {
@@ -1176,6 +1242,87 @@ func (s *registrationServer) Register(ctx context.Context, req *modulev1.Registe
 	}
 
 	return &modulev1.RegisterResponse{MeshAddr: s.mgr.meshAddr, Accepted: true}, nil
+}
+
+// securityCapsOf returns the security capabilities among caps.
+func securityCapsOf(caps []string) []string {
+	var out []string
+	for _, c := range SecurityCapabilities {
+		if slicesContains(caps, c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// authorizeRegistration applies the ADR-0018 rules (see RegistrationPolicy)
+// to a Register call and returns the registry options to register with, or
+// a gRPC status error when the registration is rejected.
+func (m *Manager) authorizeRegistration(ctx context.Context, info contracts.ModuleInfo) (registry.RegisterOptions, error) {
+	pol := m.RegistrationPolicy()
+	profileName := "dev"
+	if pol.Household {
+		profileName = "household"
+	}
+	secCaps := securityCapsOf(info.Capabilities)
+	cn, verified := peerid.VerifiedModuleID(ctx)
+
+	// Rule 1 (both profiles): a verified certificate may only register its
+	// own module ID.
+	if verified && cn != info.ID {
+		slog.Warn("module registration rejected: certificate CN does not match module ID",
+			"id", info.ID, "cert_cn", cn, "profile", profileName)
+		return registry.RegisterOptions{}, status.Errorf(codes.PermissionDenied,
+			"certificate is issued for module %q, cannot register %q", cn, info.ID)
+	}
+
+	// Rules 2 and 3: registrations without a verified certificate.
+	if !verified {
+		switch {
+		case len(secCaps) > 0 && pol.Household:
+			slog.Warn("module registration rejected: security capability without a verified module certificate",
+				"id", info.ID, "capabilities", secCaps, "profile", profileName)
+			return registry.RegisterOptions{}, status.Errorf(codes.PermissionDenied,
+				"registering %v requires a module certificate issued by the core CA for %q", secCaps, info.ID)
+		case len(secCaps) > 0:
+			slog.Warn("dev profile: security capability registered without a verified module certificate",
+				"id", info.ID, "capabilities", secCaps)
+		case pol.Household && pol.RequireModuleCerts:
+			slog.Warn("module registration rejected: no verified module certificate (MUXCORE_REQUIRE_MODULE_CERTS)",
+				"id", info.ID, "profile", profileName)
+			return registry.RegisterOptions{}, status.Errorf(codes.PermissionDenied,
+				"registering %q requires a module certificate issued by the core CA", info.ID)
+		case pol.Household:
+			slog.Warn("module registered without a verified module certificate; "+
+				"this will be rejected when MUXCORE_REQUIRE_MODULE_CERTS is enabled",
+				"id", info.ID, "profile", profileName)
+		}
+	}
+
+	opts := registry.RegisterOptions{}
+	// Rule 5: the verified owner of an ID atomically replaces its own
+	// sidecar registration. In-process modules are never replaced.
+	if verified && m.reg != nil {
+		if existing, err := m.reg.Get(info.ID); err == nil {
+			if _, isSidecar := existing.Module.(*SidecarProxy); isSidecar {
+				opts.Replace = true
+			}
+		}
+	}
+
+	// Rule 4: one provider per security capability.
+	if pol.Household {
+		opts.Exclusive = secCaps
+	} else if m.reg != nil {
+		for _, c := range secCaps {
+			if owner, ok := m.reg.Provider(c); ok && owner.Info.ID != info.ID {
+				slog.Warn("dev profile: second provider of an exclusive security capability; "+
+					"the first-registered provider stays wired",
+					"capability", c, "provider", owner.Info.ID, "ignored", info.ID)
+			}
+		}
+	}
+	return opts, nil
 }
 
 func (s *registrationServer) BootstrapRegister(ctx context.Context, req *modulev1.BootstrapRegisterRequest) (*modulev1.BootstrapRegisterResponse, error) {
@@ -1262,6 +1409,17 @@ func issueBootstrapCert(ca CertIssuer, moduleID string) (certPEM, keyPEM []byte,
 }
 
 func (s *registrationServer) Unregister(ctx context.Context, req *modulev1.UnregisterRequest) (*modulev1.UnregisterResponse, error) {
+	if s.mgr.RegistrationPolicy().Household {
+		// ADR-0018: in household only the module itself (a verified
+		// certificate for its ID) may unregister it.
+		cn, verified := peerid.VerifiedModuleID(ctx)
+		if !verified || cn != req.ModuleId {
+			slog.Warn("module unregistration rejected: caller is not the module",
+				"id", req.ModuleId, "cert_cn", cn, "verified", verified)
+			return nil, status.Errorf(codes.PermissionDenied,
+				"unregistering %q requires a module certificate issued by the core CA for %q", req.ModuleId, req.ModuleId)
+		}
+	}
 	if err := s.mgr.modMgr.Unregister(ctx, req.ModuleId); err != nil {
 		slog.Warn("module unregistration failed", "id", req.ModuleId, "error", err)
 		return &modulev1.UnregisterResponse{Acknowledged: false}, nil

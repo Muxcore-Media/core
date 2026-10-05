@@ -117,11 +117,12 @@ func DialSidecar(moduleID, addr string, sc *grpcmesh.SidecarClientTLS, maxMsgByt
 // Checks in-process modules first (type assertion), then falls back to sidecar
 // modules registered with "call.policy" capability and an HTTPAddr.
 func WireCallPolicy(reg *registry.Registry, meshClient *grpcmesh.Client, storageGrpc *grpcmesh.StorageServer, sc *grpcmesh.SidecarClientTLS, maxMsgBytes int) error {
-	entries := reg.FindByCapability("call.policy")
-	if len(entries) == 0 {
+	// The provider of record (first registered), never an arbitrary one
+	// (ADR-0018).
+	entry, ok := reg.Provider("call.policy")
+	if !ok {
 		return nil
 	}
-	entry := entries[0]
 
 	// In-process module: type assertion.
 	if cp, ok := entry.Module.(contracts.CallPolicyProvider); ok {
@@ -151,11 +152,12 @@ func WireCallPolicy(reg *registry.Registry, meshClient *grpcmesh.Client, storage
 // WirePublishPolicy discovers a PublishPolicyProvider and sets it on the event bus.
 // Checks in-process modules first, then sidecar modules with "publish.policy" capability.
 func WirePublishPolicy(reg *registry.Registry, bus *events.MemoryBus, sc *grpcmesh.SidecarClientTLS, maxMsgBytes int) error {
-	entries := reg.FindByCapability("publish.policy")
-	if len(entries) == 0 {
+	// The provider of record (first registered), never an arbitrary one
+	// (ADR-0018).
+	entry, ok := reg.Provider("publish.policy")
+	if !ok {
 		return nil
 	}
-	entry := entries[0]
 
 	// In-process module: type assertion.
 	if pp, ok := entry.Module.(contracts.PublishPolicyProvider); ok {
@@ -182,11 +184,12 @@ func WirePublishPolicy(reg *registry.Registry, bus *events.MemoryBus, sc *grpcme
 
 // WireAuth discovers AuthProvider, Authorizer, and IdentityProvider from
 // the registry and wires them into the HTTP server and gRPC auth interceptor.
+// For each capability the provider of record (registry.Provider: first
+// registered) is wired, never an arbitrary one (ADR-0018).
 // Handles both in-process modules (type assertion) and sidecar modules (gRPC).
 func WireAuth(reg *registry.Registry, srv *api.Server, authInterceptor *grpcmesh.AuthInterceptor, sc *grpcmesh.SidecarClientTLS, maxMsgBytes int) error {
 	// --- Authorizer ---
-	if entries := reg.FindByCapability(contracts.CapabilityAuthorizer); len(entries) > 0 {
-		entry := entries[0]
+	if entry, ok := reg.Provider(contracts.CapabilityAuthorizer); ok {
 		if az, ok := entry.Module.(contracts.Authorizer); ok {
 			srv.SetAuthorizer(az)
 			authInterceptor.SetAuthorizer(az)
@@ -204,8 +207,7 @@ func WireAuth(reg *registry.Registry, srv *api.Server, authInterceptor *grpcmesh
 	}
 
 	// --- IdentityProvider ---
-	if entries := reg.FindByCapability(contracts.CapabilityIdentity); len(entries) > 0 {
-		entry := entries[0]
+	if entry, ok := reg.Provider(contracts.CapabilityIdentity); ok {
 		if ip, ok := entry.Module.(contracts.IdentityProvider); ok {
 			authInterceptor.SetIdentityProvider(ip)
 			slog.Info("identity provider loaded from registry", "module", entry.Info.ID)
@@ -221,8 +223,7 @@ func WireAuth(reg *registry.Registry, srv *api.Server, authInterceptor *grpcmesh
 	}
 
 	// --- AuthProvider ---
-	if entries := reg.FindByCapability(contracts.CapabilityAuth); len(entries) > 0 {
-		entry := entries[0]
+	if entry, ok := reg.Provider(contracts.CapabilityAuth); ok {
 		var ap contracts.AuthProvider
 		if p, ok := entry.Module.(contracts.AuthProvider); ok {
 			ap = p

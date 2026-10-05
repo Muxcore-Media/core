@@ -120,8 +120,11 @@ sandbox runner is enabled.
 | `MUXCORE_DATA_DIR` | Core data dir (default `./data`); the core CA lives in `<data>/ca` unless `MUXCORE_GRPC_CA_CERT_DIR` is set. An existing CA in the legacy `~/.muxcore/ca` is kept. |
 | `MUXCORE_CA_EXPORT_DIR` | When set, core writes the public `ca.crt` there (0644) for modules and operators. |
 | `MUXCORE_TLS_SERVER_SANS` | Extra DNS names/IPs (comma-separated) for core's auto-issued server certificate (it always has loopback, `localhost`, `muxcore`, `muxcored`, the host name and the gRPC listen host). |
+| `MUXCORE_REQUIRE_MODULE_CERTS` | `true`/`1`, household only (default off): reject every module `Register` without a verified core-CA certificate (ADR-0018 stage 2). Without it, household rejects uncertified registration of security capabilities only and warns for the rest. Ignored (with a warning) in `dev`. |
 
 In `household`, gRPC and HTTP always use TLS; without configured certificate files core creates its CA and issues its own server certificate. Clients may present certificates, verified against the core CA (`VerifyClientCertIfGiven`); `mtls_enabled` keeps `RequireAndVerifyClientCert`. Core's dials to sidecar providers (policy, auth, storage) verify the sidecar certificate against the core CA (+ `MUXCORE_GRPC_MTLS_CA`) and require its CN to equal the registered module ID, and present core's certificate.
+
+Module registration (ADR-0018): a verified certificate may only register its own CN; in `household` the security capabilities (`call.policy`, `publish.policy`, `authorizer`, `identity`, `auth`) need a verified certificate and have exactly one provider (a second is rejected `FailedPrecondition`), and `Unregister` requires a certificate for the module being removed. In `dev` these are warnings, `Unregister` is open, and the first-registered provider stays wired. Core always wires the first-registered provider of each security capability.
 
 ### Marketplace artifact trust
 
@@ -140,7 +143,8 @@ Signature verification is wired on the DeployTag / orphan resurrection / boot sp
 
 | Env | Behavior |
 | --- | -------- |
-| `TENANT_MODE=1` | Request middleware injects `tenant_id`; **per-tenant storage partitions** under `data/tenants/{id}/` for request-media SQLite and userdata-local files (`X-Tenant-ID` / claims; missing → `default`). Default off = single household. |
+| `TENANT_MODE=1` | Request middleware injects `tenant_id`; **per-tenant storage partitions** under `data/tenants/{id}/` for request-media SQLite and userdata-local files. Tenant comes from the authenticated identity (`tenant.WithAuthenticatedTenant`); missing → `default`. Default off = single household. |
+| `TENANT_TRUST_HEADERS=1` | Legacy opt-in: `core/pkg/tenant` honours client-supplied `X-Tenant-ID` / `X-Auth-Claims-Tenant` / `?tenant_id=` (ADR-0019 §3). Off by default — only enable behind a proxy that strips and sets these headers. |
 | `MUXCORE_TENANT_CLUSTER_MAP` | JSON `{"tenant-a":"host:9090"}` — maps tenant_id → remote muxcored gRPC endpoint(s) (comma-separated failover list allowed) |
 | `MUXCORE_TENANT_REGION_MAP` | JSON `{"tenant-a":"us-east"}` — preferred region; placement picks mesh nodes by `region` label before cluster map fallback |
 | `MUXCORE_NODE_REGION` | string | This node's region label (e.g. `us-east`) |

@@ -148,7 +148,7 @@ func main() {
 
 	discoveryGrpc.SetRegistry(reg)
 
-	modMgr, lifecycleMgr := initModuleManager(cfg, reg, bus, auditLogger, grpcSrv, metricsProvider, *watchdogPath, authInterceptor, sec.certAuth, prof.RequireMarketplaceSignatures())
+	modMgr, lifecycleMgr := initModuleManager(cfg, reg, bus, auditLogger, grpcSrv, metricsProvider, *watchdogPath, authInterceptor, sec.certAuth, prof)
 	modMgr.PostRegisterHook = func(moduleID string, caps []string) {
 		_ = bootstrap.WireCallPolicy(reg, meshClient, storageGrpc, sidecar, maxMsgBytes)
 		_ = bootstrap.WirePublishPolicy(reg, bus, sidecar, maxMsgBytes)
