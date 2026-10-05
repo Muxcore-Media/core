@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Module manager: each spawned process is reaped by exactly one owner goroutine; `StopAll` and `RestartModule` wait on an exit channel instead of calling `cmd.Wait` themselves, and a restarted module's replacement process is no longer untracked by the old process's waiter (data races found by `go test -race`).
+- `sdk/go/client`: copylocks vet warning in `storage_put_test.go`.
+
 ### Added
 - Cgroup-aware `GOMAXPROCS` at startup (`pkg/sys`).
 - `backup`, `executor` and `inputvalidate` v1 protos with generated Go code.

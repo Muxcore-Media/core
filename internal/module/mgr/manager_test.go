@@ -947,7 +947,9 @@ func TestStopAll_ClearsMaps(t *testing.T) {
 
 	stopCtx, stopCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer stopCancel()
-	m.StopAll(stopCtx)
+	if err := m.StopAll(stopCtx); err != nil {
+		t.Errorf("StopAll: %v", err)
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1378,7 +1380,58 @@ func TestRestartModule_RespawnsFromBinary(t *testing.T) {
 
 	stopCtx, stopCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer stopCancel()
-	m.StopAll(stopCtx)
+	if err := m.StopAll(stopCtx); err != nil {
+		t.Errorf("StopAll: %v", err)
+	}
+}
+
+// TestRestartModule_RunningProcess restarts a module whose process is alive
+// and owned by watchProcess. RestartModule and StopAll must wait for the
+// owner to reap the process rather than calling exec.Cmd.Wait themselves
+// (a second concurrent Wait is a data race and can block until timeout).
+func TestRestartModule_RunningProcess(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	m := NewManager("addr", nil, nil)
+	m.SetCommandRunner(longRunningRunner{})
+
+	bin := &ModuleBinary{
+		ID:            "restart-running",
+		Version:       "v1.0.0",
+		Path:          "/fake/path",
+		RestartPolicy: RestartAlways,
+	}
+	if err := m.Spawn(ctx, bin); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	m.mu.Lock()
+	oldCmd := m.processes[bin.ID]
+	m.mu.Unlock()
+
+	if err := m.RestartModule(ctx, bin.ID); err != nil {
+		t.Fatalf("RestartModule: %v", err)
+	}
+	m.mu.Lock()
+	newCmd, ok := m.processes[bin.ID]
+	m.mu.Unlock()
+	if !ok || newCmd == oldCmd {
+		t.Fatalf("expected a new tracked process after restart (ok=%v same=%v)", ok, newCmd == oldCmd)
+	}
+	if got := m.SpawnCount(); got != 2 {
+		t.Errorf("SpawnCount=%d want 2", got)
+	}
+
+	stopCtx, stopCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer stopCancel()
+	if err := m.StopAll(stopCtx); err != nil {
+		t.Errorf("StopAll: %v", err)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if n := len(m.exited); n != 0 {
+		t.Errorf("exited channels not drained: %d entries", n)
+	}
 }
 
 func TestReconcileContracts_WithContracts(t *testing.T) {
@@ -1427,7 +1480,9 @@ func TestSpawnWithWatchdog_FallbackWithoutPath(t *testing.T) {
 	}
 	stopCtx, stopCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer stopCancel()
-	m.StopAll(stopCtx)
+	if err := m.StopAll(stopCtx); err != nil {
+		t.Errorf("StopAll: %v", err)
+	}
 }
 
 func TestSpawnWithWatchdog_WithWatchdogBinary(t *testing.T) {
@@ -1454,7 +1509,9 @@ func TestSpawnWithWatchdog_WithWatchdogBinary(t *testing.T) {
 	}
 	stopCtx, stopCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer stopCancel()
-	m.StopAll(stopCtx)
+	if err := m.StopAll(stopCtx); err != nil {
+		t.Errorf("StopAll: %v", err)
+	}
 }
 
 type fileCertIssuer struct {
@@ -1599,7 +1656,9 @@ func TestSpawn_WithCertAuthority(t *testing.T) {
 	}
 	stopCtx, stopCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer stopCancel()
-	m.StopAll(stopCtx)
+	if err := m.StopAll(stopCtx); err != nil {
+		t.Errorf("StopAll: %v", err)
+	}
 }
 
 type stubLifecycleModule struct {
