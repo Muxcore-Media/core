@@ -5,7 +5,15 @@ All notable changes to the MuxCore project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [v0.6.3] — 2026-10-05 — integration harness
+
+### Added
+- `integsupport`: in-process core mesh/events/storage/health harness on a loopback port for umbrella integration tests (`integration/`, `-tags integration`). Test-only: allow-all policies, TLS disabled.
+
+### Removed
+- Legacy retired-origin workflow directory; GitHub Actions is the only CI (ADR-0002, ADR-0003).
+
+## [v0.6.2] — 2026-10-05 — v0.6.x stabilisation (v0.6.0–v0.6.2)
 
 ### Fixed
 - Module manager: each spawned process is reaped by exactly one owner goroutine; `StopAll` and `RestartModule` wait on an exit channel instead of calling `cmd.Wait` themselves, and a restarted module's replacement process is no longer untracked by the old process's waiter (data races found by `go test -race`).
