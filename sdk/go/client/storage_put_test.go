@@ -15,7 +15,7 @@ import (
 
 type capturePutServer struct {
 	storagev1.UnimplementedStorageServiceServer
-	frames []storagev1.PutRequest
+	frames []*storagev1.PutRequest
 }
 
 func (s *capturePutServer) Put(stream storagev1.StorageService_PutServer) error {
@@ -28,7 +28,7 @@ func (s *capturePutServer) Put(stream storagev1.StorageService_PutServer) error 
 		if err != nil {
 			return err
 		}
-		s.frames = append(s.frames, storagev1.PutRequest{
+		s.frames = append(s.frames, &storagev1.PutRequest{
 			Key:       req.GetKey(),
 			TotalSize: req.GetTotalSize(),
 			Chunk:     append([]byte(nil), req.GetChunk()...),
@@ -106,6 +106,6 @@ func TestStoragePut_Empty(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(srv.frames) != 1 || srv.frames[0].Key != "empty" {
-		t.Fatalf("frames=%+v", srv.frames)
+		t.Fatalf("frames=%d", len(srv.frames))
 	}
 }

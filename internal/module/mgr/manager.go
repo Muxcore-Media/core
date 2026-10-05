@@ -124,6 +124,13 @@ type Manager struct {
 	// finishedProcesses caches exit errors for processes that exited before
 	// their proxy registered. Cleared when TrackProxy delivers them.
 	finishedProcesses map[string]error
+	// exited maps each started process to a channel that is closed once the
+	// process has been reaped. exec.Cmd.Wait must be called exactly once, by
+	// the goroutine that owns the process (watchProcess or the watchdog
+	// waiter). StopAll and RestartModule wait on this channel instead of
+	// calling Wait themselves. Never reset by StopAll: owners still need to
+	// signal their waiters after shutdown clears the other maps.
+	exited map[*exec.Cmd]chan struct{}
 	// resolving tracks module IDs that are currently being resolved (git clone +
 	// go build). Prevents duplicate concurrent resolve attempts for the same module.
 	resolving map[string]bool
@@ -189,6 +196,52 @@ func (m *Manager) SpawnCount() int64   { return m.spawnCount.Load() }
 func (m *Manager) RestartCount() int64 { return m.restartCount.Load() }
 func (m *Manager) ResolveCount() int64 { return m.resolveCount.Load() }
 
+// trackExitLocked registers cmd as a started process whose owner goroutine
+// will call Wait. Must be called with m.mu held, after cmd.Start succeeded
+// and before the owner goroutine can observe the exit.
+func (m *Manager) trackExitLocked(cmd *exec.Cmd) {
+	if m.exited == nil {
+		m.exited = make(map[*exec.Cmd]chan struct{})
+	}
+	m.exited[cmd] = make(chan struct{})
+}
+
+// markExitedLocked signals waiters that cmd has been reaped. Must be called
+// with m.mu held, by the goroutine that called cmd.Wait.
+func (m *Manager) markExitedLocked(cmd *exec.Cmd) {
+	if ch, ok := m.exited[cmd]; ok {
+		delete(m.exited, cmd)
+		close(ch)
+	}
+}
+
+// exitedChan returns a channel closed once cmd has been reaped by its owner.
+// For a process that was never started or has already been reaped it
+// returns an already-closed channel.
+func (m *Manager) exitedChan(cmd *exec.Cmd) <-chan struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ch, ok := m.exited[cmd]; ok {
+		return ch
+	}
+	closed := make(chan struct{})
+	close(closed)
+	return closed
+}
+
+// clearProcessLocked removes cmd from the tracking maps for id, but only if
+// the maps still refer to this cmd: a replacement process spawned by
+// RestartModule must not be untracked by the old process's waiter. Must be
+// called with m.mu held.
+func (m *Manager) clearProcessLocked(id string, cmd *exec.Cmd) {
+	if cur, ok := m.processes[id]; ok && cur == cmd {
+		delete(m.processes, id)
+	}
+	if cur, ok := m.pendingProcesses[id]; ok && cur == cmd {
+		delete(m.pendingProcesses, id)
+	}
+}
+
 // NewManager creates a module manager.
 // meshAddr is the gRPC address modules should connect to.
 // reg is the module registry for discovery.
@@ -203,6 +256,7 @@ func NewManager(meshAddr string, reg *registry.Registry, modMgr *modulemgr.Manag
 		proxies:           make(map[string]*SidecarProxy),
 		pendingProcesses:  make(map[string]*exec.Cmd),
 		finishedProcesses: make(map[string]error),
+		exited:            make(map[*exec.Cmd]chan struct{}),
 		binaries:          make(map[string]*ModuleBinary),
 		spawnCancel:       make(map[string]context.CancelFunc),
 		resolving:         make(map[string]bool),
@@ -553,6 +607,7 @@ func (m *Manager) Spawn(ctx context.Context, bin *ModuleBinary) error {
 	m.spawnCancel[bin.ID] = spawnCancel
 
 	m.processes[bin.ID] = cmd
+	m.trackExitLocked(cmd)
 	slog.Info("module spawned", "id", bin.ID, "pid", cmd.Process.Pid)
 
 	// Store in pending — watchProcess owns cmd.Wait() and will notify
@@ -614,6 +669,7 @@ func (m *Manager) SpawnWithWatchdog(ctx context.Context, bin *ModuleBinary, addr
 	}
 
 	m.processes[bin.ID] = cmd
+	m.trackExitLocked(cmd)
 	slog.Info("module spawned via watchdog", "id", bin.ID, "pid", cmd.Process.Pid, "addrs", addrStr)
 
 	// The watchdog manages the module lifecycle, including restarts.
@@ -621,16 +677,17 @@ func (m *Manager) SpawnWithWatchdog(ctx context.Context, bin *ModuleBinary, addr
 	// The module registers via gRPC independently.
 	m.pendingProcesses[bin.ID] = cmd
 
+	// This goroutine is the sole caller of cmd.Wait for the watchdog process.
 	go func() {
 		err := cmd.Wait()
 		m.mu.Lock()
-		delete(m.processes, bin.ID)
-		delete(m.pendingProcesses, bin.ID)
+		m.clearProcessLocked(bin.ID, cmd)
 		if proxy, ok := m.proxies[bin.ID]; ok {
 			proxy.setExit(err)
 		} else {
 			m.finishedProcesses[bin.ID] = err
 		}
+		m.markExitedLocked(cmd)
 		m.mu.Unlock()
 	}()
 
@@ -665,6 +722,7 @@ func (m *Manager) spawnLocked(ctx context.Context, bin *ModuleBinary, addr strin
 	m.spawnCancel[bin.ID] = spawnCancel
 
 	m.processes[bin.ID] = cmd
+	m.trackExitLocked(cmd)
 	slog.Info("module spawned", "id", bin.ID, "pid", cmd.Process.Pid)
 	m.pendingProcesses[bin.ID] = cmd
 
@@ -700,16 +758,19 @@ func (m *Manager) watchProcess(ctx context.Context, cmd *exec.Cmd, bin *ModuleBi
 	}
 
 	for attempt := 0; ; attempt++ {
+		// watchProcess is the sole caller of cmd.Wait for every process it
+		// owns (the initial one and each restart). Other paths wait on the
+		// exited channel signalled below.
 		err := cmd.Wait()
 
 		m.mu.Lock()
-		delete(m.processes, bin.ID)
-		delete(m.pendingProcesses, bin.ID)
+		m.clearProcessLocked(bin.ID, cmd)
 		if proxy, ok := m.proxies[bin.ID]; ok {
 			proxy.setExit(err)
 		} else {
 			m.finishedProcesses[bin.ID] = err
 		}
+		m.markExitedLocked(cmd)
 		m.mu.Unlock()
 
 		if ctx.Err() != nil {
@@ -768,9 +829,14 @@ func (m *Manager) watchProcess(ctx context.Context, cmd *exec.Cmd, bin *ModuleBi
 		m.mu.Lock()
 		if ctx.Err() != nil {
 			m.mu.Unlock()
+			// Cancelled (StopAll/RestartModule) while the replacement was
+			// starting. newCmd was created with ctx, so exec has already
+			// killed it; reap it so it does not linger as a zombie.
+			_ = newCmd.Wait()
 			return
 		}
 		m.processes[bin.ID] = newCmd
+		m.trackExitLocked(newCmd)
 		m.mu.Unlock()
 		slog.Info("module restarted", "id", bin.ID, "pid", newCmd.Process.Pid)
 
@@ -805,18 +871,9 @@ func (m *Manager) RestartModule(ctx context.Context, moduleID string) error {
 		if sigErr := cmd.Process.Signal(os.Interrupt); sigErr != nil {
 			slog.Warn("restart module: signal interrupt failed, process may have exited", "module", moduleID, "error", sigErr)
 		}
-		done := make(chan struct{})
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					slog.Error("restart module wait panic recovered", "module", moduleID, "panic", r)
-				}
-			}()
-			if waitErr := cmd.Wait(); waitErr != nil {
-				slog.Warn("restart module: process exited with error", "module", moduleID, "error", waitErr)
-			}
-			close(done)
-		}()
+		// The process's owner goroutine (watchProcess or the watchdog waiter)
+		// is the only caller of cmd.Wait; wait for it to reap the process.
+		done := m.exitedChan(cmd)
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
@@ -983,17 +1040,17 @@ func (m *Manager) StopAll(ctx context.Context) error {
 		}
 	}
 
+	// Each process's owner goroutine (watchProcess or the watchdog waiter)
+	// is the only caller of cmd.Wait; collect their exit signals instead of
+	// calling Wait here, which would race with the owner.
+	exitChans := make([]<-chan struct{}, 0, len(cmds))
+	for _, cmd := range cmds {
+		exitChans = append(exitChans, m.exitedChan(cmd))
+	}
 	done := make(chan struct{})
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("stop modules wait panic recovered", "panic", r)
-			}
-		}()
-		for _, cmd := range cmds {
-			if waitErr := cmd.Wait(); waitErr != nil {
-				slog.Warn("stop modules: wait failed", "error", waitErr)
-			}
+		for _, ch := range exitChans {
+			<-ch
 		}
 		close(done)
 	}()
