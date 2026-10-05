@@ -1,7 +1,8 @@
 // Package module provides a framework for building MuxCore sidecar modules.
 //
 // The SDK handles the full module lifecycle: connecting to core, registering,
-// handling shutdown signals, and unregistering on exit.
+// re-registering when core restarts, handling shutdown signals, and
+// unregistering on exit.
 //
 // # Basic usage (sidecar module)
 //
@@ -105,11 +106,34 @@ type Config struct {
 	// TLSCAFile is the CA used to verify core's server certificate.
 	// If empty, reads MUXCORE_TLS_CA or --muxcore-tls-ca.
 	TLSCAFile string
+
+	// SupervisionInterval is how often the running module checks that core
+	// still has it registered, re-registering when it does not (for example
+	// after core restarts). Zero means 15s; negative disables supervision.
+	SupervisionInterval time.Duration
 }
 
 // Run starts the module, connects to core, registers, and blocks until
-// SIGTERM/SIGINT. Returns nil on clean shutdown.
+// SIGTERM/SIGINT. Returns nil on clean shutdown. See RunContext.
 func Run(cfg Config) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return RunContext(ctx, cfg)
+}
+
+// RunContext is Run with the shutdown trigger supplied by the caller: it
+// connects to core, registers, initializes and starts the module, then
+// blocks until ctx is done.
+//
+// While running it supervises the registration (Config.SupervisionInterval):
+// when core no longer knows the module — core restarted or was recreated —
+// it re-registers on the same connection (same TLS identity), with
+// exponential backoff on failure.
+//
+// On shutdown it first unregisters from core (best effort, bounded by a
+// short timeout) so a restarted module is not refused as a duplicate, then
+// stops the module.
+func RunContext(ctx context.Context, cfg Config) error {
 	if cfg.Module == nil {
 		return fmt.Errorf("module: Module interface must not be nil")
 	}
@@ -136,7 +160,7 @@ func Run(cfg Config) error {
 	// ADR-0017: obtain (or reuse) the module's mesh identity before talking
 	// to core. No-op in insecure dev mode.
 	if !cfg.Insecure {
-		ids, err := meshid.Ensure(context.Background(), meshid.Config{
+		ids, err := meshid.Ensure(ctx, meshid.Config{
 			ModuleID: moduleID,
 			GRPCAddr: grpcAddr,
 			CertFile: tlsCfg.certFile,
@@ -161,23 +185,14 @@ func Run(cfg Config) error {
 
 	info := cfg.Module.Info()
 	info.ID = moduleID
+	req := registerRequest(info)
 
-	resp, err := reg.Register(context.Background(), &modulev1.RegisterRequest{
-		ModuleId: moduleID,
-		ModuleInfo: &modulev1.ModuleInfo{
-			Id:             info.ID,
-			Name:           info.Name,
-			Version:        info.Version,
-			Roles:          info.Roles,
-			Description:    info.Description,
-			Author:         info.Author,
-			Capabilities:   info.Capabilities,
-			DependsOn:      info.DependsOn,
-			MinCoreVersion: info.MinCoreVersion,
-			HttpAddr:       info.HTTPAddr,
-		},
-	})
+	resp, err := reg.Register(ctx, req)
 	if err != nil {
+		if ctx.Err() != nil {
+			// Shut down mid-call: core may have accepted the registration.
+			unregister(ctx, reg, moduleID)
+		}
 		return fmt.Errorf("module: register RPC: %w", err)
 	}
 	if !resp.GetAccepted() {
@@ -192,31 +207,89 @@ func Run(cfg Config) error {
 	)
 
 	if err := cfg.Module.Init(context.Background()); err != nil {
+		unregister(ctx, reg, moduleID)
 		return fmt.Errorf("module: init: %w", err)
 	}
 	slog.Info("module initialized", "id", moduleID)
 
 	if err := cfg.Module.Start(context.Background()); err != nil {
+		unregister(ctx, reg, moduleID)
 		return fmt.Errorf("module: start: %w", err)
 	}
 	slog.Info("module started", "id", moduleID)
 
-	sig := waitForSignal()
-	slog.Info("module shutting down", "id", moduleID, "signal", sig)
+	supCtx, supCancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	if interval := cfg.supervisionInterval(); interval > 0 {
+		sup := &supervisor{
+			moduleID: moduleID,
+			interval: interval,
+			probe:    healthProbe(conn, moduleID, min(interval, maxProbeTimeout)),
+			register: registerFunc(reg, req, max(interval, maxProbeTimeout)),
+		}
+		wg.Go(func() { sup.run(supCtx) })
+	}
 
-	stopCtx, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
+	parseFlagsOnce()
+	<-ctx.Done()
+	supCancel()
+	wg.Wait()
+	slog.Info("module shutting down", "id", moduleID, "cause", context.Cause(ctx))
+
+	// Unregister first: core stops routing to the module while it stops,
+	// and a container restart is not refused as a duplicate registration.
+	unregister(ctx, reg, moduleID)
+
+	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultShutdownTimeout)
 	defer cancel()
-
 	if err := cfg.Module.Stop(stopCtx); err != nil {
 		slog.Error("module stop error", "id", moduleID, "error", err)
 	}
 
-	if _, err := reg.Unregister(context.Background(), &modulev1.UnregisterRequest{ModuleId: moduleID}); err != nil {
-		slog.Error("module unregister error", "id", moduleID, "error", err)
-	}
-
 	slog.Info("module stopped", "id", moduleID)
 	return nil
+}
+
+func (c Config) supervisionInterval() time.Duration {
+	if c.SupervisionInterval == 0 {
+		return defaultSupervisionInterval
+	}
+	return c.SupervisionInterval
+}
+
+func registerRequest(info contracts.ModuleInfo) *modulev1.RegisterRequest {
+	return &modulev1.RegisterRequest{
+		ModuleId: info.ID,
+		ModuleInfo: &modulev1.ModuleInfo{
+			Id:             info.ID,
+			Name:           info.Name,
+			Version:        info.Version,
+			Roles:          info.Roles,
+			Description:    info.Description,
+			Author:         info.Author,
+			Capabilities:   info.Capabilities,
+			DependsOn:      info.DependsOn,
+			MinCoreVersion: info.MinCoreVersion,
+			HttpAddr:       info.HTTPAddr,
+		},
+	}
+}
+
+// unregister removes the module from core, best effort: failures are logged
+// and the wait is bounded by unregisterTimeout.
+// It runs during shutdown, so it ignores ctx's cancellation.
+func unregister(ctx context.Context, reg modulev1.ModuleRegistrationClient, moduleID string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unregisterTimeout)
+	defer cancel()
+	resp, err := reg.Unregister(ctx, &modulev1.UnregisterRequest{ModuleId: moduleID})
+	switch {
+	case err != nil:
+		slog.Warn("module unregister from core failed", "id", moduleID, "error", err)
+	case !resp.GetAcknowledged():
+		slog.Warn("module unregister not acknowledged by core", "id", moduleID)
+	default:
+		slog.Info("module unregistered from core", "id", moduleID)
+	}
 }
 
 // ConnectConfig configures a client-only connection to core.
@@ -307,14 +380,18 @@ func loadClientTLS(certFile, keyFile, caFile string) (credentials.TransportCrede
 func waitForSignal() os.Signal {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	parseFlagsOnce()
+	return <-sigCh
+}
+
+// parseFlagsOnce ensures flag.Parse has been called so Lookup works for
+// registered flags.
+func parseFlagsOnce() {
 	once.Do(func() {
-		// Ensure flag.Parse has been called so Lookup works for registered flags.
-		// Safe to call multiple times; subsequent calls are no-ops.
 		if !flag.Parsed() {
 			flag.Parse()
 		}
 	})
-	return <-sigCh
 }
 
 var once sync.Once

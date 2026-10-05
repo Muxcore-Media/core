@@ -21,6 +21,10 @@ type SidecarProxy struct {
 	info    contracts.ModuleInfo
 	exitErr error
 	exitMu  sync.RWMutex
+	// verified records that the registration presented a verified module
+	// certificate for info.ID. A dev-profile unverified re-registration may
+	// replace only an entry that was itself registered unverified.
+	verified bool
 }
 
 // NewSidecarProxy creates a registry-compatible proxy for a sidecar module.
