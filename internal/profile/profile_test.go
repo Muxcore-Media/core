@@ -83,3 +83,38 @@ func TestDataDirAndExport(t *testing.T) {
 		t.Fatal("CAExportDir trim")
 	}
 }
+
+func TestRequireModuleCerts(t *testing.T) {
+	tests := []struct {
+		name   string
+		env    map[string]string
+		reject bool
+		warn   bool
+	}{
+		{name: "household default stage 1", env: map[string]string{EnvProfile: "household"}},
+		{name: "household stage 2 true", env: map[string]string{EnvProfile: "household", EnvRequireModuleCerts: "true"}, reject: true},
+		{name: "household stage 2 one", env: map[string]string{EnvRequireModuleCerts: "1"}, reject: true},
+		{name: "household false", env: map[string]string{EnvProfile: "household", EnvRequireModuleCerts: "false"}},
+		{name: "dev ignores flag", env: map[string]string{EnvProfile: "dev", EnvRequireModuleCerts: "true"}, warn: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, err := Resolve(envMap(tt.env))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.RejectUncertifiedModules() != tt.reject {
+				t.Fatalf("RejectUncertifiedModules = %v, want %v", r.RejectUncertifiedModules(), tt.reject)
+			}
+			gotWarn := false
+			for _, w := range r.Warnings {
+				if strings.Contains(w, EnvRequireModuleCerts) {
+					gotWarn = true
+				}
+			}
+			if gotWarn != tt.warn {
+				t.Fatalf("warnings %v, want %s warning = %v", r.Warnings, EnvRequireModuleCerts, tt.warn)
+			}
+		})
+	}
+}

@@ -43,6 +43,10 @@ const (
 	EnvDataDir        = "MUXCORE_DATA_DIR"
 	EnvCAExportDir    = "MUXCORE_CA_EXPORT_DIR"
 	EnvDBBackend      = "MUXCORE_DB_BACKEND"
+	// EnvRequireModuleCerts turns on ADR-0018 stage 2 in the household
+	// profile: Register without a verified module certificate is rejected
+	// for every capability, not only security capabilities. Default false.
+	EnvRequireModuleCerts = "MUXCORE_REQUIRE_MODULE_CERTS"
 )
 
 // DefaultDataDir is the data directory used when MUXCORE_DATA_DIR is unset,
@@ -76,6 +80,17 @@ type Resolved struct {
 	// or the deprecated MUXCORE_DEV_TLS_SKIP) is set. Never true for
 	// household: Resolve returns an error instead.
 	Insecure bool
+	// RequireModuleCerts reports MUXCORE_REQUIRE_MODULE_CERTS=true|1. It only
+	// takes effect in household (see RejectUncertifiedModules).
+	RequireModuleCerts bool
+}
+
+// RejectUncertifiedModules reports whether module registration without a
+// verified certificate is rejected for every capability (ADR-0018 stage 2):
+// household with MUXCORE_REQUIRE_MODULE_CERTS set. Security capabilities
+// are rejected without a certificate in household regardless.
+func (r Resolved) RejectUncertifiedModules() bool {
+	return r.Name == Household && r.RequireModuleCerts
 }
 
 // IsDev reports whether the profile is dev.
@@ -112,7 +127,8 @@ func insecureFlag(getenv func(string) string) (bool, string) {
 func Resolve(getenv func(string) string) (Resolved, error) {
 	raw := strings.TrimSpace(getenv(EnvProfile))
 	insecure, insecureVar := insecureFlag(getenv)
-	r := Resolved{Raw: raw, Insecure: insecure}
+	rc := strings.TrimSpace(getenv(EnvRequireModuleCerts))
+	r := Resolved{Raw: raw, Insecure: insecure, RequireModuleCerts: rc == "true" || rc == "1"}
 
 	switch strings.ToLower(raw) {
 	case "dev":
@@ -137,6 +153,10 @@ func Resolve(getenv func(string) string) (Resolved, error) {
 		return r, fmt.Errorf("%w: %s is set but the profile is household (%s) — "+
 			"unset %s, or set %s=dev for a development install",
 			ErrInsecureInHousehold, insecureVar, r.Source, insecureVar, EnvProfile)
+	}
+	if r.Name == Dev && r.RequireModuleCerts {
+		r.Warnings = append(r.Warnings, fmt.Sprintf(
+			"%s is set but has no effect in the dev profile", EnvRequireModuleCerts))
 	}
 	return r, nil
 }

@@ -237,12 +237,15 @@ func TestInitStorageAndHTTPAndAuditAndModuleMgr(t *testing.T) {
 
 	grpcSrv := grpc.NewServer()
 	auth := grpcmesh.NewAuthInterceptor()
-	modMgr, lifeMgr := initModuleManager(cfg, reg, bus, auditLogger, grpcSrv, metrics, "/bin/false", auth, nil, true)
+	modMgr, lifeMgr := initModuleManager(cfg, reg, bus, auditLogger, grpcSrv, metrics, "/bin/false", auth, nil, profile.Resolved{Name: profile.Household})
 	if modMgr == nil || lifeMgr == nil {
 		t.Fatal("initModuleManager")
 	}
 	if !modMgr.RequireMarketplaceSignatures() {
 		t.Fatal("expected marketplace signatures required")
+	}
+	if !modMgr.RegistrationPolicy().Household {
+		t.Fatal("expected household registration policy")
 	}
 	if metrics.ModuleSpawnCount == nil || metrics.ModuleRestartCount == nil || metrics.ModuleResolveCount == nil {
 		t.Fatal("expected metrics hooks from module manager")

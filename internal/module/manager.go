@@ -49,6 +49,14 @@ func (m *Manager) SetAuditLogger(a contracts.AuditLogger) {
 }
 
 func (m *Manager) Register(ctx context.Context, mod contracts.Module, deps []string) error {
+	_, err := m.RegisterWith(ctx, mod, deps, registry.RegisterOptions{})
+	return err
+}
+
+// RegisterWith is Register with registry options (atomic replace of the same
+// ID, exclusive capabilities). It reports whether an existing entry was
+// replaced.
+func (m *Manager) RegisterWith(ctx context.Context, mod contracts.Module, deps []string, opts registry.RegisterOptions) (bool, error) {
 	info := mod.Info()
 
 	// Check core version compatibility before registration.
@@ -59,16 +67,21 @@ func (m *Manager) Register(ctx context.Context, mod contracts.Module, deps []str
 			"core_version", version.String(),
 			"error", err,
 		)
-		return err
+		return false, err
 	}
 
-	if err := m.registry.Register(mod, deps); err != nil {
-		return err
+	replaced, err := m.registry.RegisterWith(mod, deps, opts)
+	if err != nil {
+		return false, err
 	}
 
-	m.auditLifecycle(ctx, "module.register", info.ID, map[string]string{"version": info.Version})
+	details := map[string]string{"version": info.Version}
+	if replaced {
+		details["replaced"] = "true"
+	}
+	m.auditLifecycle(ctx, "module.register", info.ID, details)
 	m.publishModuleRegistered(ctx, info)
-	return nil
+	return replaced, nil
 }
 
 func (m *Manager) Unregister(ctx context.Context, id string) error {

@@ -9,6 +9,7 @@ import (
 
 func TestMiddlewareInjectsTenant(t *testing.T) {
 	t.Setenv("TENANT_MODE", "1")
+	t.Setenv(EnvTrustHeaders, "1")
 	var got string
 	h := Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = IDFrom(r.Context())
@@ -58,9 +59,14 @@ func TestFromClaimsAndScopeKey(t *testing.T) {
 		t.Fatal("ResolveFromRequest default")
 	}
 	r.Header.Set("X-Tenant-ID", "t9")
+	if ResolveFromRequest(r) != "default" {
+		t.Fatal("ResolveFromRequest must ignore X-Tenant-ID without TENANT_TRUST_HEADERS")
+	}
+	t.Setenv(EnvTrustHeaders, "1")
 	if ResolveFromRequest(r) != "t9" {
 		t.Fatal("ResolveFromRequest header")
 	}
+	t.Setenv(EnvTrustHeaders, "")
 	t.Setenv("TENANT_MODE", "")
 	if ScopeKey("t1", "u1") != "u1" {
 		t.Fatal("single-tenant should ignore tenant in key")
@@ -117,5 +123,87 @@ func TestGuardCrossTenant(t *testing.T) {
 	}
 	if !HasAdminRole([]string{"Admin"}) || HasAdminRole([]string{"user"}) {
 		t.Fatal("HasAdminRole")
+	}
+}
+
+func middlewareTenant(t *testing.T, ctx context.Context, headers map[string]string) string {
+	t.Helper()
+	var got string
+	h := Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = IDFrom(r.Context())
+	}))
+	r := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
+	for k, v := range headers {
+		r.Header.Set(k, v)
+	}
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	return got
+}
+
+// ADR-0019 §3: client tenant headers are ignored unless TENANT_TRUST_HEADERS=1.
+func TestMiddlewareIgnoresUntrustedHeaders(t *testing.T) {
+	t.Setenv("TENANT_MODE", "1")
+	t.Setenv(EnvTrustHeaders, "")
+	bg := context.Background()
+	for _, hdr := range []string{"X-Tenant-ID", "X-Auth-Claims-Tenant"} {
+		if got := middlewareTenant(t, bg, map[string]string{hdr: "evil"}); got != "default" {
+			t.Fatalf("%s honoured without opt-in: %q", hdr, got)
+		}
+	}
+	t.Setenv(EnvTrustHeaders, "true") // only "1" opts in
+	if got := middlewareTenant(t, bg, map[string]string{"X-Tenant-ID": "evil"}); got != "default" {
+		t.Fatalf("TENANT_TRUST_HEADERS=true must not opt in: %q", got)
+	}
+	t.Setenv(EnvTrustHeaders, "1")
+	if got := middlewareTenant(t, bg, map[string]string{"X-Auth-Claims-Tenant": "claims"}); got != "claims" {
+		t.Fatalf("claims header with opt-in: %q", got)
+	}
+}
+
+func TestAuthenticatedTenantWins(t *testing.T) {
+	t.Setenv("TENANT_MODE", "1")
+	ctx := WithAuthenticatedTenant(context.Background(), " acme ")
+	if id, ok := AuthenticatedTenantFrom(ctx); !ok || id != "acme" {
+		t.Fatalf("AuthenticatedTenantFrom = %q, %v", id, ok)
+	}
+	if IDFrom(ctx) != "acme" {
+		t.Fatalf("IDFrom = %q", IDFrom(ctx))
+	}
+	if _, ok := AuthenticatedTenantFrom(context.Background()); ok {
+		t.Fatal("no authenticated tenant expected")
+	}
+	if WithAuthenticatedTenant(context.Background(), "  ") != context.Background() {
+		t.Fatal("empty tenant must leave ctx unchanged")
+	}
+
+	for _, trust := range []string{"", "1"} {
+		t.Setenv(EnvTrustHeaders, trust)
+		if got := middlewareTenant(t, ctx, map[string]string{"X-Tenant-ID": "evil"}); got != "acme" {
+			t.Fatalf("trust=%q: middleware tenant %q, want authenticated acme", trust, got)
+		}
+		r := httptest.NewRequest(http.MethodGet, "/?tenant_id=evil", nil).WithContext(ctx)
+		r.Header.Set("X-Tenant-ID", "evil")
+		if got := ResolveFromRequest(r); got != "acme" {
+			t.Fatalf("trust=%q: ResolveFromRequest %q, want acme", trust, got)
+		}
+	}
+}
+
+func TestResolveFromRequestQueryNeedsOptIn(t *testing.T) {
+	t.Setenv("TENANT_MODE", "1")
+	t.Setenv(EnvTrustHeaders, "")
+	r := httptest.NewRequest(http.MethodGet, "/?tenant_id=q1", nil)
+	if got := ResolveFromRequest(r); got != "default" {
+		t.Fatalf("query tenant honoured without opt-in: %q", got)
+	}
+	t.Setenv(EnvTrustHeaders, "1")
+	if got := ResolveFromRequest(r); got != "q1" {
+		t.Fatalf("query tenant with opt-in: %q", got)
+	}
+	// A tenant already on the context (WithID) is used without opt-in.
+	t.Setenv(EnvTrustHeaders, "")
+	r = r.WithContext(WithID(context.Background(), "ctx1"))
+	if got := ResolveFromRequest(r); got != "ctx1" {
+		t.Fatalf("context tenant: %q", got)
 	}
 }

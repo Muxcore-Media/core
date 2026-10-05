@@ -398,7 +398,7 @@ func initAudit(cfg *config.Config, bus *events.MemoryBus, store *storage.Orchest
 	return auditLogger
 }
 
-func initModuleManager(cfg *config.Config, reg *registry.Registry, bus *events.MemoryBus, auditLogger *audit.FileLogger, grpcSrv *grpc.Server, metricsProvider *api.MetricsProvider, watchdogPath string, authInterceptor *grpcmesh.AuthInterceptor, certAuth *grpcmesh.CertAuthority, requireMarketplaceSigs bool) (*modulemgr.Manager, *modlifecycle.Manager) {
+func initModuleManager(cfg *config.Config, reg *registry.Registry, bus *events.MemoryBus, auditLogger *audit.FileLogger, grpcSrv *grpc.Server, metricsProvider *api.MetricsProvider, watchdogPath string, authInterceptor *grpcmesh.AuthInterceptor, certAuth *grpcmesh.CertAuthority, prof profile.Resolved) (*modulemgr.Manager, *modlifecycle.Manager) {
 	lifecycleMgr := modlifecycle.NewManager(reg, bus)
 	lifecycleMgr.SetAuditLogger(auditLogger)
 	modMgr := modulemgr.NewManager(cfg.GRPC.Addr, reg, lifecycleMgr)
@@ -425,10 +425,20 @@ func initModuleManager(cfg *config.Config, reg *registry.Registry, bus *events.M
 	// FR-EXT-003 / ADR-0016: household requires signatures for marketplace
 	// DeployTag and orphan resurrection; boot-time curated tags stay
 	// checksum-anchored (ADR-0012).
+	requireMarketplaceSigs := prof.RequireMarketplaceSignatures()
 	modMgr.SetRequireMarketplaceSignatures(requireMarketplaceSigs)
 	if requireMarketplaceSigs {
 		slog.Info("marketplace deploys and orphan resurrection require module signatures (household profile)")
 	}
+
+	// ADR-0018: authenticated registration rules follow the profile.
+	modMgr.SetRegistrationPolicy(modulemgr.RegistrationPolicy{
+		Household:          prof.IsHousehold(),
+		RequireModuleCerts: prof.RejectUncertifiedModules(),
+	})
+	slog.Info("module registration policy",
+		"profile", string(prof.Name),
+		"require_module_certs", prof.RejectUncertifiedModules())
 
 	if err := modMgr.PruneCache(3); err != nil {
 		slog.Warn("module cache prune failed", "error", err)
