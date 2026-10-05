@@ -203,7 +203,28 @@ Module binaries are cached at `~/.muxcore/modules/<id>/<version>/muxcore-module`
 
 ## Prometheus Metrics
 
-Enable the `/metrics` endpoint with `MUXCORE_METRICS_ENABLE=true`.
+Enable metrics with `MUXCORE_METRICS_ENABLE=true`. They are served on a dedicated
+listener, `MUXCORE_METRICS_ADDR` (default `127.0.0.1:9464`, path `/metrics`), not on the API port.
+A non-loopback address requires a bearer token (`MUXCORE_METRICS_TOKEN` or
+`MUXCORE_METRICS_TOKEN_FILE`); without one core refuses to start. A configured token is enforced
+on loopback too. The listener is plain HTTP, so put TLS in front of it when it is not on loopback.
+
+```yaml
+# Prometheus scrape config for a non-loopback metrics listener
+scrape_configs:
+  - job_name: muxcore
+    authorization:
+      credentials_file: /etc/prometheus/muxcore-metrics.token
+    static_configs:
+      - targets: ["core-host:9464"]
+```
+
+### Audit log signing
+
+The audit log is hash-chained. Set `MUXCORE_AUDIT_HMAC_KEY_FILE` (or `MUXCORE_AUDIT_HMAC_KEY`, or
+`audit.hmac_key_file` in the config) to also sign every entry with HMAC-SHA256 over the previous
+hash and the entry. A configured but missing or empty key file aborts startup; keep the file mode
+`0600`.
 
 | Metric | Type | Description |
 |--------|------|-------------|

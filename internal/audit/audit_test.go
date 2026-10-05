@@ -2,6 +2,7 @@ package audit
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -558,5 +559,132 @@ func TestFileLogger_Export_InvalidFormat(t *testing.T) {
 	_, err := fl.Export(context.Background(), "xml")
 	if err == nil {
 		t.Error("expected error for unsupported export format")
+	}
+}
+
+// --- HMAC chain verification (NFR-OPS-004) ---
+
+func readEntries(t *testing.T, path string) []contracts.AuditEntry {
+	t.Helper()
+	data, err := os.ReadFile(path) //nolint:gosec // test file
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []contracts.AuditEntry
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+		var e contracts.AuditEntry
+		if err := json.Unmarshal(line, &e); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+func writeSigned(t *testing.T, key []byte, n int) (string, *FileLogger) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	fl, err := NewFileLogger(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fl.Close() })
+	if key != nil {
+		fl.SetSigningKey(key)
+	}
+	for i := 0; i < n; i++ {
+		if err := fl.Log(context.Background(), entry(fmt.Sprintf("e%d", i), "u", "a", "r")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return path, fl
+}
+
+func TestVerifyEntries_ChainAndHMACOK(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	path, fl := writeSigned(t, key, 5)
+	entries := readEntries(t, path)
+	if idx, err := VerifyEntries(entries, key); err != nil || idx != -1 {
+		t.Fatalf("VerifyEntries = %d, %v; want -1, nil", idx, err)
+	}
+	res, err := fl.VerifyAll(context.Background())
+	if err != nil || !res.Valid || res.TotalEntries != 5 {
+		t.Fatalf("VerifyAll = %+v, %v", res, err)
+	}
+}
+
+func TestVerifyEntries_TamperedEntry(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	path, fl := writeSigned(t, key, 5)
+	entries := readEntries(t, path)
+	entries[2].Action = "tampered"
+	if idx, _ := VerifyEntries(entries, key); idx != 2 {
+		t.Fatalf("first broken = %d, want 2", idx)
+	}
+	// Also detectable from the file with the key configured.
+	lines, _ := os.ReadFile(path) //nolint:gosec // test file
+	lines = bytes.Replace(lines, []byte(`"e2"`), []byte(`"eX"`), 1)
+	if err := os.WriteFile(path, lines, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := fl.VerifyAll(context.Background())
+	if err != nil || res.Valid {
+		t.Fatalf("VerifyAll on tampered file = %+v, %v; want invalid", res, err)
+	}
+}
+
+func TestVerifyEntries_TamperedWithoutKeyStillChainBroken(t *testing.T) {
+	path, _ := writeSigned(t, nil, 4)
+	entries := readEntries(t, path)
+	entries[1].Resource = "evil"
+	if idx, _ := VerifyEntries(entries, nil); idx != 2 {
+		t.Fatalf("first broken = %d, want 2 (successor link)", idx)
+	}
+}
+
+func TestVerifyEntries_WrongKey(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	path, _ := writeSigned(t, key, 3)
+	entries := readEntries(t, path)
+	if idx, _ := VerifyEntries(entries, []byte("wrong-key-wrong-key-wrong-key-xx")); idx != 0 {
+		t.Fatalf("first broken = %d, want 0", idx)
+	}
+}
+
+func TestVerifyEntries_StrippedSignature(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	path, _ := writeSigned(t, key, 3)
+	entries := readEntries(t, path)
+	entries[1].Signature = ""
+	if idx, _ := VerifyEntries(entries, key); idx != 1 {
+		t.Fatalf("first broken = %d, want 1", idx)
+	}
+}
+
+func TestVerifyEntries_NoKeyUnchanged(t *testing.T) {
+	path, fl := writeSigned(t, nil, 4)
+	entries := readEntries(t, path)
+	for _, e := range entries {
+		if e.Signature != "" {
+			t.Fatal("unexpected signature without key")
+		}
+	}
+	if idx, err := VerifyEntries(entries, nil); err != nil || idx != -1 {
+		t.Fatalf("VerifyEntries = %d, %v", idx, err)
+	}
+	res, err := fl.VerifyAll(context.Background())
+	if err != nil || !res.Valid {
+		t.Fatalf("VerifyAll = %+v, %v", res, err)
+	}
+	if res, _ := fl.VerifyChainIntegrity(context.Background(), time.Time{}, time.Time{}); !res.Valid {
+		t.Fatal("VerifyChainIntegrity invalid")
+	}
+}
+
+func TestVerifyChainIntegrity_SignedInMemory(t *testing.T) {
+	_, fl := writeSigned(t, []byte("0123456789abcdef0123456789abcdef"), 4)
+	res, err := fl.VerifyChainIntegrity(context.Background(), time.Time{}, time.Time{})
+	if err != nil || !res.Valid {
+		t.Fatalf("VerifyChainIntegrity = %+v, %v", res, err)
 	}
 }

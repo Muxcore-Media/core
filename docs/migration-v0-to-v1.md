@@ -78,7 +78,7 @@ See `muxcore.json` for spool-based deployment configuration and
 
 **Old:** HTTP API had no access control (other than /health and /version).
 
-**New:** All HTTP endpoints (except /health, /version, /metrics) require a
+**New:** All HTTP endpoints (except /health and /version; metrics have their own listener) require a
 valid session token in the `Authorization: Bearer <token>` header. Permissions
 are enforced via RBAC using the `auth-local` module.
 
@@ -166,8 +166,10 @@ Core's `StorageOrchestrator` auto-discovers providers registered with the
 **Migration:**
 ```bash
 export MUXCORE_METRICS_ENABLE=true
-# Metrics available at http://<addr>/metrics
+# Metrics available at http://127.0.0.1:9464/metrics (MUXCORE_METRICS_ADDR);
+# a non-loopback address also needs MUXCORE_METRICS_TOKEN (bearer).
 ```
+Since core v0.6.8 metrics are no longer served on the API port.
 
 ### 10. Audit Logging
 

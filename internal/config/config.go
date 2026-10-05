@@ -189,6 +189,11 @@ type AuditConfig struct {
 	Path            string `json:"path"`              // file path for JSONL audit log; empty = disabled
 	MaxSizeMB       int    `json:"max_size_mb"`       // rotate when file exceeds this size (default: 100 MB)
 	MaxRotatedFiles int    `json:"max_rotated_files"` // number of rotated files to keep (default: 5)
+	// HMACKeyFile is a file holding the HMAC-SHA256 signing key for audit
+	// entries (see ResolveAuditHMACKey). Empty = chain-only, no HMAC. The
+	// key itself is only accepted via MUXCORE_AUDIT_HMAC_KEY / _FILE or this
+	// file path, never inline in the JSON config.
+	HMACKeyFile string `json:"hmac_key_file"`
 }
 
 const configSchemaVersion = "1"

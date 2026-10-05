@@ -157,6 +157,55 @@ func (fl *FileLogger) stopSyncLoop() {
 	}
 }
 
+// computeSignature returns the hex HMAC-SHA256 of (prevHash || canonData) under
+// key. canonData is the entry marshalled with PrevEntryHash and Signature
+// cleared. Binding prevHash into the MAC means the signature also authenticates
+// the entry's position in the chain.
+func computeSignature(key []byte, prevHash string, canonData []byte) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(prevHash))
+	mac.Write(canonData)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// canonicalBytes marshals e with the chain/signature fields cleared. These are
+// the bytes that are hashed for the chain and covered by the HMAC.
+func canonicalBytes(e contracts.AuditEntry) ([]byte, error) {
+	e.PrevEntryHash = ""
+	e.Signature = ""
+	return json.Marshal(e)
+}
+
+// VerifyEntries checks an ordered slice of audit entries. It verifies that each
+// entry's PrevEntryHash equals the SHA-256 of the previous entry's canonical
+// bytes and, when key is non-empty, that every entry carries a valid HMAC
+// signature (a missing signature counts as broken). The first entry's
+// PrevEntryHash is not checked against anything (the chain may start after a
+// rotation or reset) but is authenticated by its HMAC when a key is given.
+// It returns the index of the first broken entry, or -1 if all entries verify.
+// The key is never logged or included in errors.
+func VerifyEntries(entries []contracts.AuditEntry, key []byte) (int, error) {
+	var prevHash string
+	for i, e := range entries {
+		canon, err := canonicalBytes(e)
+		if err != nil {
+			return i, fmt.Errorf("audit: verify entry %d: marshal: %w", i, err)
+		}
+		if i > 0 && e.PrevEntryHash != prevHash {
+			return i, nil
+		}
+		if len(key) > 0 {
+			want := computeSignature(key, e.PrevEntryHash, canon)
+			if !hmac.Equal([]byte(e.Signature), []byte(want)) {
+				return i, nil
+			}
+		}
+		sum := sha256.Sum256(canon)
+		prevHash = hex.EncodeToString(sum[:])
+	}
+	return -1, nil
+}
+
 // SetSigningKey configures an optional HMAC-SHA256 signing key for audit entries.
 // When set, every Log() call produces an HMAC signature in the entry's Signature field.
 // Pass nil to disable signing. The key is copied internally; the caller should
@@ -225,9 +274,7 @@ func (fl *FileLogger) Log(ctx context.Context, entry contracts.AuditEntry) error
 
 	// Sign if a signing key is configured.
 	if fl.signingKey != nil {
-		mac := hmac.New(sha256.New, fl.signingKey)
-		mac.Write(canonData)
-		entry.Signature = hex.EncodeToString(mac.Sum(nil))
+		entry.Signature = computeSignature(fl.signingKey, entry.PrevEntryHash, canonData)
 		// Re-marshal with the signature included for the on-disk record.
 		diskData, err = json.Marshal(entry)
 		if err != nil {
@@ -457,7 +504,7 @@ func (fl *FileLogger) VerifyAll(ctx context.Context) (contracts.ChainVerificatio
 			}
 
 			// Check PrevEntryHash links to previous entry.
-			if entry.PrevEntryHash != "" && entry.PrevEntryHash != prevHash {
+			if (entry.PrevEntryHash != "" || (len(signingKey) > 0 && result.TotalEntries > 0)) && entry.PrevEntryHash != prevHash {
 				result.Valid = false
 				result.BrokenLinks = append(result.BrokenLinks, entry.ID)
 				if result.FirstBrokenAt.IsZero() {
@@ -465,20 +512,18 @@ func (fl *FileLogger) VerifyAll(ctx context.Context) (contracts.ChainVerificatio
 				}
 			}
 
-			// Verify HMAC signature if signing key is configured.
-			if signingKey != nil && entry.Signature != "" {
-				entryCopy := entry
-				entryCopy.PrevEntryHash = ""
-				entryCopy.Signature = ""
-				canonData, err := json.Marshal(entryCopy)
-				if err != nil {
-					_ = f.Close()
-					return result, fmt.Errorf("audit: verify %s:%d: marshal for signature: %w", p, lineNo+1, err)
-				}
-				mac := hmac.New(sha256.New, signingKey)
-				mac.Write(canonData)
-				expectedSig := hex.EncodeToString(mac.Sum(nil))
-				if entry.Signature != expectedSig {
+			canonData, err := canonicalBytes(entry)
+			if err != nil {
+				_ = f.Close()
+				return result, fmt.Errorf("audit: verify %s:%d: marshal canonical: %w", p, lineNo+1, err)
+			}
+
+			// With a key configured the signature is mandatory and also
+			// authenticates PrevEntryHash, so a stripped or altered
+			// signature is reported as broken.
+			if len(signingKey) > 0 {
+				want := computeSignature(signingKey, entry.PrevEntryHash, canonData)
+				if !hmac.Equal([]byte(entry.Signature), []byte(want)) {
 					result.Valid = false
 					result.BrokenLinks = append(result.BrokenLinks, entry.ID)
 					if result.FirstBrokenAt.IsZero() {
@@ -488,13 +533,6 @@ func (fl *FileLogger) VerifyAll(ctx context.Context) (contracts.ChainVerificatio
 			}
 
 			// Compute this entry's hash for the chain.
-			entryCopy := entry
-			entryCopy.PrevEntryHash = ""
-			canonData, err := json.Marshal(entryCopy)
-			if err != nil {
-				_ = f.Close()
-				return result, fmt.Errorf("audit: verify %s:%d: marshal for hash: %w", p, lineNo+1, err)
-			}
 			h.Reset()
 			h.Write(canonData)
 			prevHash = hex.EncodeToString(h.Sum(nil))
@@ -581,9 +619,7 @@ func (fl *FileLogger) verifyChain(entries []contracts.AuditEntry, from, to time.
 		prev := inRange[i-1]
 		curr := inRange[i]
 
-		prevCopy := prev
-		prevCopy.PrevEntryHash = ""
-		data, err := json.Marshal(prevCopy)
+		data, err := canonicalBytes(prev)
 		if err != nil {
 			result.Valid = false
 			result.BrokenLinks = append(result.BrokenLinks, curr.ID)

@@ -5,6 +5,12 @@ All notable changes to the MuxCore project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.8] — 2026-10-05 — audit HMAC, metrics listener
+
+### Security
+- Audit log HMAC is now wired (NFR-OPS-004): set `MUXCORE_AUDIT_HMAC_KEY` or `MUXCORE_AUDIT_HMAC_KEY_FILE` (or `audit.hmac_key_file`) and each entry carries an HMAC-SHA256 over (previous hash || canonical entry bytes). `audit.VerifyEntries` / `VerifyAll` report the first broken entry; with a key a missing or wrong signature counts as broken. A configured but unreadable/empty key file aborts startup; a world-accessible key file only warns. Without a key behaviour is unchanged (hash chain only). Also fixes chain verification of signed entries (the signature was included in the verified hash).
+- `/metrics` (NFR-SEC-011) is now served on its own listener, default `127.0.0.1:9464` (`MUXCORE_METRICS_ADDR`), no longer on the main API port and no longer an unauthenticated public path. Binding a non-loopback address requires a bearer token (`MUXCORE_METRICS_TOKEN` / `MUXCORE_METRICS_TOKEN_FILE`, constant-time compare) or core refuses to start. **Breaking for scrapers** that used `<api-addr>/metrics`.
+
 ## [sdk/go/module v0.6.1] — 2026-10-05 — upgrade-test helpers
 
 ### Added

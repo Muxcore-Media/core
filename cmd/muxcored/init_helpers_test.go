@@ -130,18 +130,18 @@ type stubEncModule struct {
 	available bool
 }
 
-func (m *stubEncModule) Info() contracts.ModuleInfo     { return m.info }
-func (m *stubEncModule) Init(context.Context) error     { return nil }
-func (m *stubEncModule) Start(context.Context) error    { return nil }
-func (m *stubEncModule) Stop(context.Context) error     { return nil }
-func (m *stubEncModule) Health(context.Context) error   { return nil }
+func (m *stubEncModule) Info() contracts.ModuleInfo   { return m.info }
+func (m *stubEncModule) Init(context.Context) error   { return nil }
+func (m *stubEncModule) Start(context.Context) error  { return nil }
+func (m *stubEncModule) Stop(context.Context) error   { return nil }
+func (m *stubEncModule) Health(context.Context) error { return nil }
 func (m *stubEncModule) Encrypt(ctx context.Context, plaintext []byte) ([]byte, error) {
 	return plaintext, nil
 }
 func (m *stubEncModule) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error) {
 	return ciphertext, nil
 }
-func (m *stubEncModule) Available() bool                  { return m.available }
+func (m *stubEncModule) Available() bool                     { return m.available }
 func (m *stubEncModule) RotateKey(ctx context.Context) error { return nil }
 
 func TestWarnEncryptionProviders_Available(t *testing.T) {
@@ -202,6 +202,7 @@ func TestInitStorageAndHTTPAndAuditAndModuleMgr(t *testing.T) {
 	bus := events.NewMemoryBus()
 	t.Setenv("MUXCORE_STORAGE_DIR", filepath.Join(t.TempDir(), "storage"))
 	t.Setenv("MUXCORE_METRICS_ENABLE", "true")
+	t.Setenv("MUXCORE_METRICS_ADDR", "127.0.0.1:0")
 	t.Setenv("MUXCORE_DEBUG_ENABLE", "1")
 
 	store, watchCancel := initStorage(ctx, cfg, reg, bus, nil, 0)
