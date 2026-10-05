@@ -1,17 +1,17 @@
 module github.com/Muxcore-Media/core/sdk/go/module
 
-go 1.26.4
+go 1.26.6
 
 require (
-	github.com/Muxcore-Media/core v0.1.0
-	github.com/Muxcore-Media/core/pkg/contracts v0.0.0
-	google.golang.org/grpc v1.82.1
+	github.com/Muxcore-Media/core v0.6.0
+	github.com/Muxcore-Media/core/pkg/contracts v0.6.0
+	google.golang.org/grpc v1.83.2
 )
 
 require (
-	golang.org/x/net v0.56.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.39.0 // indirect
+	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260610212136-7ab31c22f7ad // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
