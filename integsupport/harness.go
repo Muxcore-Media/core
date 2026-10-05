@@ -18,12 +18,44 @@ import (
 	"github.com/Muxcore-Media/core/internal/storage"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+
+	"github.com/Muxcore-Media/core/internal/callerid"
 )
 
 type allowAllPublishPolicy struct{}
 
 func (*allowAllPublishPolicy) CanPublish(_ context.Context, _, _ string) (bool, error) {
 	return true, nil
+}
+
+// harnessCaller stands in for core's auth interceptor: it trusts the
+// x-caller-id metadata the module SDK sends. Test-only — production core
+// never trusts client-supplied caller IDs.
+func harnessCaller(ctx context.Context) context.Context {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ctx
+	}
+	if ids := md.Get("x-caller-id"); len(ids) > 0 && ids[0] != "" {
+		return callerid.Set(ctx, ids[0])
+	}
+	return ctx
+}
+
+type callerStream struct {
+	grpc.ServerStream
+	ctx context.Context //nolint:containedctx // carries the stamped caller for the stream
+}
+
+func (s *callerStream) Context() context.Context { return s.ctx }
+
+func unaryCaller(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	return handler(harnessCaller(ctx), req)
+}
+
+func streamCaller(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	return handler(srv, &callerStream{ServerStream: ss, ctx: harnessCaller(ss.Context())})
 }
 
 type allowAllCallPolicy struct{}
@@ -63,7 +95,11 @@ func NewCoreHarness(t *testing.T) *CoreHarness {
 		t.Fatalf("listen core: %v", err)
 	}
 
-	grpcSrv := grpc.NewServer(grpc.Creds(insecure.NewCredentials()))
+	grpcSrv := grpc.NewServer(
+		grpc.Creds(insecure.NewCredentials()),
+		grpc.ChainUnaryInterceptor(unaryCaller),
+		grpc.ChainStreamInterceptor(streamCaller),
+	)
 
 	meshSrv := grpcmesh.NewServer()
 	meshSrv.RegisterWithGRPC(grpcSrv)
@@ -97,7 +133,10 @@ func (h *CoreHarness) Close() {
 		h.cancel()
 	}
 	if h.grpc != nil {
-		h.grpc.GracefulStop()
+		// Modules hold long-lived event Subscribe streams that GracefulStop would
+		// wait on forever, so stop hard: Stop closes listeners and open streams and
+		// is idempotent.
+		h.grpc.Stop()
 	}
 }
 
