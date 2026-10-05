@@ -97,10 +97,44 @@ func (s *Server) RegisterWithGRPC(srv *grpc.Server) {
 	meshv1.RegisterModuleMeshServer(srv, s)
 }
 
+// checkModuleCallPolicy enforces the call policy for module principals
+// (ADR-0017): module callers are not authorized by the user Authorizer, so
+// inbound mesh calls from them must pass the same call policy as outbound
+// Client.Call (deny-by-default when no policy is configured). User and
+// untyped principals are unchanged.
+func (s *Server) checkModuleCallPolicy(ctx context.Context, target, method string) error {
+	if callerid.Kind(ctx) != callerid.KindModule {
+		return nil
+	}
+	s.mu.RLock()
+	c := s.client
+	s.mu.RUnlock()
+	var cp contracts.CallPolicyProvider
+	if c != nil {
+		cp = c.CallPolicy()
+	}
+	if cp == nil {
+		return status.Error(codes.PermissionDenied, "call denied: no call policy configured")
+	}
+	caller := callerid.Get(ctx)
+	allowed, err := cp.AllowCall(ctx, caller, target, method)
+	if err != nil {
+		return status.Error(codes.Internal, "call policy error")
+	}
+	if !allowed {
+		return status.Errorf(codes.PermissionDenied, "call denied by policy: caller=%q target=%q method=%q", caller, target, method)
+	}
+	return nil
+}
+
 // Call handles an incoming gRPC Call request.
 func (s *Server) Call(ctx context.Context, req *meshv1.CallRequest) (*meshv1.CallResponse, error) {
 	target := req.GetTargetModule()
 	method := req.GetMethod()
+
+	if err := s.checkModuleCallPolicy(ctx, target, method); err != nil {
+		return nil, err
+	}
 
 	s.mu.RLock()
 	handler, ok := s.handlers[target]
@@ -165,6 +199,10 @@ func (s *Server) StreamCall(stream meshv1.ModuleMesh_StreamCallServer) error {
 
 		target := req.GetTargetModule()
 		method := req.GetMethod()
+
+		if err := s.checkModuleCallPolicy(stream.Context(), target, method); err != nil {
+			return err
+		}
 
 		s.mu.RLock()
 		handler, ok := s.handlers[target]
@@ -308,9 +346,18 @@ type Client struct { //nolint:gocritic // type definition placement is intention
 
 // NewClient creates a mesh client backed by the given server.
 func NewClient(srv *Server) *Client {
-	return &Client{
+	c := &Client{
 		server: srv,
 	}
+	// Back-reference so inbound module calls can consult the call policy.
+	if srv != nil {
+		srv.mu.Lock()
+		if srv.client == nil {
+			srv.client = c
+		}
+		srv.mu.Unlock()
+	}
+	return c
 }
 
 // CallCount returns the total number of mesh calls made through this client.

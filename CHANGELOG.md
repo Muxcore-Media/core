@@ -5,6 +5,16 @@ All notable changes to the MuxCore project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.9] — 2026-10-05 — modules as service principals
+
+### Security
+- Mesh module identity now comes from the transport (ADR-0017 decisions 1–2, NFR-SEC-002/003, T-M3-03a). New `grpcmesh.VerifiedModuleID(ctx)` returns the CN of a client certificate that verified against the core CA. The gRPC auth interceptor resolves principals as follows: a user bearer token (`authorization`) goes through the identity provider and `Authorizer.Can` exactly as before; otherwise a verified certificate makes the CN the module principal and any client-supplied `x-caller-id` is ignored (logged at debug when it differs); otherwise, only with `MUXCORE_INSECURE_DISABLE_TLS` (or the deprecated `MUXCORE_DEV_TLS_SKIP`) on a plaintext connection, `x-caller-id` is accepted as the module principal with a one-time warning. Over TLS without a client certificate `x-caller-id` is never trusted. The identity provider is no longer sent `x-caller-id`.
+- Module principals are authorized by core method rules plus the existing call/publish policy, not by the user `Authorizer`: they may use EventService, StorageService, ModuleMesh, HealthService, discovery reads and `AuditService/Log`. Lifecycle, Spool/marketplace, audit `Query`/`Export`/`VerifyChain` and discovery `Leave` require a user bearer token. Inbound `ModuleMesh/Call` and `StreamCall` from module principals now pass the call policy (deny when none is configured).
+- Auth-failure backoff is keyed by the authenticated module ID or the peer address, never by an unverified `x-caller-id`, so rotating it no longer evades backoff and a remote caller cannot lock out another module.
+
+### Fixed
+- Module calls to core (`EventService.Publish`, storage) failed `Unauthenticated` in every mode once auth-local ≥ v0.1.14 was loaded, because core asked auth-local to confirm a caller ID on a connection whose TLS peer was core itself.
+
 ## [v0.6.8] — 2026-10-05 — audit HMAC, metrics listener
 
 ### Security

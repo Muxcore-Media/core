@@ -3,12 +3,14 @@ package grpcmesh
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -75,6 +77,7 @@ func TestAuthInterceptor_DeniesAnonymousByDefault(t *testing.T) {
 
 func TestAuthInterceptor_DeniesModuleWithoutAuthorizer(t *testing.T) {
 	a := NewAuthInterceptor()
+	a.SetInsecureModuleIdentity(false) // independent of MUXCORE_INSECURE_DISABLE_TLS in the test env
 	interceptor := a.UnaryInterceptor()
 
 	ctx := metadata.NewIncomingContext(context.Background(),
@@ -206,13 +209,18 @@ func TestAuthInterceptor_RateLimit_AfterThreshold(t *testing.T) {
 func TestAuthInterceptor_RateLimit_PerIdentity(t *testing.T) {
 	a := NewAuthInterceptor()
 	defer a.StopCleanup()
+	a.SetInsecureModuleIdentity(false)
 
 	a.SetAuthorizer(&stubAuthorizer{allow: false})
 	a.SetIdentityProvider(&stubIdentityProvider{
 		identity: &contracts.Identity{ID: "user-1", Roles: []string{"admin"}},
 	})
 	interceptor := a.UnaryInterceptor()
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs())
+	peerCtx := func(addr string, kv ...string) context.Context {
+		ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: &net.TCPAddr{IP: net.ParseIP(addr), Port: 4000}})
+		return metadata.NewIncomingContext(ctx, metadata.Pairs(kv...))
+	}
+	ctx := peerCtx("10.0.0.1")
 
 	// The backoff check happens at the START of extractAndVerify, before
 	// the failure is recorded. So we need N+1 calls to trigger rate limiting:
@@ -221,7 +229,7 @@ func TestAuthInterceptor_RateLimit_PerIdentity(t *testing.T) {
 		interceptor(ctx, nil, fakeUnaryInfo("/mesh/Call"), fakeHandler(nil, nil))
 	}
 
-	// The default identity should now be rate limited (call N+1).
+	// The peer should now be rate limited (call N+1).
 	_, err := interceptor(ctx, nil, fakeUnaryInfo("/mesh/Call"), fakeHandler(nil, nil))
 	if err == nil {
 		t.Fatal("expected rate limit for exhausted identity")
@@ -231,16 +239,21 @@ func TestAuthInterceptor_RateLimit_PerIdentity(t *testing.T) {
 		t.Errorf("expected ResourceExhausted, got %s", st.Code())
 	}
 
-	// A different identity (different x-caller-id) should NOT be rate limited.
-	otherCtx := metadata.NewIncomingContext(context.Background(),
-		metadata.Pairs("x-caller-id", "other-identity"))
-	_, err = interceptor(otherCtx, nil, fakeUnaryInfo("/mesh/Call"), fakeHandler(nil, nil))
+	// Rotating the unverified x-caller-id does not escape the backoff
+	// (ADR-0017: client-supplied caller IDs are not identities).
+	_, err = interceptor(peerCtx("10.0.0.1", "x-caller-id", "other-identity"), nil, fakeUnaryInfo("/mesh/Call"), fakeHandler(nil, nil))
+	if st, _ := status.FromError(err); st.Code() != codes.ResourceExhausted {
+		t.Errorf("rotated x-caller-id: expected ResourceExhausted, got %v", err)
+	}
+
+	// A different peer is not rate limited.
+	_, err = interceptor(peerCtx("10.0.0.2"), nil, fakeUnaryInfo("/mesh/Call"), fakeHandler(nil, nil))
 	if err == nil {
-		t.Fatal("expected PermissionDenied for different identity (still denied, but not rate limited)")
+		t.Fatal("expected PermissionDenied for different peer (still denied, but not rate limited)")
 	}
 	st, _ = status.FromError(err)
 	if st.Code() != codes.PermissionDenied {
-		t.Errorf("expected PermissionDenied for different identity, got %s", st.Code())
+		t.Errorf("expected PermissionDenied for different peer, got %s", st.Code())
 	}
 }
 

@@ -58,3 +58,16 @@ func TestSetGet(t *testing.T) {
 		}
 	})
 }
+
+func TestSetPrincipalKind(t *testing.T) {
+	ctx := SetPrincipal(context.Background(), "media-movies", KindModule)
+	if got := Get(ctx); got != "media-movies" {
+		t.Fatalf("Get = %q", got)
+	}
+	if got := Kind(ctx); got != KindModule {
+		t.Fatalf("Kind = %q", got)
+	}
+	if got := Kind(Set(context.Background(), "x")); got != "" {
+		t.Fatalf("Kind without SetPrincipal = %q, want empty", got)
+	}
+}
