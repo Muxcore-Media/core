@@ -27,14 +27,18 @@ const (
 )
 
 type Server struct {
-	http             *http.Server
-	mux              *http.ServeMux
-	healthChecker    func() map[string]error
-	AuthFunc         func(r *http.Request) (*contracts.Session, error)
-	rateLimiter      contracts.RateLimiterProvider
-	authorizer       contracts.Authorizer
-	auditLogger      contracts.AuditLogger
-	nodeID           string
+	http          *http.Server
+	mux           *http.ServeMux
+	healthChecker func() map[string]error
+	AuthFunc      func(r *http.Request) (*contracts.Session, error)
+	rateLimiter   contracts.RateLimiterProvider
+	authorizer    contracts.Authorizer
+	auditLogger   contracts.AuditLogger
+	nodeID        string
+	// profile is the security profile reported by /health and /version
+	// (ADR-0016); empty = not reported.
+	profile          string
+	profileInsecure  bool
 	routePermissions map[string]RoutePermission
 	publicPaths      map[string]bool
 	shutdownHooks    []func(context.Context) error
@@ -248,6 +252,22 @@ func (s *Server) HandleFunc(pattern string, handler func(http.ResponseWriter, *h
 	s.mux.HandleFunc(pattern, handler)
 }
 
+// SetProfile sets the security profile reported by /health and /version
+// ("profile" and "insecure" fields, ADR-0016). Call before Start.
+func (s *Server) SetProfile(name string, insecure bool) {
+	s.profile = name
+	s.profileInsecure = insecure
+}
+
+// addProfile adds the profile fields to a /health or /version body.
+func (s *Server) addProfile(body map[string]any) map[string]any {
+	if s.profile != "" {
+		body["profile"] = s.profile
+		body["insecure"] = s.profileInsecure
+	}
+	return body
+}
+
 // SetHealthChecker sets a function that returns per-module health status.
 func (s *Server) SetHealthChecker(fn func() map[string]error) {
 	s.healthChecker = fn
@@ -352,6 +372,9 @@ func (s *Server) rebuildChain() {
 //	When no health checker is registered:
 //	  {"status": "ok", "time": "2026-06-08T12:00:00Z"}
 //
+//	Both forms carry "profile" ("dev"|"household") and "insecure" (bool)
+//	once SetProfile has been called (ADR-0016).
+//
 //	When a health checker is registered:
 //	  {"status": "ok"|"degraded", "time": "...", "modules": {"module_id": "ok"|"error"}}
 //
@@ -413,11 +436,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		writeJSON(w, httpStatus, map[string]any{
+		writeJSON(w, httpStatus, s.addProfile(map[string]any{
 			"status":  status,
 			"time":    time.Now().UTC().Format(time.RFC3339),
 			"modules": modules,
-		})
+		}))
 		return
 	}
 
@@ -429,10 +452,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{
+	writeJSON(w, http.StatusOK, s.addProfile(map[string]any{
 		"status": "ok",
 		"time":   time.Now().UTC().Format(time.RFC3339),
-	})
+	}))
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
@@ -440,9 +463,9 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
+	writeJSON(w, http.StatusOK, s.addProfile(map[string]any{
 		"version": version.String(),
-	})
+	}))
 }
 
 // devTLSSkipCheck returns true when TLS enforcement should be bypassed.

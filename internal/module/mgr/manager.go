@@ -11,6 +11,7 @@ import (
 	"go/token"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -174,6 +175,10 @@ type Manager struct {
 	// certificates. When set, spawned modules get signed client certs
 	// and the BootstrapRegister RPC is available for external modules.
 	certAuth CertIssuer
+	// requireMarketplaceSigs makes a valid signature mandatory for
+	// marketplace DeployTag and orphan resurrection (household profile,
+	// FR-EXT-003). Boot-time curated tags are not affected.
+	requireMarketplaceSigs atomic.Bool
 }
 
 // CertIssuer is the interface for issuing module certificates and
@@ -190,6 +195,19 @@ func (m *Manager) SetCertAuthority(ca CertIssuer) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.certAuth = ca
+}
+
+// SetRequireMarketplaceSignatures makes VerifyMarketplaceSignature (and
+// orphan resurrection) require a valid signature regardless of
+// MUXCORE_SPOOL_REQUIRE_SIGNATURE. Set from the household profile.
+func (m *Manager) SetRequireMarketplaceSignatures(require bool) {
+	m.requireMarketplaceSigs.Store(require)
+}
+
+// RequireMarketplaceSignatures reports whether marketplace signatures are
+// mandatory (see SetRequireMarketplaceSignatures).
+func (m *Manager) RequireMarketplaceSignatures() bool {
+	return m.requireMarketplaceSigs.Load()
 }
 
 func (m *Manager) SpawnCount() int64   { return m.spawnCount.Load() }
@@ -359,7 +377,7 @@ func (m *Manager) ResurrectOrphan(ctx context.Context, moduleID string) error {
 	if err := m.VerifyPublisher(tm.Publisher); err != nil {
 		return fmt.Errorf("publisher orphan %q: %w", moduleID, err)
 	}
-	if err := m.VerifySignature(bin, tm.Signature); err != nil {
+	if err := m.VerifyMarketplaceSignature(bin, tm.Signature); err != nil {
 		return fmt.Errorf("signature orphan %q: %w", moduleID, err)
 	}
 	if err := m.Spawn(ctx, bin); err != nil {
@@ -950,6 +968,21 @@ func (m *Manager) VerifySignature(bin *ModuleBinary, inlineSignature string) err
 	return nil
 }
 
+// VerifyMarketplaceSignature is VerifySignature for modules deployed at
+// runtime (marketplace DeployTag, orphan resurrection). When
+// SetRequireMarketplaceSignatures(true) is in effect (household profile) a
+// valid signature from a configured trusted key is mandatory; otherwise it
+// behaves like VerifySignature (MUXCORE_SPOOL_REQUIRE_SIGNATURE opt-in).
+func (m *Manager) VerifyMarketplaceSignature(bin *ModuleBinary, inlineSignature string) error {
+	if bin == nil {
+		return fmt.Errorf("verify signature: module binary is nil")
+	}
+	if err := spool.VerifyArtifactSignatureRequired(bin.Path, inlineSignature, m.requireMarketplaceSigs.Load()); err != nil {
+		return fmt.Errorf("signature for %s: %w", bin.ID, err)
+	}
+	return nil
+}
+
 // PruneCache removes old cached module binaries, keeping only the most recent
 // keepVersions versions per module ID. Versions are sorted lexicographically
 // (semver tags produced by `git describe` sort correctly this way). A
@@ -1172,28 +1205,12 @@ func (s *registrationServer) BootstrapRegister(ctx context.Context, req *modulev
 		}, nil
 	}
 
-	// Issue a signed certificate with keypair for this module.
-	certPath, keyPath, err := ca.IssueModuleCertForDir(claimedID, os.TempDir())
+	certData, keyData, err := issueBootstrapCert(ca, claimedID)
 	if err != nil {
-		slog.Error("bootstrap register: sign cert failed", "module", claimedID, "error", err)
+		slog.Error("bootstrap register: issue cert failed", "module", claimedID, "error", err)
 		return &modulev1.BootstrapRegisterResponse{
 			Accepted: false,
 			Error:    fmt.Sprintf("certificate signing failed: %v", err),
-		}, nil
-	}
-
-	certData, certErr := os.ReadFile(certPath) //nolint:gosec // path from internal temp dir
-	if certErr != nil {
-		return &modulev1.BootstrapRegisterResponse{
-			Accepted: false,
-			Error:    fmt.Sprintf("read signed certificate: %v", certErr),
-		}, nil
-	}
-	keyData, keyErr := os.ReadFile(keyPath) //nolint:gosec // path from internal temp dir
-	if keyErr != nil {
-		return &modulev1.BootstrapRegisterResponse{
-			Accepted: false,
-			Error:    fmt.Sprintf("read private key: %v", keyErr),
 		}, nil
 	}
 
@@ -1204,6 +1221,44 @@ func (s *registrationServer) BootstrapRegister(ctx context.Context, req *modulev
 		KeyPem:     string(keyData),
 		CaCert:     string(ca.CACertPEM()),
 	}, nil
+}
+
+// memoryCertIssuer is implemented by issuers that can return a certificate
+// and key without touching disk (grpcmesh.CertAuthority).
+type memoryCertIssuer interface {
+	IssueModuleCert(moduleID string, ips []net.IP, dnsNames []string) (certPEM, keyPEM []byte, err error)
+}
+
+// issueBootstrapCert issues a certificate and private key for a
+// BootstrapRegister caller. The key is kept in memory when the issuer
+// supports it; otherwise it is written to a fresh private (0700) temporary
+// directory that is removed before returning, so no module key is left on
+// disk after the handoff.
+func issueBootstrapCert(ca CertIssuer, moduleID string) (certPEM, keyPEM []byte, err error) {
+	if mi, ok := ca.(memoryCertIssuer); ok {
+		return mi.IssueModuleCert(moduleID,
+			[]net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+			[]string{"localhost", moduleID},
+		)
+	}
+	dir, err := os.MkdirTemp("", "muxcore-bootstrap-*") // created 0700
+	if err != nil {
+		return nil, nil, fmt.Errorf("create private cert dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	certPath, keyPath, err := ca.IssueModuleCertForDir(moduleID, dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	certPEM, err = os.ReadFile(certPath) //nolint:gosec // path inside our private temp dir
+	if err != nil {
+		return nil, nil, fmt.Errorf("read signed certificate: %w", err)
+	}
+	keyPEM, err = os.ReadFile(keyPath) //nolint:gosec // path inside our private temp dir
+	if err != nil {
+		return nil, nil, fmt.Errorf("read private key: %w", err)
+	}
+	return certPEM, keyPEM, nil
 }
 
 func (s *registrationServer) Unregister(ctx context.Context, req *modulev1.UnregisterRequest) (*modulev1.UnregisterResponse, error) {

@@ -9,7 +9,6 @@ import (
 	"net/http/pprof"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -25,6 +24,7 @@ import (
 	"github.com/Muxcore-Media/core/internal/idempotency"
 	modlifecycle "github.com/Muxcore-Media/core/internal/module"
 	modulemgr "github.com/Muxcore-Media/core/internal/module/mgr"
+	"github.com/Muxcore-Media/core/internal/profile"
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/retry"
 	"github.com/Muxcore-Media/core/internal/spool"
@@ -34,7 +34,6 @@ import (
 	"github.com/Muxcore-Media/core/internal/workerpool"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 )
 
@@ -140,60 +139,17 @@ func initEventBus() *events.MemoryBus {
 	return bus
 }
 
-func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus) (grpcSrv *grpc.Server, meshClient *grpcmesh.Client, discoveryGrpc *grpcmesh.DiscoveryServer, connPool *grpcmesh.ConnPool, reg *registry.Registry, creds credentials.TransportCredentials, authInterceptor *grpcmesh.AuthInterceptor, nodeID string, cluster contracts.Cluster, certAuth *grpcmesh.CertAuthority) { //nolint:gocritic // too many results for gRPC mesh initialization
+func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus, prof profile.Resolved) (grpcSrv *grpc.Server, meshClient *grpcmesh.Client, discoveryGrpc *grpcmesh.DiscoveryServer, connPool *grpcmesh.ConnPool, reg *registry.Registry, sec *meshSecurity, authInterceptor *grpcmesh.AuthInterceptor, nodeID string, cluster contracts.Cluster) { //nolint:gocritic // too many results for gRPC mesh initialization
 	meshSrv := grpcmesh.NewServer()
 	meshClient = grpcmesh.NewClient(meshSrv)
 	slog.Info("gRPC mesh server created")
 
-	// When mTLS is enabled without explicit server cert files, bootstrap the
-	// internal CA first and present a CA-issued muxcored server certificate.
-	// Otherwise GRPCTransportCredentials fails closed before the CA is created.
-	useAutoMTLS := cfg.GRPC.MTLSEnabled && cfg.GRPC.CertFile == "" && cfg.GRPC.KeyFile == ""
-	if useAutoMTLS || cfg.GRPC.CACertDir != "" {
-		caDir := cfg.GRPC.CACertDir
-		if caDir == "" {
-			home, _ := os.UserHomeDir()
-			if home == "" {
-				home = "/tmp"
-			}
-			caDir = filepath.Join(home, ".muxcore", "ca")
-		}
-		var caErr error
-		certAuth, caErr = grpcmesh.NewCertAuthority(caDir)
-		if caErr != nil {
-			slog.Error("certificate authority", "error", caErr)
-			os.Exit(1)
-		}
-		slog.Info("certificate authority ready", "dir", caDir)
-
-		if useAutoMTLS {
-			serverDir := filepath.Join(caDir, "server")
-			certPath, keyPath, issueErr := certAuth.IssueModuleCertForDir("muxcored", serverDir)
-			if issueErr != nil {
-				slog.Error("issue muxcored server cert", "error", issueErr)
-				os.Exit(1)
-			}
-			cfg.GRPC.CertFile = certPath
-			cfg.GRPC.KeyFile = keyPath
-			cfg.GRPC.CACertFile = filepath.Join(caDir, "ca.crt")
-			if cfg.Server.CertFile == "" && cfg.Server.KeyFile == "" {
-				cfg.Server.CertFile = certPath
-				cfg.Server.KeyFile = keyPath
-			}
-			slog.Info("auto-issued muxcored TLS certs", "cert", certPath, "http", cfg.Server.CertFile != "")
-		}
-	}
-
-	creds, err := grpcmesh.GRPCTransportCredentials(
-		cfg.GRPC.CertFile,
-		cfg.GRPC.KeyFile,
-		cfg.GRPC.CACertFile,
-		cfg.GRPC.MTLSEnabled,
-	)
+	sec, err := setupMeshSecurity(cfg, prof, os.Getenv)
 	if err != nil {
-		slog.Error("grpc tls", "error", err)
+		slog.Error("mesh security setup", "profile", string(prof.Name), "error", err)
 		os.Exit(1)
 	}
+	creds := sec.serverCreds
 
 	maxMsgBytes := cfg.GRPC.MaxMessageSizeMB * 1024 * 1024
 	if maxMsgBytes <= 0 {
@@ -207,44 +163,12 @@ func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus
 	slog.Info("gRPC message size limit", "max_mb", maxMsgBytes/1024/1024)
 	if creds != nil {
 		grpcOpts = append(grpcOpts, grpc.Creds(creds))
-		slog.Info("gRPC TLS enabled",
-			"cert", cfg.GRPC.CertFile,
-			"mtls", cfg.GRPC.MTLSEnabled,
-			"auto_ca", useAutoMTLS,
-		)
-	} else {
-		slog.Warn("gRPC TLS is disabled — insecure mode")
-	}
-
-	// If CA was not created above (explicit cert files + optional CACertDir), create now.
-	if certAuth == nil && (cfg.GRPC.MTLSEnabled || cfg.GRPC.CACertDir != "") {
-		caDir := cfg.GRPC.CACertDir
-		if caDir == "" {
-			home, _ := os.UserHomeDir()
-			if home == "" {
-				home = "/tmp"
-			}
-			caDir = filepath.Join(home, ".muxcore", "ca")
-		}
-		var caErr error
-		certAuth, caErr = grpcmesh.NewCertAuthority(caDir)
-		if caErr != nil {
-			slog.Error("certificate authority", "error", caErr)
-			os.Exit(1)
-		}
-		if creds == nil && cfg.GRPC.MTLSEnabled {
-			tlsCfg, tlsErr := grpcmesh.MTLSServerConfig(certAuth)
-			if tlsErr != nil {
-				slog.Error("grpc mtls server creds", "error", tlsErr)
-				os.Exit(1)
-			}
-			creds = credentials.NewTLS(tlsCfg)
-			grpcOpts = append(grpcOpts, grpc.Creds(creds))
-		}
-		slog.Info("certificate authority ready", "dir", caDir)
 	}
 
 	authInterceptor = grpcmesh.NewAuthInterceptor()
+	// Client-supplied x-caller-id is a module principal only in the dev
+	// profile with the insecure flag (ADR-0017 decision 2).
+	authInterceptor.SetInsecureModuleIdentity(prof.IsDev() && prof.Insecure)
 
 	grpcOpts = append(grpcOpts,
 		grpc.ChainUnaryInterceptor(
@@ -326,7 +250,7 @@ func initGRPCMesh(ctx context.Context, cfg *config.Config, bus *events.MemoryBus
 	return
 }
 
-func initStorage(ctx context.Context, cfg *config.Config, reg *registry.Registry, bus *events.MemoryBus, creds credentials.TransportCredentials, maxMsgBytes int) (*storage.Orchestrator, context.CancelFunc) {
+func initStorage(ctx context.Context, cfg *config.Config, reg *registry.Registry, bus *events.MemoryBus, sidecar *grpcmesh.SidecarClientTLS, maxMsgBytes int) (*storage.Orchestrator, context.CancelFunc) {
 	store := storage.NewOrchestrator(reg)
 	store.SetTimeouts(storage.Timeouts{
 		Read:   time.Duration(cfg.Storage.ReadTimeoutSeconds) * time.Second,
@@ -334,7 +258,7 @@ func initStorage(ctx context.Context, cfg *config.Config, reg *registry.Registry
 		Delete: time.Duration(cfg.Storage.DeleteTimeoutSeconds) * time.Second,
 	})
 	store.SetSidecarDialer(func(moduleID, addr string) (contracts.StorageProvider, error) {
-		conn, err := bootstrap.DialSidecar(addr, creds, maxMsgBytes)
+		conn, err := bootstrap.DialSidecar(moduleID, addr, sidecar, maxMsgBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -474,7 +398,7 @@ func initAudit(cfg *config.Config, bus *events.MemoryBus, store *storage.Orchest
 	return auditLogger
 }
 
-func initModuleManager(cfg *config.Config, reg *registry.Registry, bus *events.MemoryBus, auditLogger *audit.FileLogger, grpcSrv *grpc.Server, metricsProvider *api.MetricsProvider, watchdogPath string, authInterceptor *grpcmesh.AuthInterceptor, certAuth *grpcmesh.CertAuthority) (*modulemgr.Manager, *modlifecycle.Manager) {
+func initModuleManager(cfg *config.Config, reg *registry.Registry, bus *events.MemoryBus, auditLogger *audit.FileLogger, grpcSrv *grpc.Server, metricsProvider *api.MetricsProvider, watchdogPath string, authInterceptor *grpcmesh.AuthInterceptor, certAuth *grpcmesh.CertAuthority, requireMarketplaceSigs bool) (*modulemgr.Manager, *modlifecycle.Manager) {
 	lifecycleMgr := modlifecycle.NewManager(reg, bus)
 	lifecycleMgr.SetAuditLogger(auditLogger)
 	modMgr := modulemgr.NewManager(cfg.GRPC.Addr, reg, lifecycleMgr)
@@ -496,6 +420,14 @@ func initModuleManager(cfg *config.Config, reg *registry.Registry, bus *events.M
 
 	if certAuth != nil {
 		modMgr.SetCertAuthority(certAuth)
+	}
+
+	// FR-EXT-003 / ADR-0016: household requires signatures for marketplace
+	// DeployTag and orphan resurrection; boot-time curated tags stay
+	// checksum-anchored (ADR-0012).
+	modMgr.SetRequireMarketplaceSignatures(requireMarketplaceSigs)
+	if requireMarketplaceSigs {
+		slog.Info("marketplace deploys and orphan resurrection require module signatures (household profile)")
 	}
 
 	if err := modMgr.PruneCache(3); err != nil {

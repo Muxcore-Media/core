@@ -5,6 +5,15 @@ All notable changes to the MuxCore project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.10] — 2026-10-05 — security profiles
+
+### Security
+- Security profiles (ADR-0016, NFR-SEC-003, T-M3-02a). New `internal/profile`: `MUXCORE_PROFILE=dev|household` (`staging` = household). Phase-0 inference: unset with `MUXCORE_INSECURE_DISABLE_TLS` (or deprecated `MUXCORE_DEV_TLS_SKIP`) → `dev` with a deprecation warning; unset without it → `household`. `sqlite`/`postgres` (legacy installer DB selector) are treated as unset with a warning pointing at `MUXCORE_DB_BACKEND`; any other value is fatal. Core logs the resolved profile and how it was resolved.
+- `household`: the insecure flag is fatal at startup; TLS is always on. Without certificate files core creates its CA under `<MUXCORE_DATA_DIR>/ca` (new `MUXCORE_DATA_DIR`, default `./data`; an existing legacy `~/.muxcore/ca` CA is reused with a warning; `MUXCORE_GRPC_CA_CERT_DIR` still overrides) and issues its own server certificate (SANs: loopback, `localhost`, `muxcore`, `muxcored`, host name, gRPC listen host, plus new `MUXCORE_TLS_SERVER_SANS`), also used for HTTP when no HTTP cert is set. The gRPC server verifies client certificates against the core CA when presented (`VerifyClientCertIfGiven`, so `VerifiedModuleID` identifies modules); explicit `mtls_enabled` keeps `RequireAndVerifyClientCert`. New `MUXCORE_CA_EXPORT_DIR` exports the public `ca.crt`. `dev`: insecure allowed, startup banner, `x-caller-id` accepted as module principal only with the insecure flag. `/health` and `/version` report `"profile"` and `"insecure"`.
+- Sidecar dial credentials (T-M3-02b): core dialled sidecar providers (call/publish policy, authorizer, identity, auth, storage) with its *server* TLS credentials (no root CAs), so TLS sidecar wiring could not verify. `bootstrap.DialSidecar(moduleID, addr, *grpcmesh.SidecarClientTLS, max)` now verifies the sidecar chain against the core CA (+ configured CA) and requires the certificate CN to equal the registered module ID, and presents core's certificate. Plaintext remains only for the dev/insecure profile (localhost only).
+- Signatures in household (FR-EXT-003, T-M3-02c): marketplace `DeployTag` and orphan resurrection require a valid signature from a configured trusted key (`Manager.VerifyMarketplaceSignature`, `spool.VerifyArtifactSignatureRequired`); boot-time curated tags stay checksum-anchored (ADR-0012). `dev` keeps the `MUXCORE_SPOOL_REQUIRE_SIGNATURE` opt-in. Marketplace deploys are effectively disabled in household until signed spool entries and keys exist.
+- `BootstrapRegister` no longer leaves the issued module private key in `os.TempDir()` (it wrote `module.crt`/`module.key` there, shared by all callers, and never removed them): the key is now generated and returned in memory (SANs: loopback, `localhost`, module ID); issuers without in-memory support use a private 0700 temp dir removed before the response.
+
 ## [v0.6.9] — 2026-10-05 — modules as service principals
 
 ### Security

@@ -249,7 +249,7 @@ func (s *SpoolServer) DeployTag(ctx context.Context, req *spoolv1.DeployTagReque
 			continue
 		}
 
-		if err := s.modMgr.VerifySignature(bin, tm.Signature); err != nil {
+		if err := s.modMgr.VerifyMarketplaceSignature(bin, tm.Signature); err != nil {
 			if tm.Required {
 				result.Error = fmt.Sprintf("signature: %v", err)
 				failed++

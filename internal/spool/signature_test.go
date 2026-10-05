@@ -235,3 +235,38 @@ func TestCheckPublisherAllowlist(t *testing.T) {
 		t.Fatal("unexpected publisher should fail")
 	}
 }
+
+func TestVerifyArtifactSignatureRequired(t *testing.T) {
+	t.Setenv("MUXCORE_SPOOL_REQUIRE_SIGNATURE", "")
+	t.Setenv("MUXCORE_SPOOL_TRUSTED_KEYS_DIR", "")
+	dir := t.TempDir()
+	artifact := filepath.Join(dir, "mod.bin")
+	payload := []byte("artifact")
+	_ = os.WriteFile(artifact, payload, 0o600)
+
+	// No keys, no signature: optional passes, required fails.
+	t.Setenv("MUXCORE_SPOOL_PUBLIC_KEY", "")
+	if err := VerifyArtifactSignatureRequired(artifact, "", false); err != nil {
+		t.Fatalf("optional: %v", err)
+	}
+	if err := VerifyArtifactSignatureRequired(artifact, "", true); err == nil {
+		t.Fatal("required without signature must fail")
+	}
+
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	keyPath := filepath.Join(dir, "k.pub")
+	_ = os.WriteFile(keyPath, []byte(hex.EncodeToString(pub)), 0o600)
+	sig := hex.EncodeToString(ed25519.Sign(priv, payload))
+
+	// Signature but no trusted key: required fails (cannot verify).
+	if err := VerifyArtifactSignatureRequired(artifact, sig, true); err == nil || !strings.Contains(err.Error(), "no public keys") {
+		t.Fatalf("required without keys must fail, got %v", err)
+	}
+	t.Setenv("MUXCORE_SPOOL_PUBLIC_KEY", keyPath)
+	if err := VerifyArtifactSignatureRequired(artifact, sig, true); err != nil {
+		t.Fatalf("valid signature: %v", err)
+	}
+	if err := VerifyArtifactSignatureRequired(artifact, "", true); err == nil {
+		t.Fatal("required with key but no signature must fail")
+	}
+}

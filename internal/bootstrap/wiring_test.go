@@ -139,7 +139,7 @@ func TestDevTLSSkipCheck(t *testing.T) {
 
 func TestDialSidecar(t *testing.T) {
 	t.Run("localhost without TLS", func(t *testing.T) {
-		conn, err := DialSidecar("localhost:8080", nil, 32*1024*1024)
+		conn, err := DialSidecar("m", "localhost:8080", nil, 32*1024*1024)
 		if err != nil {
 			t.Errorf("DialSidecar() error = %v", err)
 		}
@@ -149,14 +149,26 @@ func TestDialSidecar(t *testing.T) {
 	})
 
 	t.Run("non-localhost without TLS", func(t *testing.T) {
-		_, err := DialSidecar("example.com:443", nil, 32*1024*1024)
+		_, err := DialSidecar("m", "example.com:443", nil, 32*1024*1024)
 		if err == nil {
 			t.Error("DialSidecar() expected error for non-localhost without TLS")
 		}
 	})
 
+	t.Run("TLS allows non-localhost", func(t *testing.T) {
+		sc, err := grpcmesh.NewSidecarClientTLS(nil, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn, err := DialSidecar("auth-local", "auth-local:9401", sc, 0)
+		if err != nil {
+			t.Fatalf("DialSidecar() with TLS: %v", err)
+		}
+		_ = conn.Close()
+	})
+
 	t.Run("custom message size", func(t *testing.T) {
-		conn, err := DialSidecar("localhost:8080", nil, 64*1024*1024)
+		conn, err := DialSidecar("m", "localhost:8080", nil, 64*1024*1024)
 		if err != nil {
 			t.Errorf("DialSidecar() with custom size error = %v", err)
 		}
@@ -166,7 +178,7 @@ func TestDialSidecar(t *testing.T) {
 	})
 
 	t.Run("zero message size uses default", func(t *testing.T) {
-		conn, err := DialSidecar("localhost:8080", nil, 0)
+		conn, err := DialSidecar("m", "localhost:8080", nil, 0)
 		if err != nil {
 			t.Errorf("DialSidecar() with zero size error = %v", err)
 		}
