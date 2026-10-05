@@ -5,6 +5,12 @@ All notable changes to the MuxCore project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.5] — 2026-10-05 — canonical spool builds (ADR-0012)
+
+### Changed
+- Spool module builds use the canonical reproducible build (ADR-0012, FR-EXT-002): `CGO_ENABLED=0 GOFLAGS=-mod=readonly GOTOOLCHAIN=go<V> go build -trimpath -buildvcs=false -ldflags=-buildid= ./cmd/module/`, where `<V>` is the module's `go.mod` go line (`.0` appended when no patch). Spool binaries change byte-for-byte, so all spool checksums must be recomputed.
+- `reconcileContracts` logs a warning when it rewrites `go.mod`, since the build is then no longer canonical and checksum verification may fail.
+
 ## [v0.6.4] — 2026-10-05 — harness caller identity
 
 ### Fixed
