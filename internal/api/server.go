@@ -37,6 +37,7 @@ type Server struct {
 	nodeID           string
 	routePermissions map[string]RoutePermission
 	publicPaths      map[string]bool
+	shutdownHooks    []func(context.Context) error
 	certFile         string
 	keyFile          string
 	// cspHeader is the Content-Security-Policy header value set on all responses.
@@ -137,8 +138,19 @@ func (s *Server) Drain(ctx context.Context) error {
 	return s.http.Shutdown(ctx)
 }
 
+// AddShutdownHook registers fn to run when Shutdown is called (e.g. to stop
+// auxiliary listeners such as the metrics server). Call before Start.
+func (s *Server) AddShutdownHook(fn func(context.Context) error) {
+	s.shutdownHooks = append(s.shutdownHooks, fn)
+}
+
 func (s *Server) Shutdown(ctx context.Context) error {
 	close(s.authFailureCleanup)
+	for _, fn := range s.shutdownHooks {
+		if err := fn(ctx); err != nil {
+			slog.Error("shutdown hook", "error", err)
+		}
+	}
 	// After Drain, the server is already shut down. This is a no-op but
 	// harmless — Shutdown on an already-shut-down server returns nil.
 	return s.http.Shutdown(ctx)

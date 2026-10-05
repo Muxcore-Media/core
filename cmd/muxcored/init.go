@@ -403,9 +403,24 @@ func initHTTPServer(cfg *config.Config, reg *registry.Registry, bus *events.Memo
 			StatusHTTP4xx:      srv.StatusHTTP4xx,
 			StatusHTTP5xx:      srv.StatusHTTP5xx,
 		}
-		srv.HandleFunc("/metrics", api.MetricsHandler(metricsProvider))
-		srv.AddPublicPath("/metrics")
-		slog.Warn("metrics endpoint enabled at /metrics — no authentication; do not expose to the internet")
+		token, err := config.SecretFromEnv("MUXCORE_METRICS_TOKEN")
+		if err != nil {
+			slog.Error("metrics token", "error", err)
+			os.Exit(1)
+		}
+		// NFR-SEC-011: /metrics is served on its own listener, loopback by
+		// default; a non-loopback address requires a bearer token.
+		ms, err := api.NewMetricsServer(os.Getenv("MUXCORE_METRICS_ADDR"), token, metricsProvider)
+		if err != nil {
+			slog.Error("metrics server", "error", err)
+			os.Exit(1)
+		}
+		srv.AddShutdownHook(ms.Shutdown)
+		go func() {
+			if err := ms.Serve(); err != nil {
+				slog.Error("metrics server", "error", err)
+			}
+		}()
 	}
 
 	if os.Getenv("MUXCORE_DEBUG_ENABLE") == "true" || os.Getenv("MUXCORE_DEBUG_ENABLE") == "1" {
@@ -440,6 +455,18 @@ func initAudit(cfg *config.Config, bus *events.MemoryBus, store *storage.Orchest
 	}
 	if cfg.Audit.MaxRotatedFiles > 0 {
 		auditLogger.MaxRotatedFiles = cfg.Audit.MaxRotatedFiles
+	}
+	hmacKey, err := config.ResolveAuditHMACKey(cfg)
+	if err != nil {
+		slog.Error("audit HMAC key", "error", err)
+		os.Exit(1)
+	}
+	if hmacKey != nil {
+		auditLogger.SetSigningKey(hmacKey)
+		for i := range hmacKey {
+			hmacKey[i] = 0
+		}
+		slog.Info("audit HMAC signing enabled")
 	}
 	bus.SetAuditLogger(auditLogger)
 	store.SetAuditLogger(auditLogger)
