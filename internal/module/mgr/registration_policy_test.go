@@ -344,26 +344,111 @@ func TestRegister_SameVerifiedIDReplaces(t *testing.T) {
 	}
 }
 
-// Without a certificate a duplicate ID is still refused (no replace), so an
-// unauthenticated peer cannot displace a registered module.
+// Without a certificate a duplicate ID is refused (no replace) when the
+// existing entry was registered with a verified certificate (both profiles),
+// and always in household, so an unauthenticated peer cannot displace a
+// certificate-registered module.
 func TestRegister_UnverifiedDuplicateRefused(t *testing.T) {
+	cases := []struct {
+		name         string
+		pol          RegistrationPolicy
+		origVerified bool
+	}{
+		{"dev/verified original", devPolicy, true},
+		{"household/verified original", householdPolicy, true},
+		{"household/unverified original", householdPolicy, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRegFixture(t, tc.pol)
+			origCtx := context.Background()
+			if tc.origVerified {
+				origCtx = f.ca.moduleCtx(t, "media-movies")
+			}
+			if code := f.register(t, origCtx, regReq("media-movies", "media.movies")); code != codes.OK {
+				t.Fatal(code)
+			}
+			orig, _ := f.reg.Get("media-movies")
+			if code := f.register(t, context.Background(), regReq("media-movies", "media.movies")); code != codes.AlreadyExists {
+				t.Fatalf("unverified duplicate code %v, want registry rejection", code)
+			}
+			if e, _ := f.reg.Get("media-movies"); e != orig {
+				t.Fatal("unverified duplicate replaced the entry")
+			}
+			f.m.mu.Lock()
+			tracked := f.m.proxies["media-movies"]
+			f.m.mu.Unlock()
+			if tracked != orig.Module {
+				t.Fatal("unverified duplicate displaced the tracked proxy")
+			}
+		})
+	}
+}
+
+// dev profile: a module that restarts without unregistering (plaintext, no
+// certificate) re-registers its own ID and replaces the stale entry instead
+// of looping on "already registered". It keeps the provider-of-record
+// position for its security capabilities; a different ID still cannot take
+// them over or reuse the ID.
+func TestRegister_DevUnverifiedSameIDReplaces(t *testing.T) {
+	f := newRegFixture(t, devPolicy)
+	if code := f.register(t, context.Background(), regReq("auth-local", "auth", "identity")); code != codes.OK {
+		t.Fatal(code)
+	}
+	if code := f.register(t, context.Background(), regReq("dev-auth", "auth")); code != codes.OK {
+		t.Fatal(code)
+	}
+	first, _ := f.reg.Get("auth-local")
+
+	req := regReq("auth-local", "auth", "identity")
+	req.ModuleInfo.Version = "2.0.0"
+	req.ModuleInfo.HttpAddr = "127.0.0.1:2"
+	if code := f.register(t, context.Background(), req); code != codes.OK {
+		t.Fatalf("dev unverified re-register: code %v, want OK", code)
+	}
+	e, _ := f.reg.Get("auth-local")
+	if e == first || e.Info.Version != "2.0.0" || e.Info.HTTPAddr != "127.0.0.1:2" {
+		t.Fatalf("entry not replaced: %+v", e.Info)
+	}
+	f.m.mu.Lock()
+	tracked := f.m.proxies["auth-local"]
+	f.m.mu.Unlock()
+	if tracked != e.Module {
+		t.Fatal("tracked proxy not swapped to the replacement")
+	}
+	for _, c := range []string{"auth", "identity"} {
+		if p, _ := f.reg.Provider(c); p.Info.ID != "auth-local" {
+			t.Fatalf("provider of record for %s after replace = %s, want auth-local", c, p.Info.ID)
+		}
+	}
+
+	// The other provider re-registering replaces only itself and does not
+	// take over the capability.
+	if code := f.register(t, context.Background(), regReq("dev-auth", "auth")); code != codes.OK {
+		t.Fatalf("dev-auth re-register: %v", code)
+	}
+	if p, _ := f.reg.Provider("auth"); p.Info.ID != "auth-local" {
+		t.Fatalf("provider of record = %s, want auth-local", p.Info.ID)
+	}
+	if n := len(f.reg.ListByCapability("auth")); n != 2 {
+		t.Fatalf("auth providers = %d, want 2", n)
+	}
+}
+
+// A verified certificate for a different ID still cannot register (and so
+// cannot replace) an existing ID, in either profile.
+func TestRegister_DifferentIDCannotReplace(t *testing.T) {
 	for _, pol := range []RegistrationPolicy{devPolicy, householdPolicy} {
 		f := newRegFixture(t, pol)
-		if code := f.register(t, f.ca.moduleCtx(t, "media-movies"), regReq("media-movies", "media.movies")); code != codes.OK {
+		if code := f.register(t, f.ca.moduleCtx(t, "auth-local"), regReq("auth-local", "auth")); code != codes.OK {
 			t.Fatal(code)
 		}
-		orig, _ := f.reg.Get("media-movies")
-		if code := f.register(t, context.Background(), regReq("media-movies", "media.movies")); code != codes.AlreadyExists {
-			t.Fatalf("household=%v: unverified duplicate code %v", pol.Household, code)
+		orig, _ := f.reg.Get("auth-local")
+		if code := f.register(t, f.ca.moduleCtx(t, "impostor"), regReq("auth-local", "auth")); code != codes.PermissionDenied {
+			t.Fatalf("household=%v: code %v, want PermissionDenied", pol.Household, code)
 		}
-		if e, _ := f.reg.Get("media-movies"); e != orig {
-			t.Fatal("unverified duplicate replaced the entry")
-		}
-		f.m.mu.Lock()
-		tracked := f.m.proxies["media-movies"]
-		f.m.mu.Unlock()
-		if tracked != orig.Module {
-			t.Fatal("unverified duplicate displaced the tracked proxy")
+		if e, _ := f.reg.Get("auth-local"); e != orig {
+			t.Fatal("entry replaced by a different ID")
 		}
 	}
 }

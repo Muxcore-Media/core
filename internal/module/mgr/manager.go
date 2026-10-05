@@ -1196,7 +1196,7 @@ func (s *registrationServer) Register(ctx context.Context, req *modulev1.Registe
 		return &modulev1.RegisterResponse{MeshAddr: s.mgr.meshAddr, Accepted: false, Error: "module ID is required"}, nil
 	}
 
-	opts, err := s.mgr.authorizeRegistration(ctx, info)
+	opts, verified, err := s.mgr.authorizeRegistration(ctx, info)
 	if err != nil {
 		return nil, err
 	}
@@ -1212,6 +1212,7 @@ func (s *registrationServer) Register(ctx context.Context, req *modulev1.Registe
 
 	// Create a proxy that satisfies contracts.Module for registry registration.
 	proxy := NewSidecarProxy(info)
+	proxy.verified = verified
 
 	// Register with the module lifecycle manager (adds to registry, publishes
 	// events). The proxy is tracked only once the registration is accepted,
@@ -1259,8 +1260,9 @@ func securityCapsOf(caps []string) []string {
 
 // authorizeRegistration applies the ADR-0018 rules (see RegistrationPolicy)
 // to a Register call and returns the registry options to register with, or
-// a gRPC status error when the registration is rejected.
-func (m *Manager) authorizeRegistration(ctx context.Context, info contracts.ModuleInfo) (registry.RegisterOptions, error) {
+// a gRPC status error when the registration is rejected. verified reports
+// whether the caller presented a verified certificate for info.ID.
+func (m *Manager) authorizeRegistration(ctx context.Context, info contracts.ModuleInfo) (opts registry.RegisterOptions, verified bool, err error) {
 	pol := m.RegistrationPolicy()
 	profileName := "dev"
 	if pol.Household {
@@ -1274,7 +1276,7 @@ func (m *Manager) authorizeRegistration(ctx context.Context, info contracts.Modu
 	if verified && cn != info.ID {
 		slog.Warn("module registration rejected: certificate CN does not match module ID",
 			"id", info.ID, "cert_cn", cn, "profile", profileName)
-		return registry.RegisterOptions{}, status.Errorf(codes.PermissionDenied,
+		return registry.RegisterOptions{}, false, status.Errorf(codes.PermissionDenied,
 			"certificate is issued for module %q, cannot register %q", cn, info.ID)
 	}
 
@@ -1284,7 +1286,7 @@ func (m *Manager) authorizeRegistration(ctx context.Context, info contracts.Modu
 		case len(secCaps) > 0 && pol.Household:
 			slog.Warn("module registration rejected: security capability without a verified module certificate",
 				"id", info.ID, "capabilities", secCaps, "profile", profileName)
-			return registry.RegisterOptions{}, status.Errorf(codes.PermissionDenied,
+			return registry.RegisterOptions{}, false, status.Errorf(codes.PermissionDenied,
 				"registering %v requires a module certificate issued by the core CA for %q", secCaps, info.ID)
 		case len(secCaps) > 0:
 			slog.Warn("dev profile: security capability registered without a verified module certificate",
@@ -1292,7 +1294,7 @@ func (m *Manager) authorizeRegistration(ctx context.Context, info contracts.Modu
 		case pol.Household && pol.RequireModuleCerts:
 			slog.Warn("module registration rejected: no verified module certificate (MUXCORE_REQUIRE_MODULE_CERTS)",
 				"id", info.ID, "profile", profileName)
-			return registry.RegisterOptions{}, status.Errorf(codes.PermissionDenied,
+			return registry.RegisterOptions{}, false, status.Errorf(codes.PermissionDenied,
 				"registering %q requires a module certificate issued by the core CA", info.ID)
 		case pol.Household:
 			slog.Warn("module registered without a verified module certificate; "+
@@ -1301,13 +1303,30 @@ func (m *Manager) authorizeRegistration(ctx context.Context, info contracts.Modu
 		}
 	}
 
-	opts := registry.RegisterOptions{}
 	// Rule 5: the verified owner of an ID atomically replaces its own
 	// sidecar registration. In-process modules are never replaced.
-	if verified && m.reg != nil {
-		if existing, err := m.reg.Get(info.ID); err == nil {
-			if _, isSidecar := existing.Module.(*SidecarProxy); isSidecar {
-				opts.Replace = true
+	//
+	// dev profile: an unverified re-registration of the same ID also
+	// replaces a stale sidecar entry, provided that entry was itself
+	// registered without a verified certificate. dev already trusts the
+	// client-supplied x-caller-id, and a restarted module (which may not
+	// have unregistered on exit) would otherwise be refused forever.
+	// Replace keeps the entry's registration order, so the ID stays the
+	// provider of record for any exclusive security capability; a
+	// different ID can never replace. household keeps requiring the
+	// verified certificate.
+	if m.reg != nil {
+		if existing, getErr := m.reg.Get(info.ID); getErr == nil {
+			if old, isSidecar := existing.Module.(*SidecarProxy); isSidecar {
+				switch {
+				case verified:
+					opts.Replace = true
+				case !pol.Household && !old.verified:
+					opts.Replace = true
+					slog.Warn("dev profile: module re-registered without a verified certificate; "+
+						"replacing the existing registration",
+						"id", info.ID, "previous_version", existing.Info.Version, "version", info.Version)
+				}
 			}
 		}
 	}
@@ -1324,7 +1343,7 @@ func (m *Manager) authorizeRegistration(ctx context.Context, info contracts.Modu
 			}
 		}
 	}
-	return opts, nil
+	return opts, verified, nil
 }
 
 func (s *registrationServer) BootstrapRegister(ctx context.Context, req *modulev1.BootstrapRegisterRequest) (*modulev1.BootstrapRegisterResponse, error) {

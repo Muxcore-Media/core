@@ -5,6 +5,13 @@ All notable changes to the MuxCore project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.14] — 2026-10-05 — dev restarts; SDK unregister and re-register (sdk/go/module v0.6.4)
+
+### Fixed
+- Restart crash loop in the `dev` profile (found by the first compose run, T-M2-10): a sidecar that restarted without unregistering (e.g. `podman restart media-rename`) was refused forever with "module X already registered", because only a verified certificate could replace an existing ID (ADR-0018 row 5). In `dev`, an unverified re-registration of the same ID now atomically replaces the stale sidecar entry, with a warning, provided that entry was itself registered without a verified certificate (an unverified peer cannot displace a certificate-registered module). The replacement keeps the entry's registration order, so the ID stays the provider of record for exclusive security capabilities; a different ID still cannot replace or take over. `household` is unchanged: same-ID replace requires the verified certificate. In-process modules are never replaced.
+- Go module SDK (`sdk/go/module`): on SIGTERM/SIGINT `Run` now unregisters from core first (best effort, 3 s timeout, shutdown not blocked by an unreachable core) and then stops the module; previously it stopped the module first and unregistered with an unbounded call. It also unregisters (best effort) when `Init`/`Start` fail after registration, or when shutdown interrupts the initial `Register`.
+- Go module SDK: modules re-register when core restarts. `Run` supervises the registration every `Config.SupervisionInterval` (default 15 s; negative disables) by asking core's `HealthService/Check` for the module ID (`STATUS_UNHEALTHY` = unknown to core; `x-caller-id` in dev, the certificate under mTLS); when core has forgotten the module, or (for a core that cannot answer) after core comes back from being unreachable, it re-registers on the same connection and TLS identity, with exponential backoff (up to 60 s) on failure. If core refuses the probe (`PermissionDenied`/`Unauthenticated`) it is not retried, so it cannot accumulate authentication failures; supervision then falls back to the connection state. New `RunContext(ctx, Config)` (Run with a caller-supplied shutdown context).
+
 ## [v0.6.13] — 2026-10-05 — bounded gRPC shutdown
 
 ### Fixed
