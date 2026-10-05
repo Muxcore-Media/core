@@ -491,8 +491,10 @@ func (m *Manager) resolveWithInstance(repoURL, version, instanceID string, confi
 	}
 
 	binPath := filepath.Join(buildDir, "muxcore-module")
-	buildCmd := exec.Command("go", "build", "-o", binPath, "./cmd/module/") //nolint:gosec,noctx // binPath is internally constructed
-	buildCmd.Dir = buildDir
+	buildCmd, err := canonicalBuildCmd(buildDir, binPath)
+	if err != nil {
+		return nil, fmt.Errorf("build %s: %w", moduleID, err)
+	}
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("build %s: %w\n%s", moduleID, err, out)
 	}
@@ -1487,6 +1489,8 @@ func (m *Manager) reconcileContracts(buildDir string) error {
 	}
 
 	slog.Info("applying contract reconciliation", "module", filepath.Base(buildDir), "directives", len(directives))
+	slog.Warn("contract reconciliation modifies go.mod; the build is no longer canonical and spool checksum verification may fail (ADR-0012 §3)",
+		"module", filepath.Base(buildDir), "directives", len(directives))
 	if err := reconciler.ApplyReplaceDirectives(buildDir, directives); err != nil {
 		return fmt.Errorf("apply replace directives: %w", err)
 	}
