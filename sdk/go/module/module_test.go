@@ -2,6 +2,7 @@ package module
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
+	"github.com/Muxcore-Media/core/sdk/go/module/meshid"
 )
 
 type testModule struct {
@@ -132,4 +134,32 @@ func TestGRPCDial_OptionOrder(t *testing.T) {
 		t.Fatalf("grpc.NewClient failed: %v", err)
 	}
 	conn.Close()
+}
+
+// ADR-0016 (T-M3-02d): plaintext in the household profile fails before
+// anything is dialled.
+func TestRun_HouseholdInsecureError(t *testing.T) {
+	t.Setenv("MUXCORE_PROFILE", "household")
+	err := Run(Config{
+		Module:   &testModule{info: contracts.ModuleInfo{ID: "m1"}},
+		GRPCAddr: "127.0.0.1:1",
+		Insecure: true,
+	})
+	if !errors.Is(err, meshid.ErrInsecureInHousehold) {
+		t.Fatalf("want ErrInsecureInHousehold, got %v", err)
+	}
+}
+
+// Without a certificate, stored identity or token, Run explains how to get
+// a mesh identity instead of failing in the TLS handshake.
+func TestRun_NoIdentityError(t *testing.T) {
+	t.Setenv("MUXCORE_PROFILE", "household")
+	t.Setenv("MUXCORE_TLS_DIR", t.TempDir())
+	for _, k := range []string{"MUXCORE_TLS_CERT", "MUXCORE_TLS_KEY", "MUXCORE_BOOTSTRAP_TOKEN", "MUXCORE_INSECURE_DISABLE_TLS"} {
+		t.Setenv(k, "")
+	}
+	err := Run(Config{Module: &testModule{info: contracts.ModuleInfo{ID: "m1"}}, GRPCAddr: "127.0.0.1:1"})
+	if !errors.Is(err, meshid.ErrNoIdentity) {
+		t.Fatalf("want ErrNoIdentity, got %v", err)
+	}
 }

@@ -26,6 +26,15 @@ message BootstrapRegisterRequest {
   string token = 1;
   // module_id the module claims as its identity.
   string module_id = 2;
+  // csr_pem is a PEM-encoded PKCS#10 certificate signing request for a key
+  // the module generated and keeps (ADR-0017). When set, core signs it and
+  // returns no private key. When empty, core generates the key in memory and
+  // returns it in key_pem (legacy path).
+  string csr_pem = 3;
+  // dns_names are extra DNS SANs the module asks for (for example its compose
+  // service name). Core keeps only names allowed by MUXCORE_ENROLL_SAN_ALLOW;
+  // the module ID and loopback are always included.
+  repeated string dns_names = 4;
 }
 
 // BootstrapRegisterResponse returns the signed certificate and key on success.
@@ -34,9 +43,11 @@ message BootstrapRegisterResponse {
   bool accepted = 1;
   // error contains a human-readable error message if not accepted.
   string error = 2;
-  // signed_cert is the PEM-encoded signed certificate.
+  // signed_cert is the PEM-encoded certificate chain, leaf first (the core
+  // CA is the root and is returned separately in ca_cert).
   string signed_cert = 3;
-  // key_pem is the PEM-encoded private key for the certificate.
+  // key_pem is the PEM-encoded private key for the certificate. Empty when
+  // the request carried csr_pem: the module keeps its own key.
   string key_pem = 4;
   // ca_cert is the PEM-encoded CA certificate (for client to verify server).
   string ca_cert = 5;

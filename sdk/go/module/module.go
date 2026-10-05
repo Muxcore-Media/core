@@ -16,6 +16,14 @@
 //  2. Environment variable (MUXCORE_GRPC_ADDR, MUXCORE_MODULE_ID, MUXCORE_TLS_*)
 //  3. CLI flag (--muxcore-mesh-addr, --muxcore-module-id, --muxcore-tls-*)
 //  4. Module.Info().ID (for module ID only)
+//
+// # Mesh identity
+//
+// Unless Insecure is set, Run calls meshid.Ensure before registering: it
+// reuses the certificate in MUXCORE_TLS_DIR (default <data dir>/mesh-id) or
+// enrolls with MUXCORE_BOOTSTRAP_TOKEN (ADR-0017), then dials core with that
+// certificate. In the household profile (MUXCORE_PROFILE=household) the
+// insecure setting is an error (ADR-0016).
 package module
 
 import (
@@ -37,6 +45,7 @@ import (
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	modulev1 "github.com/Muxcore-Media/core/proto/gen/muxcore/module/v1"
+	"github.com/Muxcore-Media/core/sdk/go/module/meshid"
 )
 
 const (
@@ -114,12 +123,35 @@ func Run(cfg Config) error {
 		return fmt.Errorf("module: module ID is required — set %s or --%s", envModuleID, flagModuleID)
 	}
 
-	conn, err := dialGRPC(grpcAddr, dialTLSConfig{
+	tlsCfg := dialTLSConfig{
 		plaintext: cfg.Insecure,
 		certFile:  resolveString(cfg.TLSCertFile, envTLSCert, flagTLSCert, ""),
 		keyFile:   resolveString(cfg.TLSKeyFile, envTLSKey, flagTLSKey, ""),
 		caFile:    resolveString(cfg.TLSCAFile, envTLSCA, flagTLSCA, ""),
-	})
+	}
+	// ADR-0016: fail early and clearly on plaintext in the household profile.
+	if err := meshid.CheckProfile(os.Getenv, cfg.Insecure); err != nil {
+		return fmt.Errorf("module: %w", err)
+	}
+	// ADR-0017: obtain (or reuse) the module's mesh identity before talking
+	// to core. No-op in insecure dev mode.
+	if !cfg.Insecure {
+		ids, err := meshid.Ensure(context.Background(), meshid.Config{
+			ModuleID: moduleID,
+			GRPCAddr: grpcAddr,
+			CertFile: tlsCfg.certFile,
+			KeyFile:  tlsCfg.keyFile,
+			CAFile:   tlsCfg.caFile,
+		})
+		if err != nil {
+			return fmt.Errorf("module: mesh identity: %w", err)
+		}
+		if ids.Cert != "" {
+			tlsCfg.certFile, tlsCfg.keyFile, tlsCfg.caFile = ids.Cert, ids.Key, ids.CA
+		}
+	}
+
+	conn, err := dialGRPC(grpcAddr, tlsCfg)
 	if err != nil {
 		return fmt.Errorf("module: connect to core at %s: %w", grpcAddr, err)
 	}

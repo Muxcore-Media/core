@@ -28,7 +28,16 @@ type BootstrapRegisterRequest struct {
 	// token is the one-time bootstrap token (mct_<version>_<module>_<hex>).
 	Token string `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
 	// module_id the module claims as its identity.
-	ModuleId      string `protobuf:"bytes,2,opt,name=module_id,json=moduleId,proto3" json:"module_id,omitempty"`
+	ModuleId string `protobuf:"bytes,2,opt,name=module_id,json=moduleId,proto3" json:"module_id,omitempty"`
+	// csr_pem is a PEM-encoded PKCS#10 certificate signing request for a key
+	// the module generated and keeps (ADR-0017). When set, core signs it and
+	// returns no private key. When empty, core generates the key in memory and
+	// returns it in key_pem (legacy path).
+	CsrPem string `protobuf:"bytes,3,opt,name=csr_pem,json=csrPem,proto3" json:"csr_pem,omitempty"`
+	// dns_names are extra DNS SANs the module asks for (for example its compose
+	// service name). Core keeps only names allowed by MUXCORE_ENROLL_SAN_ALLOW;
+	// the module ID and loopback are always included.
+	DnsNames      []string `protobuf:"bytes,4,rep,name=dns_names,json=dnsNames,proto3" json:"dns_names,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -77,6 +86,20 @@ func (x *BootstrapRegisterRequest) GetModuleId() string {
 	return ""
 }
 
+func (x *BootstrapRegisterRequest) GetCsrPem() string {
+	if x != nil {
+		return x.CsrPem
+	}
+	return ""
+}
+
+func (x *BootstrapRegisterRequest) GetDnsNames() []string {
+	if x != nil {
+		return x.DnsNames
+	}
+	return nil
+}
+
 // BootstrapRegisterResponse returns the signed certificate and key on success.
 type BootstrapRegisterResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -84,9 +107,11 @@ type BootstrapRegisterResponse struct {
 	Accepted bool `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
 	// error contains a human-readable error message if not accepted.
 	Error string `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
-	// signed_cert is the PEM-encoded signed certificate.
+	// signed_cert is the PEM-encoded certificate chain, leaf first (the core
+	// CA is the root and is returned separately in ca_cert).
 	SignedCert string `protobuf:"bytes,3,opt,name=signed_cert,json=signedCert,proto3" json:"signed_cert,omitempty"`
-	// key_pem is the PEM-encoded private key for the certificate.
+	// key_pem is the PEM-encoded private key for the certificate. Empty when
+	// the request carried csr_pem: the module keeps its own key.
 	KeyPem string `protobuf:"bytes,4,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`
 	// ca_cert is the PEM-encoded CA certificate (for client to verify server).
 	CaCert        string `protobuf:"bytes,5,opt,name=ca_cert,json=caCert,proto3" json:"ca_cert,omitempty"`
@@ -522,10 +547,12 @@ var File_muxcore_module_v1_registration_proto protoreflect.FileDescriptor
 
 const file_muxcore_module_v1_registration_proto_rawDesc = "" +
 	"\n" +
-	"$muxcore/module/v1/registration.proto\x12\x11muxcore.module.v1\"M\n" +
+	"$muxcore/module/v1/registration.proto\x12\x11muxcore.module.v1\"\x83\x01\n" +
 	"\x18BootstrapRegisterRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1b\n" +
-	"\tmodule_id\x18\x02 \x01(\tR\bmoduleId\"\xa0\x01\n" +
+	"\tmodule_id\x18\x02 \x01(\tR\bmoduleId\x12\x17\n" +
+	"\acsr_pem\x18\x03 \x01(\tR\x06csrPem\x12\x1b\n" +
+	"\tdns_names\x18\x04 \x03(\tR\bdnsNames\"\xa0\x01\n" +
 	"\x19BootstrapRegisterResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1f\n" +

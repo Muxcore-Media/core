@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Muxcore-Media/core/internal/config"
+	"github.com/Muxcore-Media/core/internal/enroll"
 	"github.com/Muxcore-Media/core/internal/profile"
 )
 
@@ -175,5 +177,33 @@ func TestResolveProfile(t *testing.T) {
 	p, err := resolveProfile()
 	if err != nil || !p.IsDev() || p.Source != profile.SourceInferredInsecure {
 		t.Fatalf("phase-0 inference: %+v %v", p, err)
+	}
+}
+
+func TestSetupMeshSecurity_Enrollment(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	data := t.TempDir()
+	sec, err := setupMeshSecurity(secTestConfig(), profile.Resolved{Name: profile.Household}, envOf(map[string]string{
+		profile.EnvDataDir: data,
+		enroll.EnvSecret:   "0123456789abcdef-secret",
+		enroll.EnvSANAllow: "*.svc",
+	}))
+	if err != nil {
+		t.Fatalf("setupMeshSecurity: %v", err)
+	}
+	t.Cleanup(sec.certAuth.Close)
+	if !sec.certAuth.EnrollmentEnabled() {
+		t.Fatal("enrollment not enabled with a secret")
+	}
+	if _, dns, _ := sec.certAuth.EnrollmentSANs("m", []string{"m.svc"}); !slices.Contains(dns, "m.svc") {
+		t.Fatalf("SAN allow-list not applied: %v", dns)
+	}
+
+	_, err = setupMeshSecurity(secTestConfig(), profile.Resolved{Name: profile.Household}, envOf(map[string]string{
+		profile.EnvDataDir: t.TempDir(),
+		enroll.EnvSecret:   "short",
+	}))
+	if err == nil || !strings.Contains(err.Error(), enroll.EnvSecret) {
+		t.Fatalf("short secret: %v", err)
 	}
 }
