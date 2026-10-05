@@ -5,6 +5,11 @@ All notable changes to the MuxCore project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.6] — 2026-10-05 — release workflow toolchain
+
+### Fixed
+- Release workflow reads the Go version from `go.mod` (it pinned 1.26.5 while `go.mod` requires 1.26.6, so v0.6.2–v0.6.5 published no binaries).
+
 ## [v0.6.5] — 2026-10-05 — canonical spool builds (ADR-0012)
 
 ### Changed
