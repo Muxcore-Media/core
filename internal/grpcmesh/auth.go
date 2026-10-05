@@ -4,10 +4,12 @@ package grpcmesh
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Muxcore-Media/core/internal/callerid"
+	"github.com/Muxcore-Media/core/internal/config"
 	"github.com/Muxcore-Media/core/internal/trace"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 
@@ -76,6 +78,10 @@ type AuthInterceptor struct {
 	identityProvider contracts.IdentityProvider
 	authFailures     map[string]*grpcAuthFailureRecord
 	cleanupStop      chan struct{}
+	// insecureModuleIDs accepts x-caller-id as the module principal on
+	// plaintext connections (dev profile, MUXCORE_INSECURE_DISABLE_TLS).
+	insecureModuleIDs bool
+	insecureWarnOnce  sync.Once
 }
 
 // NewAuthInterceptor creates an auth interceptor with deny-by-default enforcement.
@@ -83,8 +89,9 @@ type AuthInterceptor struct {
 // Authorizer and IdentityProvider to be configured.
 func NewAuthInterceptor() *AuthInterceptor {
 	a := &AuthInterceptor{
-		authFailures: make(map[string]*grpcAuthFailureRecord),
-		cleanupStop:  make(chan struct{}),
+		authFailures:      make(map[string]*grpcAuthFailureRecord),
+		cleanupStop:       make(chan struct{}),
+		insecureModuleIDs: config.InsecureTLSSkipEnabled(),
 	}
 	go a.cleanupLoop()
 	return a
@@ -97,6 +104,15 @@ func (a *AuthInterceptor) SetAuthorizer(auth contracts.Authorizer) {
 	a.authorizer = auth
 }
 
+// SetInsecureModuleIdentity controls whether x-caller-id is accepted as the
+// module principal on plaintext connections. Defaults to
+// config.InsecureTLSSkipEnabled() (MUXCORE_INSECURE_DISABLE_TLS).
+func (a *AuthInterceptor) SetInsecureModuleIdentity(enabled bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.insecureModuleIDs = enabled
+}
+
 // SetIdentityProvider sets the identity provider for extracting caller identity.
 func (a *AuthInterceptor) SetIdentityProvider(ip contracts.IdentityProvider) {
 	a.mu.Lock()
@@ -104,15 +120,15 @@ func (a *AuthInterceptor) SetIdentityProvider(ip contracts.IdentityProvider) {
 	a.identityProvider = ip
 }
 
-// authFailureKey returns the identity or peer address to use as the failure
-// tracking key for rate limiting purposes.
-func (a *AuthInterceptor) authFailureKey(ctx context.Context) string {
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if ids := md.Get("x-caller-id"); len(ids) > 0 && ids[0] != "" {
-			return ids[0]
-		}
+// authFailureKey returns the key used for brute-force tracking: the
+// authenticated module ID when one was resolved, otherwise the peer address.
+// Client-supplied x-caller-id is never used as a key outside the insecure
+// profile, so a remote caller cannot lock out another module's identity.
+func (a *AuthInterceptor) authFailureKey(ctx context.Context, moduleID string) string {
+	if moduleID != "" {
+		return moduleID
 	}
-	if p, ok := peer.FromContext(ctx); ok {
+	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
 		return p.Addr.String()
 	}
 	return "unknown"
@@ -191,27 +207,129 @@ func (a *AuthInterceptor) StopCleanup() {
 	close(a.cleanupStop)
 }
 
+// modulePrincipalMethods lists the core gRPC methods a module (service)
+// principal may call (ADR-0017 decision 1). Module principals are not checked
+// with the user Authorizer; these core rules apply instead, and the services
+// enforce the call/publish policy themselves (EventService.Publish via the
+// bus publish policy, StorageService and ModuleMesh via the call policy).
+// Operator surfaces — lifecycle, spool/marketplace, audit read/verify and
+// cluster Leave — require a user principal (bearer token) and are therefore
+// absent. Open methods (moduleRegistrationMethods) never reach this check.
+var modulePrincipalMethods = map[string]bool{
+	"/muxcore.events.v1.EventService/Publish":                 true,
+	"/muxcore.events.v1.EventService/Request":                 true,
+	"/muxcore.events.v1.EventService/Replay":                  true,
+	"/muxcore.events.v1.EventService/Subscribe":               true,
+	"/muxcore.storage.v1.StorageService/Put":                  true,
+	"/muxcore.storage.v1.StorageService/Get":                  true,
+	"/muxcore.storage.v1.StorageService/Delete":               true,
+	"/muxcore.storage.v1.StorageService/Stat":                 true,
+	"/muxcore.storage.v1.StorageService/List":                 true,
+	"/muxcore.storage.v1.StorageService/Capabilities":         true,
+	"/muxcore.mesh.v1.ModuleMesh/Call":                        true,
+	"/muxcore.mesh.v1.ModuleMesh/StreamCall":                  true,
+	"/muxcore.health.v1.HealthService/Check":                  true,
+	"/muxcore.health.v1.HealthService/Watch":                  true,
+	"/grpc.health.v1.Health/Check":                            true,
+	"/grpc.health.v1.Health/Watch":                            true,
+	"/muxcore.audit.v1.AuditService/Log":                      true,
+	"/muxcore.discovery.v1.DiscoveryService/FindByCapability": true,
+	"/muxcore.discovery.v1.DiscoveryService/FindByRole":       true,
+	"/muxcore.discovery.v1.DiscoveryService/Resolve":          true,
+	"/muxcore.discovery.v1.DiscoveryService/ListAll":          true,
+	"/muxcore.discovery.v1.DiscoveryService/Members":          true,
+	"/muxcore.discovery.v1.DiscoveryService/Watch":            true,
+}
+
+// firstMD returns the first non-empty trimmed value for key in the incoming
+// gRPC metadata.
+func firstMD(md metadata.MD, key string) string {
+	for _, v := range md.Get(key) {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// withoutCallerIDHint returns ctx with x-caller-id removed from the incoming
+// metadata so the identity provider never sees a client-supplied module ID
+// (ADR-0017: the identity provider is consulted only for user tokens).
+func withoutCallerIDHint(ctx context.Context) context.Context {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok || len(md.Get("x-caller-id")) == 0 {
+		return ctx
+	}
+	md = md.Copy()
+	md.Delete("x-caller-id")
+	return metadata.NewIncomingContext(ctx, md)
+}
+
+// resolveModulePrincipal returns the module ID of a caller that carries no
+// user bearer token: the CN of a verified client certificate, or — only in
+// the insecure/dev profile on a plaintext connection — the x-caller-id
+// metadata. Returns "" when the caller is not an authenticated module.
+func (a *AuthInterceptor) resolveModulePrincipal(ctx context.Context, fullMethod, claimed string) string {
+	if cn, ok := VerifiedModuleID(ctx); ok {
+		if claimed != "" && claimed != cn {
+			slog.Debug("gRPC x-caller-id ignored: verified certificate identity takes precedence",
+				"method", fullMethod, "cert_cn", cn, "x_caller_id", claimed)
+		}
+		return cn
+	}
+	a.mu.RLock()
+	insecureIDs := a.insecureModuleIDs
+	a.mu.RUnlock()
+	if insecureIDs && claimed != "" && !peerIsTLS(ctx) {
+		a.insecureWarnOnce.Do(func() {
+			slog.Warn("gRPC insecure mode: accepting client-supplied x-caller-id as module identity " +
+				"(dev profile only; use mTLS module certificates in production)")
+		})
+		return claimed
+	}
+	return ""
+}
+
 // extractAndVerify performs identity extraction and authorization.
 // Returns the context with caller ID set on success, or an error on failure.
+//
+// Principal resolution (ADR-0017):
+//  1. Open methods: caller "_public".
+//  2. A user bearer token (authorization metadata): resolved by the identity
+//     provider and authorized with Authorizer.Can (unchanged).
+//  3. No token, verified client certificate: module principal = cert CN;
+//     x-caller-id is ignored. Authorized by modulePrincipalMethods.
+//  4. No token, no certificate, insecure/dev profile, plaintext connection:
+//     module principal = x-caller-id (warned once). Same rules as 3.
+//  5. Otherwise: identity provider without the x-caller-id hint, then Can —
+//     a module without a certificate is not authenticated.
 func (a *AuthInterceptor) extractAndVerify(ctx context.Context, fullMethod string) (context.Context, error) {
 	// ModuleRegistration is always open — modules must register before they
 	// can authenticate. Public methods get a default caller ID so downstream
 	// service-level auth checks (e.g. discovery.checkAuth) can pass.
 	if moduleRegistrationMethods[fullMethod] {
-		ctx = callerid.Set(ctx, "_public")
+		ctx = callerid.SetPrincipal(ctx, "_public", callerid.KindPublic)
 		return ctx, nil
 	}
 
+	md, _ := metadata.FromIncomingContext(ctx)
+
 	// Extract trace ID from incoming gRPC metadata for distributed tracing.
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if traceIDs := md.Get("x-trace-id"); len(traceIDs) > 0 && traceIDs[0] != "" {
-			ctx = trace.WithTraceID(ctx, traceIDs[0])
-		}
+	if traceID := firstMD(md, "x-trace-id"); traceID != "" {
+		ctx = trace.WithTraceID(ctx, traceID)
+	}
+
+	claimedID := firstMD(md, "x-caller-id")
+	hasUserToken := firstMD(md, "authorization") != ""
+
+	var moduleID string
+	if !hasUserToken {
+		moduleID = a.resolveModulePrincipal(ctx, fullMethod, claimedID)
 	}
 
 	// Check auth failure backoff before any other processing.
 	a.mu.RLock()
-	backoffKey := a.authFailureKey(ctx)
+	backoffKey := a.authFailureKey(ctx, moduleID)
 	inBackoff := a.checkBackoffLocked(backoffKey)
 	a.mu.RUnlock()
 	if inBackoff {
@@ -220,6 +338,19 @@ func (a *AuthInterceptor) extractAndVerify(ctx context.Context, fullMethod strin
 			"key", backoffKey,
 		)
 		return ctx, status.Error(codes.ResourceExhausted, "too many authentication failures")
+	}
+
+	if moduleID != "" {
+		if !modulePrincipalMethods[fullMethod] {
+			// Authenticated module calling an operator method: deny without
+			// counting it as an authentication failure.
+			slog.Warn("gRPC access denied: method requires a user principal",
+				"method", fullMethod,
+				"module", moduleID,
+			)
+			return ctx, status.Error(codes.PermissionDenied, "access denied: method requires a user principal")
+		}
+		return callerid.SetPrincipal(ctx, moduleID, callerid.KindModule), nil
 	}
 
 	a.mu.RLock()
@@ -237,7 +368,7 @@ func (a *AuthInterceptor) extractAndVerify(ctx context.Context, fullMethod strin
 
 	// Full authentication + authorization path.
 	if authorizer != nil {
-		identity, err := identityProvider.ExtractIdentity(ctx)
+		identity, err := identityProvider.ExtractIdentity(withoutCallerIDHint(ctx))
 		if err != nil {
 			slog.Warn("gRPC identity extraction failed",
 				"method", fullMethod,
@@ -258,7 +389,7 @@ func (a *AuthInterceptor) extractAndVerify(ctx context.Context, fullMethod strin
 			return ctx, status.Error(codes.Unauthenticated, "authentication required")
 		}
 
-		ctx = callerid.Set(ctx, identity.ID)
+		ctx = callerid.SetPrincipal(ctx, identity.ID, callerid.KindUser)
 
 		session := contracts.Session{
 			UserID: identity.ID,

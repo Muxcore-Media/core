@@ -28,3 +28,36 @@ func Get(ctx context.Context) string {
 	}
 	return ""
 }
+
+// Principal kinds recorded alongside the caller ID by the gRPC auth
+// interceptor (ADR-0017).
+const (
+	// KindModule is a mesh module (service principal): a verified client
+	// certificate CN, or x-caller-id in the dev/insecure profile.
+	KindModule = "module"
+	// KindUser is an end user resolved from a bearer token by the identity
+	// provider.
+	KindUser = "user"
+	// KindPublic marks calls to open methods ("_public").
+	KindPublic = "public"
+)
+
+type kindKey struct{}
+
+// SetPrincipal sets the caller ID and records the principal kind.
+func SetPrincipal(ctx context.Context, id, kind string) context.Context {
+	ctx = Set(ctx, id)
+	return context.WithValue(ctx, kindKey{}, kind)
+}
+
+// Kind returns the principal kind recorded by SetPrincipal, or "" when the
+// caller was set without a kind (e.g. test harnesses using Set).
+func Kind(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if k, ok := ctx.Value(kindKey{}).(string); ok {
+		return k
+	}
+	return ""
+}
