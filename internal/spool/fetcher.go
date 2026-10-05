@@ -14,46 +14,41 @@ import (
 	"time"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
+	"github.com/Muxcore-Media/core/sdk/go/module/netguard"
 )
 
 // DefaultSpoolURL is the official MuxCore spool.
 const DefaultSpoolURL = "https://github.com/Muxcore-Media/spool"
 
-// client is a reusable HTTP client for spool fetching.
-// Does NOT follow redirects: an HTTPS spool could redirect to an internal
-// HTTP endpoint (SSRF vector). See custom CheckRedirect.
-var client = &http.Client{
-	Timeout: 10 * time.Second,
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 3 {
-			return fmt.Errorf("spool: too many redirects")
-		}
-		// Reject redirects to non-HTTPS URLs (SSRF protection).
-		if req.URL.Scheme != "https" {
-			return fmt.Errorf("spool: redirect to non-HTTPS URL %q rejected (SSRF protection)", req.URL.String())
-		}
-		// Block redirects to private IP ranges.
-		redirectHost := stripPort(req.URL.Host)
-		if ip := net.ParseIP(redirectHost); ip != nil && isPrivateIP(ip) {
-			return fmt.Errorf("spool: redirect to private IP %q blocked (SSRF protection)", redirectHost)
-		}
-		// Reject redirects to hosts not in the allow-list.
-		allowedHostsMu.RLock()
-		defer allowedHostsMu.RUnlock()
-		if len(allowedHosts) > 0 {
-			hostAllowed := false
-			for _, h := range allowedHosts {
-				if req.URL.Host == h {
-					hostAllowed = true
-					break
-				}
-			}
-			if !hostAllowed {
-				return fmt.Errorf("spool: redirect to host %q not in allowed-hosts list (SSRF protection)", req.URL.Host)
-			}
-		}
-		return nil
-	},
+// defaultClient is the production sentinel. FetchTag builds a netguard client
+// unless a test replaces client with one that trusts a local certificate.
+var defaultClient = &http.Client{Timeout: 10 * time.Second}
+
+// client is overridable by tests.
+var client = defaultClient
+
+func spoolGuard() (netguard.Profile, netguard.Options) {
+	allowedHostsMu.RLock()
+	hosts := append([]string(nil), allowedHosts...)
+	allowedHostsMu.RUnlock()
+	opts := netguard.Options{RequireHTTPS: true, Timeout: 10 * time.Second}
+	if len(hosts) == 0 {
+		return netguard.UserURL, opts
+	}
+	// An explicit allow-list may name a LAN spool. Link-local and cloud
+	// metadata stay refused even when listed.
+	opts.AllowPrivate = true
+	opts.AllowLoopback = true
+	opts.AllowedHosts = hosts
+	return netguard.Integration, opts
+}
+
+func fetchHTTPClient() *http.Client {
+	if client != defaultClient {
+		return client
+	}
+	profile, opts := spoolGuard()
+	return netguard.NewClient(profile, opts)
 }
 
 var validTagName = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
@@ -106,31 +101,9 @@ func FetchTag(ctx context.Context, spoolURL, tagName string) (*contracts.TagDefi
 		return nil, fmt.Errorf("spool: only HTTPS URLs are allowed, got %q", u.Scheme)
 	}
 
-	// Enforce allowed host allow-list when configured (SSRF protection).
-	allowedHostsMu.RLock()
-	hasAllowList := len(allowedHosts) > 0
-	hostAllowed := false
-	if hasAllowList {
-		for _, h := range allowedHosts {
-			if u.Host == h {
-				hostAllowed = true
-				break
-			}
-		}
-	}
-	allowedHostsMu.RUnlock()
-	if hasAllowList && !hostAllowed {
-		return nil, fmt.Errorf("spool: host %q is not in the spool allowed-hosts list", u.Host)
-	}
-
-	// When no explicit allow-list is configured, block private IP ranges
-	// as a safety net (SSRF protection). An explicit allow-list entry
-	// overrides this check — operators who add a private host to the list
-	// are assumed to have a legitimate local spool.
-	if !hasAllowList {
-		if err2 := blockPrivateHost(ctx, u.Host); err2 != nil {
-			return nil, err2
-		}
+	profile, opts := spoolGuard()
+	if err := netguard.ValidateURL(fetchURL, profile, opts); err != nil {
+		return nil, fmt.Errorf("spool: %w", err)
 	}
 
 	// Warn when using a non-official spool.
@@ -144,7 +117,7 @@ func FetchTag(ctx context.Context, spoolURL, tagName string) (*contracts.TagDefi
 	if err != nil {
 		return nil, fmt.Errorf("spool: create request: %w", err)
 	}
-	resp, err := client.Do(req)
+	resp, err := fetchHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("spool: fetch %s: %w", fetchURL, err)
 	}

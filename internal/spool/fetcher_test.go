@@ -117,6 +117,15 @@ func TestFetchTag_AllowedHosts(t *testing.T) {
 	}
 }
 
+func TestFetchTag_RejectsMetadataEvenWhenAllowListed(t *testing.T) {
+	t.Cleanup(func() { SetAllowedHosts(nil) })
+	SetAllowedHosts([]string{"169.254.169.254"})
+	_, err := FetchTag(context.Background(), "https://169.254.169.254/latest", "meta")
+	if err == nil {
+		t.Fatal("expected metadata host to stay blocked")
+	}
+}
+
 func TestFetchTag_EmptyInput(t *testing.T) {
 	_, err := FetchTag(context.Background(), "", "tag")
 	if err == nil {

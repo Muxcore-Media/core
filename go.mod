@@ -15,6 +15,7 @@ require (
 
 require (
 	github.com/Muxcore-Media/core/pkg/contracts v0.6.0
+	github.com/Muxcore-Media/core/sdk/go/module v0.6.6
 	golang.org/x/crypto v0.56.0
 	golang.org/x/sys v0.47.0
 )

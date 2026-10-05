@@ -5,6 +5,11 @@ All notable changes to the MuxCore project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- Spool tag fetches use netguard (HTTPS required). With no host allow-list the strict profile refuses private, loopback, link-local, and cloud metadata, including at dial time. An allow-list may name a LAN spool; link-local and metadata stay refused even when listed (NFR-SEC-009).
+
 ## [sdk/go/module v0.6.6] — 2026-10-05 — netguard and pathguard
 
 ### Added
