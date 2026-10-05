@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cgroup-aware `GOMAXPROCS` at startup (`pkg/sys`).
 - `backup`, `executor` and `inputvalidate` v1 protos with generated Go code.
 - `workerpool.NodeResolver` / `ClusterNodeResolver`: dispatcher records `AssignedNode` and skips executors whose host is unknown.
+- Proto drift fix (T-M1-04, NFR-MNT-001), additive only: definitions consumers already used but core never published.
+  - `muxcore.auth.v1.AuthService`: household invite RPCs `CreateInvite`, `ListInvites`, `RevokeInvite`, `RedeemInvite`. New messages `InviteInfo`, `CreateInviteRequest`/`Response`, `ListInvitesRequest`/`Response`, `RevokeInviteRequest`/`Response` and `RedeemInviteRequest`/`Response`. auth-local implements these.
+  - `muxcore.circuitbreaker.v1.CircuitBreakerService`: `List` RPC with `ListRequest` (`open_only`), `ListResponse` and `CircuitEntry` (`key`, `state`, `failure_count`, `opened_at_unix_nano`). circuitbreaker-simple implements this.
+  - Go code regenerated with `make proto` using protoc 29.3, protoc-gen-go v1.36.12 and protoc-gen-go-grpc v1.6.2, the versions the committed code was built with. No existing fields, numbers or RPCs changed (`buf breaking` passes).
 
 ### Fixed
 - Config: env var overrides now apply when no config file exists (`config.ApplyEnvOverrides`).

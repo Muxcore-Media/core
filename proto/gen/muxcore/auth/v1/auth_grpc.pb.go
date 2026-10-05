@@ -40,6 +40,10 @@ const (
 	AuthService_DeleteWebAuthnCredential_FullMethodName  = "/muxcore.auth.v1.AuthService/DeleteWebAuthnCredential"
 	AuthService_BeginAdminRegistration_FullMethodName    = "/muxcore.auth.v1.AuthService/BeginAdminRegistration"
 	AuthService_CompleteAdminRegistration_FullMethodName = "/muxcore.auth.v1.AuthService/CompleteAdminRegistration"
+	AuthService_CreateInvite_FullMethodName              = "/muxcore.auth.v1.AuthService/CreateInvite"
+	AuthService_ListInvites_FullMethodName               = "/muxcore.auth.v1.AuthService/ListInvites"
+	AuthService_RevokeInvite_FullMethodName              = "/muxcore.auth.v1.AuthService/RevokeInvite"
+	AuthService_RedeemInvite_FullMethodName              = "/muxcore.auth.v1.AuthService/RedeemInvite"
 )
 
 // AuthServiceClient is the client API for AuthService service.
@@ -75,6 +79,13 @@ type AuthServiceClient interface {
 	DeleteWebAuthnCredential(ctx context.Context, in *DeleteWebAuthnCredentialRequest, opts ...grpc.CallOption) (*DeleteWebAuthnCredentialResponse, error)
 	BeginAdminRegistration(ctx context.Context, in *BeginAdminRegistrationRequest, opts ...grpc.CallOption) (*BeginAdminRegistrationResponse, error)
 	CompleteAdminRegistration(ctx context.Context, in *CompleteAdminRegistrationRequest, opts ...grpc.CallOption) (*CompleteAdminRegistrationResponse, error)
+	// Household invites. CreateInvite, ListInvites and RevokeInvite are admin
+	// only (or a verified mesh caller); RedeemInvite is unauthenticated and is
+	// gated by possession of the raw invite token.
+	CreateInvite(ctx context.Context, in *CreateInviteRequest, opts ...grpc.CallOption) (*CreateInviteResponse, error)
+	ListInvites(ctx context.Context, in *ListInvitesRequest, opts ...grpc.CallOption) (*ListInvitesResponse, error)
+	RevokeInvite(ctx context.Context, in *RevokeInviteRequest, opts ...grpc.CallOption) (*RevokeInviteResponse, error)
+	RedeemInvite(ctx context.Context, in *RedeemInviteRequest, opts ...grpc.CallOption) (*RedeemInviteResponse, error)
 }
 
 type authServiceClient struct {
@@ -295,6 +306,46 @@ func (c *authServiceClient) CompleteAdminRegistration(ctx context.Context, in *C
 	return out, nil
 }
 
+func (c *authServiceClient) CreateInvite(ctx context.Context, in *CreateInviteRequest, opts ...grpc.CallOption) (*CreateInviteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateInviteResponse)
+	err := c.cc.Invoke(ctx, AuthService_CreateInvite_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) ListInvites(ctx context.Context, in *ListInvitesRequest, opts ...grpc.CallOption) (*ListInvitesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListInvitesResponse)
+	err := c.cc.Invoke(ctx, AuthService_ListInvites_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) RevokeInvite(ctx context.Context, in *RevokeInviteRequest, opts ...grpc.CallOption) (*RevokeInviteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevokeInviteResponse)
+	err := c.cc.Invoke(ctx, AuthService_RevokeInvite_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) RedeemInvite(ctx context.Context, in *RedeemInviteRequest, opts ...grpc.CallOption) (*RedeemInviteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RedeemInviteResponse)
+	err := c.cc.Invoke(ctx, AuthService_RedeemInvite_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthServiceServer is the server API for AuthService service.
 // All implementations must embed UnimplementedAuthServiceServer
 // for forward compatibility.
@@ -328,6 +379,13 @@ type AuthServiceServer interface {
 	DeleteWebAuthnCredential(context.Context, *DeleteWebAuthnCredentialRequest) (*DeleteWebAuthnCredentialResponse, error)
 	BeginAdminRegistration(context.Context, *BeginAdminRegistrationRequest) (*BeginAdminRegistrationResponse, error)
 	CompleteAdminRegistration(context.Context, *CompleteAdminRegistrationRequest) (*CompleteAdminRegistrationResponse, error)
+	// Household invites. CreateInvite, ListInvites and RevokeInvite are admin
+	// only (or a verified mesh caller); RedeemInvite is unauthenticated and is
+	// gated by possession of the raw invite token.
+	CreateInvite(context.Context, *CreateInviteRequest) (*CreateInviteResponse, error)
+	ListInvites(context.Context, *ListInvitesRequest) (*ListInvitesResponse, error)
+	RevokeInvite(context.Context, *RevokeInviteRequest) (*RevokeInviteResponse, error)
+	RedeemInvite(context.Context, *RedeemInviteRequest) (*RedeemInviteResponse, error)
 	mustEmbedUnimplementedAuthServiceServer()
 }
 
@@ -400,6 +458,18 @@ func (UnimplementedAuthServiceServer) BeginAdminRegistration(context.Context, *B
 }
 func (UnimplementedAuthServiceServer) CompleteAdminRegistration(context.Context, *CompleteAdminRegistrationRequest) (*CompleteAdminRegistrationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CompleteAdminRegistration not implemented")
+}
+func (UnimplementedAuthServiceServer) CreateInvite(context.Context, *CreateInviteRequest) (*CreateInviteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateInvite not implemented")
+}
+func (UnimplementedAuthServiceServer) ListInvites(context.Context, *ListInvitesRequest) (*ListInvitesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListInvites not implemented")
+}
+func (UnimplementedAuthServiceServer) RevokeInvite(context.Context, *RevokeInviteRequest) (*RevokeInviteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RevokeInvite not implemented")
+}
+func (UnimplementedAuthServiceServer) RedeemInvite(context.Context, *RedeemInviteRequest) (*RedeemInviteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RedeemInvite not implemented")
 }
 func (UnimplementedAuthServiceServer) mustEmbedUnimplementedAuthServiceServer() {}
 func (UnimplementedAuthServiceServer) testEmbeddedByValue()                     {}
@@ -800,6 +870,78 @@ func _AuthService_CompleteAdminRegistration_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_CreateInvite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateInviteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).CreateInvite(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_CreateInvite_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).CreateInvite(ctx, req.(*CreateInviteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_ListInvites_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListInvitesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).ListInvites(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_ListInvites_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).ListInvites(ctx, req.(*ListInvitesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_RevokeInvite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeInviteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).RevokeInvite(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_RevokeInvite_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).RevokeInvite(ctx, req.(*RevokeInviteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_RedeemInvite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RedeemInviteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).RedeemInvite(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_RedeemInvite_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).RedeemInvite(ctx, req.(*RedeemInviteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuthService_ServiceDesc is the grpc.ServiceDesc for AuthService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -890,6 +1032,22 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CompleteAdminRegistration",
 			Handler:    _AuthService_CompleteAdminRegistration_Handler,
+		},
+		{
+			MethodName: "CreateInvite",
+			Handler:    _AuthService_CreateInvite_Handler,
+		},
+		{
+			MethodName: "ListInvites",
+			Handler:    _AuthService_ListInvites_Handler,
+		},
+		{
+			MethodName: "RevokeInvite",
+			Handler:    _AuthService_RevokeInvite_Handler,
+		},
+		{
+			MethodName: "RedeemInvite",
+			Handler:    _AuthService_RedeemInvite_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

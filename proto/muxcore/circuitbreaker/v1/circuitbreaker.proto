@@ -14,6 +14,8 @@ service CircuitBreakerService {
   rpc RecordSuccess(RecordSuccessRequest) returns (RecordSuccessResponse);
   rpc RecordFailure(RecordFailureRequest) returns (RecordFailureResponse);
   rpc Reset(ResetRequest) returns (ResetResponse);
+  // List returns a snapshot of all known circuits (optionally only non-closed ones).
+  rpc List(ListRequest) returns (ListResponse);
 }
 
 message StateRequest { string key = 1; }
@@ -29,3 +31,11 @@ message RecordFailureRequest { string key = 1; }
 message RecordFailureResponse { CircuitState new_state = 1; bool circuit_just_opened = 2; }
 message ResetRequest { string key = 1; }
 message ResetResponse { CircuitState previous_state = 1; }
+message ListRequest { bool open_only = 1; } // when true, omit circuits in CIRCUIT_STATE_CLOSED
+message CircuitEntry {
+  string key = 1;
+  CircuitState state = 2;
+  uint32 failure_count = 3;
+  int64 opened_at_unix_nano = 4; // zero if the circuit has never opened
+}
+message ListResponse { repeated CircuitEntry circuits = 1; }
