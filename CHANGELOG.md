@@ -5,6 +5,12 @@ All notable changes to the MuxCore project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [sdk/go/module v0.6.6] — 2026-10-05 — netguard and pathguard
+
+### Added
+- Go module SDK: new package `sdk/go/module/netguard` (RULE-VAL-2, NFR-SEC-009), a stdlib-only SSRF guard for outbound HTTP to configured or user-supplied URLs. Profiles `UserURL` (zero value; refuses loopback, RFC 1918, CGNAT, ULA, link-local, multicast, reserved, documentation and cloud-metadata destinations, single-label and intranet-suffix names, userinfo) and `Integration` (admin-configured endpoints; private LAN only with `Options.AllowPrivate`, loopback only with `Options.AllowLoopback`; link-local, multicast, unspecified and metadata always refused). `ValidateURL`, `CheckHost`, `CheckAddr` check without network access; `NewClient` returns an `*http.Client` that validates every request and redirect hop (max 5), resolves and checks every address at dial time and connects only to a checked address (DNS-rebinding safe), times out after 30 s by default and ignores environment proxies unless `Options.UseEnvProxy`. Non-canonical IPv4 literals (decimal, octal, hex, short forms) are refused; IPv4-mapped, NAT64 and 6to4 addresses are judged by their embedded IPv4 address. Optional host allow-list (`Options.AllowedHosts`). Refusals wrap `ErrBlocked` (`*BlockedError` carries the reason).
+- Go module SDK: new package `sdk/go/module/pathguard` (RULE-VAL-1, NFR-SEC-008): `Confine(path, roots)` (absolute input, refuses `..` segments and NUL, resolves symlinks on the nearest existing ancestor and on the roots, component-wise containment so `/data/movies2` is not under `/data/movies`, returns the real path), `Join(root, rel)` for untrusted relative names, and `SanitizeComponent(s, maxLen)` for single file-name parts (`[A-Za-z0-9._-]`). Errors wrap `ErrOutsideRoots` or `ErrInvalidPath` (dangling symlinks are refused).
+
 ## [v0.6.15] — 2026-10-05 — sdk/go/module v0.6.5 meshtls; image mount points
 
 ### Added
