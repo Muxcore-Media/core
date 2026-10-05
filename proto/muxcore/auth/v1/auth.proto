@@ -37,6 +37,14 @@ service AuthService {
   rpc DeleteWebAuthnCredential(DeleteWebAuthnCredentialRequest) returns (DeleteWebAuthnCredentialResponse);
   rpc BeginAdminRegistration(BeginAdminRegistrationRequest) returns (BeginAdminRegistrationResponse);
   rpc CompleteAdminRegistration(CompleteAdminRegistrationRequest) returns (CompleteAdminRegistrationResponse);
+
+  // Household invites. CreateInvite, ListInvites and RevokeInvite are admin
+  // only (or a verified mesh caller); RedeemInvite is unauthenticated and is
+  // gated by possession of the raw invite token.
+  rpc CreateInvite(CreateInviteRequest) returns (CreateInviteResponse);
+  rpc ListInvites(ListInvitesRequest) returns (ListInvitesResponse);
+  rpc RevokeInvite(RevokeInviteRequest) returns (RevokeInviteResponse);
+  rpc RedeemInvite(RedeemInviteRequest) returns (RedeemInviteResponse);
 }
 
 message AuthenticateRequest {
@@ -277,4 +285,62 @@ message CompleteAdminRegistrationRequest {
 
 message CompleteAdminRegistrationResponse {
   string error = 1;
+}
+
+// --- Household invites ---
+
+// InviteInfo describes an invite without its secret token.
+message InviteInfo {
+  string id = 1;
+  string prefix = 2;       // non-secret token prefix, for display
+  string created_by = 3;
+  string role = 4;         // role granted to the redeemed account
+  string tenant_id = 5;
+  int32 max_uses = 6;      // 0 = unlimited
+  int32 use_count = 7;
+  string expires_at = 8;   // RFC 3339
+  string created_at = 9;   // RFC 3339
+  string revoked_at = 10;  // RFC 3339; empty if not revoked
+}
+
+message CreateInviteRequest {
+  string role = 1;
+  string tenant_id = 2;
+  int32 max_uses = 3;      // 0 = default (single use); negative = unlimited
+  int64 ttl_seconds = 4;   // 0 = server default
+}
+
+message CreateInviteResponse {
+  string invite_id = 1;
+  string token = 2;        // full raw token — only returned on creation
+  string prefix = 3;
+  string error = 4;
+}
+
+message ListInvitesRequest {}
+
+message ListInvitesResponse {
+  repeated InviteInfo invites = 1;
+}
+
+message RevokeInviteRequest {
+  string invite_id = 1;
+}
+
+message RevokeInviteResponse {
+  string error = 1;
+}
+
+message RedeemInviteRequest {
+  string token = 1;
+  string username = 2;
+  string password = 3;
+}
+
+message RedeemInviteResponse {
+  string user_id = 1;
+  string username = 2;
+  repeated string roles = 3;
+  string tenant_id = 4;
+  string error = 5;
 }

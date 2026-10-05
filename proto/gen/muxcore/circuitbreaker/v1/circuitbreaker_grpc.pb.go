@@ -23,6 +23,7 @@ const (
 	CircuitBreakerService_RecordSuccess_FullMethodName = "/muxcore.circuitbreaker.v1.CircuitBreakerService/RecordSuccess"
 	CircuitBreakerService_RecordFailure_FullMethodName = "/muxcore.circuitbreaker.v1.CircuitBreakerService/RecordFailure"
 	CircuitBreakerService_Reset_FullMethodName         = "/muxcore.circuitbreaker.v1.CircuitBreakerService/Reset"
+	CircuitBreakerService_List_FullMethodName          = "/muxcore.circuitbreaker.v1.CircuitBreakerService/List"
 )
 
 // CircuitBreakerServiceClient is the client API for CircuitBreakerService service.
@@ -33,6 +34,8 @@ type CircuitBreakerServiceClient interface {
 	RecordSuccess(ctx context.Context, in *RecordSuccessRequest, opts ...grpc.CallOption) (*RecordSuccessResponse, error)
 	RecordFailure(ctx context.Context, in *RecordFailureRequest, opts ...grpc.CallOption) (*RecordFailureResponse, error)
 	Reset(ctx context.Context, in *ResetRequest, opts ...grpc.CallOption) (*ResetResponse, error)
+	// List returns a snapshot of all known circuits (optionally only non-closed ones).
+	List(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
 }
 
 type circuitBreakerServiceClient struct {
@@ -83,6 +86,16 @@ func (c *circuitBreakerServiceClient) Reset(ctx context.Context, in *ResetReques
 	return out, nil
 }
 
+func (c *circuitBreakerServiceClient) List(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListResponse)
+	err := c.cc.Invoke(ctx, CircuitBreakerService_List_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CircuitBreakerServiceServer is the server API for CircuitBreakerService service.
 // All implementations must embed UnimplementedCircuitBreakerServiceServer
 // for forward compatibility.
@@ -91,6 +104,8 @@ type CircuitBreakerServiceServer interface {
 	RecordSuccess(context.Context, *RecordSuccessRequest) (*RecordSuccessResponse, error)
 	RecordFailure(context.Context, *RecordFailureRequest) (*RecordFailureResponse, error)
 	Reset(context.Context, *ResetRequest) (*ResetResponse, error)
+	// List returns a snapshot of all known circuits (optionally only non-closed ones).
+	List(context.Context, *ListRequest) (*ListResponse, error)
 	mustEmbedUnimplementedCircuitBreakerServiceServer()
 }
 
@@ -112,6 +127,9 @@ func (UnimplementedCircuitBreakerServiceServer) RecordFailure(context.Context, *
 }
 func (UnimplementedCircuitBreakerServiceServer) Reset(context.Context, *ResetRequest) (*ResetResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Reset not implemented")
+}
+func (UnimplementedCircuitBreakerServiceServer) List(context.Context, *ListRequest) (*ListResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method List not implemented")
 }
 func (UnimplementedCircuitBreakerServiceServer) mustEmbedUnimplementedCircuitBreakerServiceServer() {}
 func (UnimplementedCircuitBreakerServiceServer) testEmbeddedByValue()                               {}
@@ -206,6 +224,24 @@ func _CircuitBreakerService_Reset_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CircuitBreakerService_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CircuitBreakerServiceServer).List(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CircuitBreakerService_List_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CircuitBreakerServiceServer).List(ctx, req.(*ListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CircuitBreakerService_ServiceDesc is the grpc.ServiceDesc for CircuitBreakerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -228,6 +264,10 @@ var CircuitBreakerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Reset",
 			Handler:    _CircuitBreakerService_Reset_Handler,
+		},
+		{
+			MethodName: "List",
+			Handler:    _CircuitBreakerService_List_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

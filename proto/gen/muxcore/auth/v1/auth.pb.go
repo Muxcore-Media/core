@@ -2481,6 +2481,563 @@ func (x *CompleteAdminRegistrationResponse) GetError() string {
 	return ""
 }
 
+// InviteInfo describes an invite without its secret token.
+type InviteInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Prefix        string                 `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"` // non-secret token prefix, for display
+	CreatedBy     string                 `protobuf:"bytes,3,opt,name=created_by,json=createdBy,proto3" json:"created_by,omitempty"`
+	Role          string                 `protobuf:"bytes,4,opt,name=role,proto3" json:"role,omitempty"` // role granted to the redeemed account
+	TenantId      string                 `protobuf:"bytes,5,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	MaxUses       int32                  `protobuf:"varint,6,opt,name=max_uses,json=maxUses,proto3" json:"max_uses,omitempty"` // 0 = unlimited
+	UseCount      int32                  `protobuf:"varint,7,opt,name=use_count,json=useCount,proto3" json:"use_count,omitempty"`
+	ExpiresAt     string                 `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`  // RFC 3339
+	CreatedAt     string                 `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`  // RFC 3339
+	RevokedAt     string                 `protobuf:"bytes,10,opt,name=revoked_at,json=revokedAt,proto3" json:"revoked_at,omitempty"` // RFC 3339; empty if not revoked
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InviteInfo) Reset() {
+	*x = InviteInfo{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InviteInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InviteInfo) ProtoMessage() {}
+
+func (x *InviteInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InviteInfo.ProtoReflect.Descriptor instead.
+func (*InviteInfo) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *InviteInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *InviteInfo) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+func (x *InviteInfo) GetCreatedBy() string {
+	if x != nil {
+		return x.CreatedBy
+	}
+	return ""
+}
+
+func (x *InviteInfo) GetRole() string {
+	if x != nil {
+		return x.Role
+	}
+	return ""
+}
+
+func (x *InviteInfo) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *InviteInfo) GetMaxUses() int32 {
+	if x != nil {
+		return x.MaxUses
+	}
+	return 0
+}
+
+func (x *InviteInfo) GetUseCount() int32 {
+	if x != nil {
+		return x.UseCount
+	}
+	return 0
+}
+
+func (x *InviteInfo) GetExpiresAt() string {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return ""
+}
+
+func (x *InviteInfo) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
+func (x *InviteInfo) GetRevokedAt() string {
+	if x != nil {
+		return x.RevokedAt
+	}
+	return ""
+}
+
+type CreateInviteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Role          string                 `protobuf:"bytes,1,opt,name=role,proto3" json:"role,omitempty"`
+	TenantId      string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	MaxUses       int32                  `protobuf:"varint,3,opt,name=max_uses,json=maxUses,proto3" json:"max_uses,omitempty"`          // 0 = default (single use); negative = unlimited
+	TtlSeconds    int64                  `protobuf:"varint,4,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"` // 0 = server default
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateInviteRequest) Reset() {
+	*x = CreateInviteRequest{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateInviteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateInviteRequest) ProtoMessage() {}
+
+func (x *CreateInviteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateInviteRequest.ProtoReflect.Descriptor instead.
+func (*CreateInviteRequest) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *CreateInviteRequest) GetRole() string {
+	if x != nil {
+		return x.Role
+	}
+	return ""
+}
+
+func (x *CreateInviteRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *CreateInviteRequest) GetMaxUses() int32 {
+	if x != nil {
+		return x.MaxUses
+	}
+	return 0
+}
+
+func (x *CreateInviteRequest) GetTtlSeconds() int64 {
+	if x != nil {
+		return x.TtlSeconds
+	}
+	return 0
+}
+
+type CreateInviteResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InviteId      string                 `protobuf:"bytes,1,opt,name=invite_id,json=inviteId,proto3" json:"invite_id,omitempty"`
+	Token         string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"` // full raw token — only returned on creation
+	Prefix        string                 `protobuf:"bytes,3,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateInviteResponse) Reset() {
+	*x = CreateInviteResponse{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateInviteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateInviteResponse) ProtoMessage() {}
+
+func (x *CreateInviteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateInviteResponse.ProtoReflect.Descriptor instead.
+func (*CreateInviteResponse) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *CreateInviteResponse) GetInviteId() string {
+	if x != nil {
+		return x.InviteId
+	}
+	return ""
+}
+
+func (x *CreateInviteResponse) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+func (x *CreateInviteResponse) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+func (x *CreateInviteResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type ListInvitesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListInvitesRequest) Reset() {
+	*x = ListInvitesRequest{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListInvitesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListInvitesRequest) ProtoMessage() {}
+
+func (x *ListInvitesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListInvitesRequest.ProtoReflect.Descriptor instead.
+func (*ListInvitesRequest) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{48}
+}
+
+type ListInvitesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Invites       []*InviteInfo          `protobuf:"bytes,1,rep,name=invites,proto3" json:"invites,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListInvitesResponse) Reset() {
+	*x = ListInvitesResponse{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListInvitesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListInvitesResponse) ProtoMessage() {}
+
+func (x *ListInvitesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListInvitesResponse.ProtoReflect.Descriptor instead.
+func (*ListInvitesResponse) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *ListInvitesResponse) GetInvites() []*InviteInfo {
+	if x != nil {
+		return x.Invites
+	}
+	return nil
+}
+
+type RevokeInviteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InviteId      string                 `protobuf:"bytes,1,opt,name=invite_id,json=inviteId,proto3" json:"invite_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeInviteRequest) Reset() {
+	*x = RevokeInviteRequest{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeInviteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeInviteRequest) ProtoMessage() {}
+
+func (x *RevokeInviteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeInviteRequest.ProtoReflect.Descriptor instead.
+func (*RevokeInviteRequest) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *RevokeInviteRequest) GetInviteId() string {
+	if x != nil {
+		return x.InviteId
+	}
+	return ""
+}
+
+type RevokeInviteResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Error         string                 `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeInviteResponse) Reset() {
+	*x = RevokeInviteResponse{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeInviteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeInviteResponse) ProtoMessage() {}
+
+func (x *RevokeInviteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeInviteResponse.ProtoReflect.Descriptor instead.
+func (*RevokeInviteResponse) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *RevokeInviteResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type RedeemInviteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	Username      string                 `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
+	Password      string                 `protobuf:"bytes,3,opt,name=password,proto3" json:"password,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RedeemInviteRequest) Reset() {
+	*x = RedeemInviteRequest{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RedeemInviteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RedeemInviteRequest) ProtoMessage() {}
+
+func (x *RedeemInviteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RedeemInviteRequest.ProtoReflect.Descriptor instead.
+func (*RedeemInviteRequest) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *RedeemInviteRequest) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+func (x *RedeemInviteRequest) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *RedeemInviteRequest) GetPassword() string {
+	if x != nil {
+		return x.Password
+	}
+	return ""
+}
+
+type RedeemInviteResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Username      string                 `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
+	Roles         []string               `protobuf:"bytes,3,rep,name=roles,proto3" json:"roles,omitempty"`
+	TenantId      string                 `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Error         string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RedeemInviteResponse) Reset() {
+	*x = RedeemInviteResponse{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[53]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RedeemInviteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RedeemInviteResponse) ProtoMessage() {}
+
+func (x *RedeemInviteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[53]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RedeemInviteResponse.ProtoReflect.Descriptor instead.
+func (*RedeemInviteResponse) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{53}
+}
+
+func (x *RedeemInviteResponse) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *RedeemInviteResponse) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *RedeemInviteResponse) GetRoles() []string {
+	if x != nil {
+		return x.Roles
+	}
+	return nil
+}
+
+func (x *RedeemInviteResponse) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *RedeemInviteResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_muxcore_auth_v1_auth_proto protoreflect.FileDescriptor
 
 const file_muxcore_auth_v1_auth_proto_rawDesc = "" +
@@ -2643,7 +3200,52 @@ const file_muxcore_auth_v1_auth_proto_rawDesc = "" +
 	"\tchallenge\x18\x03 \x01(\tR\tchallenge\x128\n" +
 	"\x18credential_response_json\x18\x04 \x01(\fR\x16credentialResponseJson\"9\n" +
 	"!CompleteAdminRegistrationResponse\x12\x14\n" +
-	"\x05error\x18\x01 \x01(\tR\x05error2\xee\x0f\n" +
+	"\x05error\x18\x01 \x01(\tR\x05error\"\x99\x02\n" +
+	"\n" +
+	"InviteInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
+	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12\x1d\n" +
+	"\n" +
+	"created_by\x18\x03 \x01(\tR\tcreatedBy\x12\x12\n" +
+	"\x04role\x18\x04 \x01(\tR\x04role\x12\x1b\n" +
+	"\ttenant_id\x18\x05 \x01(\tR\btenantId\x12\x19\n" +
+	"\bmax_uses\x18\x06 \x01(\x05R\amaxUses\x12\x1b\n" +
+	"\tuse_count\x18\a \x01(\x05R\buseCount\x12\x1d\n" +
+	"\n" +
+	"expires_at\x18\b \x01(\tR\texpiresAt\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\t \x01(\tR\tcreatedAt\x12\x1d\n" +
+	"\n" +
+	"revoked_at\x18\n" +
+	" \x01(\tR\trevokedAt\"\x82\x01\n" +
+	"\x13CreateInviteRequest\x12\x12\n" +
+	"\x04role\x18\x01 \x01(\tR\x04role\x12\x1b\n" +
+	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x19\n" +
+	"\bmax_uses\x18\x03 \x01(\x05R\amaxUses\x12\x1f\n" +
+	"\vttl_seconds\x18\x04 \x01(\x03R\n" +
+	"ttlSeconds\"w\n" +
+	"\x14CreateInviteResponse\x12\x1b\n" +
+	"\tinvite_id\x18\x01 \x01(\tR\binviteId\x12\x14\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\x12\x16\n" +
+	"\x06prefix\x18\x03 \x01(\tR\x06prefix\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\x14\n" +
+	"\x12ListInvitesRequest\"L\n" +
+	"\x13ListInvitesResponse\x125\n" +
+	"\ainvites\x18\x01 \x03(\v2\x1b.muxcore.auth.v1.InviteInfoR\ainvites\"2\n" +
+	"\x13RevokeInviteRequest\x12\x1b\n" +
+	"\tinvite_id\x18\x01 \x01(\tR\binviteId\",\n" +
+	"\x14RevokeInviteResponse\x12\x14\n" +
+	"\x05error\x18\x01 \x01(\tR\x05error\"c\n" +
+	"\x13RedeemInviteRequest\x12\x14\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1a\n" +
+	"\busername\x18\x02 \x01(\tR\busername\x12\x1a\n" +
+	"\bpassword\x18\x03 \x01(\tR\bpassword\"\x94\x01\n" +
+	"\x14RedeemInviteResponse\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x1a\n" +
+	"\busername\x18\x02 \x01(\tR\busername\x12\x14\n" +
+	"\x05roles\x18\x03 \x03(\tR\x05roles\x12\x1b\n" +
+	"\ttenant_id\x18\x04 \x01(\tR\btenantId\x12\x14\n" +
+	"\x05error\x18\x05 \x01(\tR\x05error2\xdf\x12\n" +
 	"\vAuthService\x12[\n" +
 	"\fAuthenticate\x12$.muxcore.auth.v1.AuthenticateRequest\x1a%.muxcore.auth.v1.AuthenticateResponse\x12O\n" +
 	"\bValidate\x12 .muxcore.auth.v1.ValidateRequest\x1a!.muxcore.auth.v1.ValidateResponse\x12I\n" +
@@ -2669,7 +3271,11 @@ const file_muxcore_auth_v1_auth_proto_rawDesc = "" +
 	"\x17ListWebAuthnCredentials\x12/.muxcore.auth.v1.ListWebAuthnCredentialsRequest\x1a0.muxcore.auth.v1.ListWebAuthnCredentialsResponse\x12\x7f\n" +
 	"\x18DeleteWebAuthnCredential\x120.muxcore.auth.v1.DeleteWebAuthnCredentialRequest\x1a1.muxcore.auth.v1.DeleteWebAuthnCredentialResponse\x12y\n" +
 	"\x16BeginAdminRegistration\x12..muxcore.auth.v1.BeginAdminRegistrationRequest\x1a/.muxcore.auth.v1.BeginAdminRegistrationResponse\x12\x82\x01\n" +
-	"\x19CompleteAdminRegistration\x121.muxcore.auth.v1.CompleteAdminRegistrationRequest\x1a2.muxcore.auth.v1.CompleteAdminRegistrationResponseB@Z>github.com/Muxcore-Media/core/proto/gen/muxcore/auth/v1;authv1b\x06proto3"
+	"\x19CompleteAdminRegistration\x121.muxcore.auth.v1.CompleteAdminRegistrationRequest\x1a2.muxcore.auth.v1.CompleteAdminRegistrationResponse\x12[\n" +
+	"\fCreateInvite\x12$.muxcore.auth.v1.CreateInviteRequest\x1a%.muxcore.auth.v1.CreateInviteResponse\x12X\n" +
+	"\vListInvites\x12#.muxcore.auth.v1.ListInvitesRequest\x1a$.muxcore.auth.v1.ListInvitesResponse\x12[\n" +
+	"\fRevokeInvite\x12$.muxcore.auth.v1.RevokeInviteRequest\x1a%.muxcore.auth.v1.RevokeInviteResponse\x12[\n" +
+	"\fRedeemInvite\x12$.muxcore.auth.v1.RedeemInviteRequest\x1a%.muxcore.auth.v1.RedeemInviteResponseB@Z>github.com/Muxcore-Media/core/proto/gen/muxcore/auth/v1;authv1b\x06proto3"
 
 var (
 	file_muxcore_auth_v1_auth_proto_rawDescOnce sync.Once
@@ -2683,7 +3289,7 @@ func file_muxcore_auth_v1_auth_proto_rawDescGZIP() []byte {
 	return file_muxcore_auth_v1_auth_proto_rawDescData
 }
 
-var file_muxcore_auth_v1_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 45)
+var file_muxcore_auth_v1_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 54)
 var file_muxcore_auth_v1_auth_proto_goTypes = []any{
 	(*AuthenticateRequest)(nil),               // 0: muxcore.auth.v1.AuthenticateRequest
 	(*AuthenticateResponse)(nil),              // 1: muxcore.auth.v1.AuthenticateResponse
@@ -2730,58 +3336,76 @@ var file_muxcore_auth_v1_auth_proto_goTypes = []any{
 	(*BeginAdminRegistrationResponse)(nil),    // 42: muxcore.auth.v1.BeginAdminRegistrationResponse
 	(*CompleteAdminRegistrationRequest)(nil),  // 43: muxcore.auth.v1.CompleteAdminRegistrationRequest
 	(*CompleteAdminRegistrationResponse)(nil), // 44: muxcore.auth.v1.CompleteAdminRegistrationResponse
+	(*InviteInfo)(nil),                        // 45: muxcore.auth.v1.InviteInfo
+	(*CreateInviteRequest)(nil),               // 46: muxcore.auth.v1.CreateInviteRequest
+	(*CreateInviteResponse)(nil),              // 47: muxcore.auth.v1.CreateInviteResponse
+	(*ListInvitesRequest)(nil),                // 48: muxcore.auth.v1.ListInvitesRequest
+	(*ListInvitesResponse)(nil),               // 49: muxcore.auth.v1.ListInvitesResponse
+	(*RevokeInviteRequest)(nil),               // 50: muxcore.auth.v1.RevokeInviteRequest
+	(*RevokeInviteResponse)(nil),              // 51: muxcore.auth.v1.RevokeInviteResponse
+	(*RedeemInviteRequest)(nil),               // 52: muxcore.auth.v1.RedeemInviteRequest
+	(*RedeemInviteResponse)(nil),              // 53: muxcore.auth.v1.RedeemInviteResponse
 }
 var file_muxcore_auth_v1_auth_proto_depIdxs = []int32{
 	23, // 0: muxcore.auth.v1.ListUsersResponse.users:type_name -> muxcore.auth.v1.UserInfo
 	30, // 1: muxcore.auth.v1.ListAPITokensResponse.tokens:type_name -> muxcore.auth.v1.APITokenInfo
 	36, // 2: muxcore.auth.v1.ListWebAuthnCredentialsResponse.credentials:type_name -> muxcore.auth.v1.WebAuthnCredentialInfo
-	0,  // 3: muxcore.auth.v1.AuthService.Authenticate:input_type -> muxcore.auth.v1.AuthenticateRequest
-	2,  // 4: muxcore.auth.v1.AuthService.Validate:input_type -> muxcore.auth.v1.ValidateRequest
-	4,  // 5: muxcore.auth.v1.AuthService.Revoke:input_type -> muxcore.auth.v1.RevokeRequest
-	6,  // 6: muxcore.auth.v1.AuthService.Can:input_type -> muxcore.auth.v1.CanRequest
-	8,  // 7: muxcore.auth.v1.AuthService.ExtractIdentity:input_type -> muxcore.auth.v1.ExtractIdentityRequest
-	10, // 8: muxcore.auth.v1.AuthService.EnableTOTP:input_type -> muxcore.auth.v1.EnableTOTPRequest
-	12, // 9: muxcore.auth.v1.AuthService.DisableTOTP:input_type -> muxcore.auth.v1.DisableTOTPRequest
-	14, // 10: muxcore.auth.v1.AuthService.TOTPStatus:input_type -> muxcore.auth.v1.TOTPStatusRequest
-	16, // 11: muxcore.auth.v1.AuthService.VerifyTOTPSetup:input_type -> muxcore.auth.v1.VerifyTOTPSetupRequest
-	18, // 12: muxcore.auth.v1.AuthService.CreateUser:input_type -> muxcore.auth.v1.CreateUserRequest
-	20, // 13: muxcore.auth.v1.AuthService.DeleteUser:input_type -> muxcore.auth.v1.DeleteUserRequest
-	22, // 14: muxcore.auth.v1.AuthService.ListUsers:input_type -> muxcore.auth.v1.ListUsersRequest
-	25, // 15: muxcore.auth.v1.AuthService.SetPassword:input_type -> muxcore.auth.v1.SetPasswordRequest
-	27, // 16: muxcore.auth.v1.AuthService.SetRoles:input_type -> muxcore.auth.v1.SetRolesRequest
-	29, // 17: muxcore.auth.v1.AuthService.CreateAPIToken:input_type -> muxcore.auth.v1.CreateAPITokenRequest
-	32, // 18: muxcore.auth.v1.AuthService.ListAPITokens:input_type -> muxcore.auth.v1.ListAPITokensRequest
-	34, // 19: muxcore.auth.v1.AuthService.DeleteAPIToken:input_type -> muxcore.auth.v1.DeleteAPITokenRequest
-	37, // 20: muxcore.auth.v1.AuthService.ListWebAuthnCredentials:input_type -> muxcore.auth.v1.ListWebAuthnCredentialsRequest
-	39, // 21: muxcore.auth.v1.AuthService.DeleteWebAuthnCredential:input_type -> muxcore.auth.v1.DeleteWebAuthnCredentialRequest
-	41, // 22: muxcore.auth.v1.AuthService.BeginAdminRegistration:input_type -> muxcore.auth.v1.BeginAdminRegistrationRequest
-	43, // 23: muxcore.auth.v1.AuthService.CompleteAdminRegistration:input_type -> muxcore.auth.v1.CompleteAdminRegistrationRequest
-	1,  // 24: muxcore.auth.v1.AuthService.Authenticate:output_type -> muxcore.auth.v1.AuthenticateResponse
-	3,  // 25: muxcore.auth.v1.AuthService.Validate:output_type -> muxcore.auth.v1.ValidateResponse
-	5,  // 26: muxcore.auth.v1.AuthService.Revoke:output_type -> muxcore.auth.v1.RevokeResponse
-	7,  // 27: muxcore.auth.v1.AuthService.Can:output_type -> muxcore.auth.v1.CanResponse
-	9,  // 28: muxcore.auth.v1.AuthService.ExtractIdentity:output_type -> muxcore.auth.v1.ExtractIdentityResponse
-	11, // 29: muxcore.auth.v1.AuthService.EnableTOTP:output_type -> muxcore.auth.v1.EnableTOTPResponse
-	13, // 30: muxcore.auth.v1.AuthService.DisableTOTP:output_type -> muxcore.auth.v1.DisableTOTPResponse
-	15, // 31: muxcore.auth.v1.AuthService.TOTPStatus:output_type -> muxcore.auth.v1.TOTPStatusResponse
-	17, // 32: muxcore.auth.v1.AuthService.VerifyTOTPSetup:output_type -> muxcore.auth.v1.VerifyTOTPSetupResponse
-	19, // 33: muxcore.auth.v1.AuthService.CreateUser:output_type -> muxcore.auth.v1.CreateUserResponse
-	21, // 34: muxcore.auth.v1.AuthService.DeleteUser:output_type -> muxcore.auth.v1.DeleteUserResponse
-	24, // 35: muxcore.auth.v1.AuthService.ListUsers:output_type -> muxcore.auth.v1.ListUsersResponse
-	26, // 36: muxcore.auth.v1.AuthService.SetPassword:output_type -> muxcore.auth.v1.SetPasswordResponse
-	28, // 37: muxcore.auth.v1.AuthService.SetRoles:output_type -> muxcore.auth.v1.SetRolesResponse
-	31, // 38: muxcore.auth.v1.AuthService.CreateAPIToken:output_type -> muxcore.auth.v1.CreateAPITokenResponse
-	33, // 39: muxcore.auth.v1.AuthService.ListAPITokens:output_type -> muxcore.auth.v1.ListAPITokensResponse
-	35, // 40: muxcore.auth.v1.AuthService.DeleteAPIToken:output_type -> muxcore.auth.v1.DeleteAPITokenResponse
-	38, // 41: muxcore.auth.v1.AuthService.ListWebAuthnCredentials:output_type -> muxcore.auth.v1.ListWebAuthnCredentialsResponse
-	40, // 42: muxcore.auth.v1.AuthService.DeleteWebAuthnCredential:output_type -> muxcore.auth.v1.DeleteWebAuthnCredentialResponse
-	42, // 43: muxcore.auth.v1.AuthService.BeginAdminRegistration:output_type -> muxcore.auth.v1.BeginAdminRegistrationResponse
-	44, // 44: muxcore.auth.v1.AuthService.CompleteAdminRegistration:output_type -> muxcore.auth.v1.CompleteAdminRegistrationResponse
-	24, // [24:45] is the sub-list for method output_type
-	3,  // [3:24] is the sub-list for method input_type
-	3,  // [3:3] is the sub-list for extension type_name
-	3,  // [3:3] is the sub-list for extension extendee
-	0,  // [0:3] is the sub-list for field type_name
+	45, // 3: muxcore.auth.v1.ListInvitesResponse.invites:type_name -> muxcore.auth.v1.InviteInfo
+	0,  // 4: muxcore.auth.v1.AuthService.Authenticate:input_type -> muxcore.auth.v1.AuthenticateRequest
+	2,  // 5: muxcore.auth.v1.AuthService.Validate:input_type -> muxcore.auth.v1.ValidateRequest
+	4,  // 6: muxcore.auth.v1.AuthService.Revoke:input_type -> muxcore.auth.v1.RevokeRequest
+	6,  // 7: muxcore.auth.v1.AuthService.Can:input_type -> muxcore.auth.v1.CanRequest
+	8,  // 8: muxcore.auth.v1.AuthService.ExtractIdentity:input_type -> muxcore.auth.v1.ExtractIdentityRequest
+	10, // 9: muxcore.auth.v1.AuthService.EnableTOTP:input_type -> muxcore.auth.v1.EnableTOTPRequest
+	12, // 10: muxcore.auth.v1.AuthService.DisableTOTP:input_type -> muxcore.auth.v1.DisableTOTPRequest
+	14, // 11: muxcore.auth.v1.AuthService.TOTPStatus:input_type -> muxcore.auth.v1.TOTPStatusRequest
+	16, // 12: muxcore.auth.v1.AuthService.VerifyTOTPSetup:input_type -> muxcore.auth.v1.VerifyTOTPSetupRequest
+	18, // 13: muxcore.auth.v1.AuthService.CreateUser:input_type -> muxcore.auth.v1.CreateUserRequest
+	20, // 14: muxcore.auth.v1.AuthService.DeleteUser:input_type -> muxcore.auth.v1.DeleteUserRequest
+	22, // 15: muxcore.auth.v1.AuthService.ListUsers:input_type -> muxcore.auth.v1.ListUsersRequest
+	25, // 16: muxcore.auth.v1.AuthService.SetPassword:input_type -> muxcore.auth.v1.SetPasswordRequest
+	27, // 17: muxcore.auth.v1.AuthService.SetRoles:input_type -> muxcore.auth.v1.SetRolesRequest
+	29, // 18: muxcore.auth.v1.AuthService.CreateAPIToken:input_type -> muxcore.auth.v1.CreateAPITokenRequest
+	32, // 19: muxcore.auth.v1.AuthService.ListAPITokens:input_type -> muxcore.auth.v1.ListAPITokensRequest
+	34, // 20: muxcore.auth.v1.AuthService.DeleteAPIToken:input_type -> muxcore.auth.v1.DeleteAPITokenRequest
+	37, // 21: muxcore.auth.v1.AuthService.ListWebAuthnCredentials:input_type -> muxcore.auth.v1.ListWebAuthnCredentialsRequest
+	39, // 22: muxcore.auth.v1.AuthService.DeleteWebAuthnCredential:input_type -> muxcore.auth.v1.DeleteWebAuthnCredentialRequest
+	41, // 23: muxcore.auth.v1.AuthService.BeginAdminRegistration:input_type -> muxcore.auth.v1.BeginAdminRegistrationRequest
+	43, // 24: muxcore.auth.v1.AuthService.CompleteAdminRegistration:input_type -> muxcore.auth.v1.CompleteAdminRegistrationRequest
+	46, // 25: muxcore.auth.v1.AuthService.CreateInvite:input_type -> muxcore.auth.v1.CreateInviteRequest
+	48, // 26: muxcore.auth.v1.AuthService.ListInvites:input_type -> muxcore.auth.v1.ListInvitesRequest
+	50, // 27: muxcore.auth.v1.AuthService.RevokeInvite:input_type -> muxcore.auth.v1.RevokeInviteRequest
+	52, // 28: muxcore.auth.v1.AuthService.RedeemInvite:input_type -> muxcore.auth.v1.RedeemInviteRequest
+	1,  // 29: muxcore.auth.v1.AuthService.Authenticate:output_type -> muxcore.auth.v1.AuthenticateResponse
+	3,  // 30: muxcore.auth.v1.AuthService.Validate:output_type -> muxcore.auth.v1.ValidateResponse
+	5,  // 31: muxcore.auth.v1.AuthService.Revoke:output_type -> muxcore.auth.v1.RevokeResponse
+	7,  // 32: muxcore.auth.v1.AuthService.Can:output_type -> muxcore.auth.v1.CanResponse
+	9,  // 33: muxcore.auth.v1.AuthService.ExtractIdentity:output_type -> muxcore.auth.v1.ExtractIdentityResponse
+	11, // 34: muxcore.auth.v1.AuthService.EnableTOTP:output_type -> muxcore.auth.v1.EnableTOTPResponse
+	13, // 35: muxcore.auth.v1.AuthService.DisableTOTP:output_type -> muxcore.auth.v1.DisableTOTPResponse
+	15, // 36: muxcore.auth.v1.AuthService.TOTPStatus:output_type -> muxcore.auth.v1.TOTPStatusResponse
+	17, // 37: muxcore.auth.v1.AuthService.VerifyTOTPSetup:output_type -> muxcore.auth.v1.VerifyTOTPSetupResponse
+	19, // 38: muxcore.auth.v1.AuthService.CreateUser:output_type -> muxcore.auth.v1.CreateUserResponse
+	21, // 39: muxcore.auth.v1.AuthService.DeleteUser:output_type -> muxcore.auth.v1.DeleteUserResponse
+	24, // 40: muxcore.auth.v1.AuthService.ListUsers:output_type -> muxcore.auth.v1.ListUsersResponse
+	26, // 41: muxcore.auth.v1.AuthService.SetPassword:output_type -> muxcore.auth.v1.SetPasswordResponse
+	28, // 42: muxcore.auth.v1.AuthService.SetRoles:output_type -> muxcore.auth.v1.SetRolesResponse
+	31, // 43: muxcore.auth.v1.AuthService.CreateAPIToken:output_type -> muxcore.auth.v1.CreateAPITokenResponse
+	33, // 44: muxcore.auth.v1.AuthService.ListAPITokens:output_type -> muxcore.auth.v1.ListAPITokensResponse
+	35, // 45: muxcore.auth.v1.AuthService.DeleteAPIToken:output_type -> muxcore.auth.v1.DeleteAPITokenResponse
+	38, // 46: muxcore.auth.v1.AuthService.ListWebAuthnCredentials:output_type -> muxcore.auth.v1.ListWebAuthnCredentialsResponse
+	40, // 47: muxcore.auth.v1.AuthService.DeleteWebAuthnCredential:output_type -> muxcore.auth.v1.DeleteWebAuthnCredentialResponse
+	42, // 48: muxcore.auth.v1.AuthService.BeginAdminRegistration:output_type -> muxcore.auth.v1.BeginAdminRegistrationResponse
+	44, // 49: muxcore.auth.v1.AuthService.CompleteAdminRegistration:output_type -> muxcore.auth.v1.CompleteAdminRegistrationResponse
+	47, // 50: muxcore.auth.v1.AuthService.CreateInvite:output_type -> muxcore.auth.v1.CreateInviteResponse
+	49, // 51: muxcore.auth.v1.AuthService.ListInvites:output_type -> muxcore.auth.v1.ListInvitesResponse
+	51, // 52: muxcore.auth.v1.AuthService.RevokeInvite:output_type -> muxcore.auth.v1.RevokeInviteResponse
+	53, // 53: muxcore.auth.v1.AuthService.RedeemInvite:output_type -> muxcore.auth.v1.RedeemInviteResponse
+	29, // [29:54] is the sub-list for method output_type
+	4,  // [4:29] is the sub-list for method input_type
+	4,  // [4:4] is the sub-list for extension type_name
+	4,  // [4:4] is the sub-list for extension extendee
+	0,  // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_muxcore_auth_v1_auth_proto_init() }
@@ -2795,7 +3419,7 @@ func file_muxcore_auth_v1_auth_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_muxcore_auth_v1_auth_proto_rawDesc), len(file_muxcore_auth_v1_auth_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   45,
+			NumMessages:   54,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

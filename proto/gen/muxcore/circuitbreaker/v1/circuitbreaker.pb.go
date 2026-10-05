@@ -457,6 +457,162 @@ func (x *ResetResponse) GetPreviousState() CircuitState {
 	return CircuitState_CIRCUIT_STATE_UNSPECIFIED
 }
 
+type ListRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OpenOnly      bool                   `protobuf:"varint,1,opt,name=open_only,json=openOnly,proto3" json:"open_only,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListRequest) Reset() {
+	*x = ListRequest{}
+	mi := &file_muxcore_circuitbreaker_v1_circuitbreaker_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListRequest) ProtoMessage() {}
+
+func (x *ListRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_circuitbreaker_v1_circuitbreaker_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListRequest.ProtoReflect.Descriptor instead.
+func (*ListRequest) Descriptor() ([]byte, []int) {
+	return file_muxcore_circuitbreaker_v1_circuitbreaker_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ListRequest) GetOpenOnly() bool {
+	if x != nil {
+		return x.OpenOnly
+	}
+	return false
+}
+
+type CircuitEntry struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Key              string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	State            CircuitState           `protobuf:"varint,2,opt,name=state,proto3,enum=muxcore.circuitbreaker.v1.CircuitState" json:"state,omitempty"`
+	FailureCount     uint32                 `protobuf:"varint,3,opt,name=failure_count,json=failureCount,proto3" json:"failure_count,omitempty"`
+	OpenedAtUnixNano int64                  `protobuf:"varint,4,opt,name=opened_at_unix_nano,json=openedAtUnixNano,proto3" json:"opened_at_unix_nano,omitempty"` // zero if the circuit has never opened
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *CircuitEntry) Reset() {
+	*x = CircuitEntry{}
+	mi := &file_muxcore_circuitbreaker_v1_circuitbreaker_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CircuitEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CircuitEntry) ProtoMessage() {}
+
+func (x *CircuitEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_circuitbreaker_v1_circuitbreaker_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CircuitEntry.ProtoReflect.Descriptor instead.
+func (*CircuitEntry) Descriptor() ([]byte, []int) {
+	return file_muxcore_circuitbreaker_v1_circuitbreaker_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *CircuitEntry) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *CircuitEntry) GetState() CircuitState {
+	if x != nil {
+		return x.State
+	}
+	return CircuitState_CIRCUIT_STATE_UNSPECIFIED
+}
+
+func (x *CircuitEntry) GetFailureCount() uint32 {
+	if x != nil {
+		return x.FailureCount
+	}
+	return 0
+}
+
+func (x *CircuitEntry) GetOpenedAtUnixNano() int64 {
+	if x != nil {
+		return x.OpenedAtUnixNano
+	}
+	return 0
+}
+
+type ListResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Circuits      []*CircuitEntry        `protobuf:"bytes,1,rep,name=circuits,proto3" json:"circuits,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListResponse) Reset() {
+	*x = ListResponse{}
+	mi := &file_muxcore_circuitbreaker_v1_circuitbreaker_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListResponse) ProtoMessage() {}
+
+func (x *ListResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_circuitbreaker_v1_circuitbreaker_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListResponse.ProtoReflect.Descriptor instead.
+func (*ListResponse) Descriptor() ([]byte, []int) {
+	return file_muxcore_circuitbreaker_v1_circuitbreaker_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ListResponse) GetCircuits() []*CircuitEntry {
+	if x != nil {
+		return x.Circuits
+	}
+	return nil
+}
+
 var File_muxcore_circuitbreaker_v1_circuitbreaker_proto protoreflect.FileDescriptor
 
 const file_muxcore_circuitbreaker_v1_circuitbreaker_proto_rawDesc = "" +
@@ -481,17 +637,27 @@ const file_muxcore_circuitbreaker_v1_circuitbreaker_proto_rawDesc = "" +
 	"\fResetRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\"_\n" +
 	"\rResetResponse\x12N\n" +
-	"\x0eprevious_state\x18\x01 \x01(\x0e2'.muxcore.circuitbreaker.v1.CircuitStateR\rpreviousState*|\n" +
+	"\x0eprevious_state\x18\x01 \x01(\x0e2'.muxcore.circuitbreaker.v1.CircuitStateR\rpreviousState\"*\n" +
+	"\vListRequest\x12\x1b\n" +
+	"\topen_only\x18\x01 \x01(\bR\bopenOnly\"\xb3\x01\n" +
+	"\fCircuitEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12=\n" +
+	"\x05state\x18\x02 \x01(\x0e2'.muxcore.circuitbreaker.v1.CircuitStateR\x05state\x12#\n" +
+	"\rfailure_count\x18\x03 \x01(\rR\ffailureCount\x12-\n" +
+	"\x13opened_at_unix_nano\x18\x04 \x01(\x03R\x10openedAtUnixNano\"S\n" +
+	"\fListResponse\x12C\n" +
+	"\bcircuits\x18\x01 \x03(\v2'.muxcore.circuitbreaker.v1.CircuitEntryR\bcircuits*|\n" +
 	"\fCircuitState\x12\x1d\n" +
 	"\x19CIRCUIT_STATE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14CIRCUIT_STATE_CLOSED\x10\x01\x12\x16\n" +
 	"\x12CIRCUIT_STATE_OPEN\x10\x02\x12\x1b\n" +
-	"\x17CIRCUIT_STATE_HALF_OPEN\x10\x032\xb7\x03\n" +
+	"\x17CIRCUIT_STATE_HALF_OPEN\x10\x032\x90\x04\n" +
 	"\x15CircuitBreakerService\x12Z\n" +
 	"\x05State\x12'.muxcore.circuitbreaker.v1.StateRequest\x1a(.muxcore.circuitbreaker.v1.StateResponse\x12r\n" +
 	"\rRecordSuccess\x12/.muxcore.circuitbreaker.v1.RecordSuccessRequest\x1a0.muxcore.circuitbreaker.v1.RecordSuccessResponse\x12r\n" +
 	"\rRecordFailure\x12/.muxcore.circuitbreaker.v1.RecordFailureRequest\x1a0.muxcore.circuitbreaker.v1.RecordFailureResponse\x12Z\n" +
-	"\x05Reset\x12'.muxcore.circuitbreaker.v1.ResetRequest\x1a(.muxcore.circuitbreaker.v1.ResetResponseBTZRgithub.com/Muxcore-Media/core/proto/gen/muxcore/circuitbreaker/v1;circuitbreakerv1b\x06proto3"
+	"\x05Reset\x12'.muxcore.circuitbreaker.v1.ResetRequest\x1a(.muxcore.circuitbreaker.v1.ResetResponse\x12W\n" +
+	"\x04List\x12&.muxcore.circuitbreaker.v1.ListRequest\x1a'.muxcore.circuitbreaker.v1.ListResponseBTZRgithub.com/Muxcore-Media/core/proto/gen/muxcore/circuitbreaker/v1;circuitbreakerv1b\x06proto3"
 
 var (
 	file_muxcore_circuitbreaker_v1_circuitbreaker_proto_rawDescOnce sync.Once
@@ -506,7 +672,7 @@ func file_muxcore_circuitbreaker_v1_circuitbreaker_proto_rawDescGZIP() []byte {
 }
 
 var file_muxcore_circuitbreaker_v1_circuitbreaker_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_muxcore_circuitbreaker_v1_circuitbreaker_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_muxcore_circuitbreaker_v1_circuitbreaker_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_muxcore_circuitbreaker_v1_circuitbreaker_proto_goTypes = []any{
 	(CircuitState)(0),             // 0: muxcore.circuitbreaker.v1.CircuitState
 	(*StateRequest)(nil),          // 1: muxcore.circuitbreaker.v1.StateRequest
@@ -517,25 +683,32 @@ var file_muxcore_circuitbreaker_v1_circuitbreaker_proto_goTypes = []any{
 	(*RecordFailureResponse)(nil), // 6: muxcore.circuitbreaker.v1.RecordFailureResponse
 	(*ResetRequest)(nil),          // 7: muxcore.circuitbreaker.v1.ResetRequest
 	(*ResetResponse)(nil),         // 8: muxcore.circuitbreaker.v1.ResetResponse
+	(*ListRequest)(nil),           // 9: muxcore.circuitbreaker.v1.ListRequest
+	(*CircuitEntry)(nil),          // 10: muxcore.circuitbreaker.v1.CircuitEntry
+	(*ListResponse)(nil),          // 11: muxcore.circuitbreaker.v1.ListResponse
 }
 var file_muxcore_circuitbreaker_v1_circuitbreaker_proto_depIdxs = []int32{
-	0, // 0: muxcore.circuitbreaker.v1.StateResponse.state:type_name -> muxcore.circuitbreaker.v1.CircuitState
-	0, // 1: muxcore.circuitbreaker.v1.RecordSuccessResponse.new_state:type_name -> muxcore.circuitbreaker.v1.CircuitState
-	0, // 2: muxcore.circuitbreaker.v1.RecordFailureResponse.new_state:type_name -> muxcore.circuitbreaker.v1.CircuitState
-	0, // 3: muxcore.circuitbreaker.v1.ResetResponse.previous_state:type_name -> muxcore.circuitbreaker.v1.CircuitState
-	1, // 4: muxcore.circuitbreaker.v1.CircuitBreakerService.State:input_type -> muxcore.circuitbreaker.v1.StateRequest
-	3, // 5: muxcore.circuitbreaker.v1.CircuitBreakerService.RecordSuccess:input_type -> muxcore.circuitbreaker.v1.RecordSuccessRequest
-	5, // 6: muxcore.circuitbreaker.v1.CircuitBreakerService.RecordFailure:input_type -> muxcore.circuitbreaker.v1.RecordFailureRequest
-	7, // 7: muxcore.circuitbreaker.v1.CircuitBreakerService.Reset:input_type -> muxcore.circuitbreaker.v1.ResetRequest
-	2, // 8: muxcore.circuitbreaker.v1.CircuitBreakerService.State:output_type -> muxcore.circuitbreaker.v1.StateResponse
-	4, // 9: muxcore.circuitbreaker.v1.CircuitBreakerService.RecordSuccess:output_type -> muxcore.circuitbreaker.v1.RecordSuccessResponse
-	6, // 10: muxcore.circuitbreaker.v1.CircuitBreakerService.RecordFailure:output_type -> muxcore.circuitbreaker.v1.RecordFailureResponse
-	8, // 11: muxcore.circuitbreaker.v1.CircuitBreakerService.Reset:output_type -> muxcore.circuitbreaker.v1.ResetResponse
-	8, // [8:12] is the sub-list for method output_type
-	4, // [4:8] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	0,  // 0: muxcore.circuitbreaker.v1.StateResponse.state:type_name -> muxcore.circuitbreaker.v1.CircuitState
+	0,  // 1: muxcore.circuitbreaker.v1.RecordSuccessResponse.new_state:type_name -> muxcore.circuitbreaker.v1.CircuitState
+	0,  // 2: muxcore.circuitbreaker.v1.RecordFailureResponse.new_state:type_name -> muxcore.circuitbreaker.v1.CircuitState
+	0,  // 3: muxcore.circuitbreaker.v1.ResetResponse.previous_state:type_name -> muxcore.circuitbreaker.v1.CircuitState
+	0,  // 4: muxcore.circuitbreaker.v1.CircuitEntry.state:type_name -> muxcore.circuitbreaker.v1.CircuitState
+	10, // 5: muxcore.circuitbreaker.v1.ListResponse.circuits:type_name -> muxcore.circuitbreaker.v1.CircuitEntry
+	1,  // 6: muxcore.circuitbreaker.v1.CircuitBreakerService.State:input_type -> muxcore.circuitbreaker.v1.StateRequest
+	3,  // 7: muxcore.circuitbreaker.v1.CircuitBreakerService.RecordSuccess:input_type -> muxcore.circuitbreaker.v1.RecordSuccessRequest
+	5,  // 8: muxcore.circuitbreaker.v1.CircuitBreakerService.RecordFailure:input_type -> muxcore.circuitbreaker.v1.RecordFailureRequest
+	7,  // 9: muxcore.circuitbreaker.v1.CircuitBreakerService.Reset:input_type -> muxcore.circuitbreaker.v1.ResetRequest
+	9,  // 10: muxcore.circuitbreaker.v1.CircuitBreakerService.List:input_type -> muxcore.circuitbreaker.v1.ListRequest
+	2,  // 11: muxcore.circuitbreaker.v1.CircuitBreakerService.State:output_type -> muxcore.circuitbreaker.v1.StateResponse
+	4,  // 12: muxcore.circuitbreaker.v1.CircuitBreakerService.RecordSuccess:output_type -> muxcore.circuitbreaker.v1.RecordSuccessResponse
+	6,  // 13: muxcore.circuitbreaker.v1.CircuitBreakerService.RecordFailure:output_type -> muxcore.circuitbreaker.v1.RecordFailureResponse
+	8,  // 14: muxcore.circuitbreaker.v1.CircuitBreakerService.Reset:output_type -> muxcore.circuitbreaker.v1.ResetResponse
+	11, // 15: muxcore.circuitbreaker.v1.CircuitBreakerService.List:output_type -> muxcore.circuitbreaker.v1.ListResponse
+	11, // [11:16] is the sub-list for method output_type
+	6,  // [6:11] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_muxcore_circuitbreaker_v1_circuitbreaker_proto_init() }
@@ -549,7 +722,7 @@ func file_muxcore_circuitbreaker_v1_circuitbreaker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_muxcore_circuitbreaker_v1_circuitbreaker_proto_rawDesc), len(file_muxcore_circuitbreaker_v1_circuitbreaker_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   8,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
