@@ -111,17 +111,30 @@ sandbox runner is enabled.
 - **OCI**: `sandbox/oci.WriteBundle` writes `config.json` + module binary; with `ROOTFS_AUTO` / `ROOTFS_TEMPLATE` it also applies the BusyBox/distro layout. Operators may validate with `runsc spec validate --bundle <dir>`.
 - **Firecracker**: helper `firecracker-spawn` writes a microVM `config.json` (boot-source, rootfs drive, **vsock** UDS). `MUXCORE_SANDBOX_FC_DRY_RUN=1` validates config without launching. Full guest boot remains operator-owned when Firecracker binary is present. Core does not ship runsc or Firecracker binaries.
 
+### Security profiles (ADR-0016)
+
+| Env | Behavior |
+| --- | -------- |
+| `MUXCORE_PROFILE` | `household` (default; `staging` is an alias) or `dev`. Unset + `MUXCORE_INSECURE_DISABLE_TLS` → `dev` with a deprecation warning (phase 0). `sqlite`/`postgres` (legacy installer DB selector) are treated as unset with a warning to use `MUXCORE_DB_BACKEND`. |
+| `MUXCORE_INSECURE_DISABLE_TLS` | Allowed only in `dev` (banner + `/health` `"insecure":true`); fatal at startup in `household`. |
+| `MUXCORE_DATA_DIR` | Core data dir (default `./data`); the core CA lives in `<data>/ca` unless `MUXCORE_GRPC_CA_CERT_DIR` is set. An existing CA in the legacy `~/.muxcore/ca` is kept. |
+| `MUXCORE_CA_EXPORT_DIR` | When set, core writes the public `ca.crt` there (0644) for modules and operators. |
+| `MUXCORE_TLS_SERVER_SANS` | Extra DNS names/IPs (comma-separated) for core's auto-issued server certificate (it always has loopback, `localhost`, `muxcore`, `muxcored`, the host name and the gRPC listen host). |
+
+In `household`, gRPC and HTTP always use TLS; without configured certificate files core creates its CA and issues its own server certificate. Clients may present certificates, verified against the core CA (`VerifyClientCertIfGiven`); `mtls_enabled` keeps `RequireAndVerifyClientCert`. Core's dials to sidecar providers (policy, auth, storage) verify the sidecar certificate against the core CA (+ `MUXCORE_GRPC_MTLS_CA`) and require its CN to equal the registered module ID, and present core's certificate.
+
 ### Marketplace artifact trust
 
 | Env | Behavior |
 | --- | -------- |
 | (default) | DeployTag verifies SHA-256 checksum pins when present |
-| `MUXCORE_SPOOL_REQUIRE_SIGNATURE=1` | Require ed25519 detached signature (tag `signature` field or sidecar `.sig` / `.minisig`) |
+| `MUXCORE_SPOOL_REQUIRE_SIGNATURE=1` | Require ed25519 detached signature (tag `signature` field or sidecar `.sig` / `.minisig`) on every path, including boot |
+| `MUXCORE_PROFILE=household` (default) | Marketplace DeployTag and orphan resurrection always require a valid signature from a configured trusted key; boot-time curated tags stay checksum-anchored (ADR-0012/0016) |
 | `MUXCORE_SPOOL_PUBLIC_KEY` | Path to a single ed25519 public key (raw/hex/base64/PEM or minisign `.pub` shape) |
 | `MUXCORE_SPOOL_TRUSTED_KEYS_DIR` | Directory of trusted public key files (tried until one verifies) |
 | `MUXCORE_SPOOL_ALLOWED_PUBLISHERS` | Comma-separated publisher allowlist; when set, tag `publisher` must match |
 
-Signature verification is wired on the DeployTag / boot spawn path. Minisign sidecars support both legacy (`Ed`, raw bytes) and hashed (`ED`, Blake2b-512 prehash) modes, including trusted-comment global signature checks.
+Signature verification is wired on the DeployTag / orphan resurrection / boot spawn paths. Minisign sidecars support both legacy (`Ed`, raw bytes) and hashed (`ED`, Blake2b-512 prehash) modes, including trusted-comment global signature checks.
 
 ### Multi-tenant scaffolding (optional)
 

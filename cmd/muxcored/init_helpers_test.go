@@ -19,6 +19,7 @@ import (
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
 	modlifecycle "github.com/Muxcore-Media/core/internal/module"
 	modulemgr "github.com/Muxcore-Media/core/internal/module/mgr"
+	"github.com/Muxcore-Media/core/internal/profile"
 	"github.com/Muxcore-Media/core/internal/registry"
 	"github.com/Muxcore-Media/core/internal/storage"
 	"github.com/Muxcore-Media/core/internal/workerpool"
@@ -236,9 +237,12 @@ func TestInitStorageAndHTTPAndAuditAndModuleMgr(t *testing.T) {
 
 	grpcSrv := grpc.NewServer()
 	auth := grpcmesh.NewAuthInterceptor()
-	modMgr, lifeMgr := initModuleManager(cfg, reg, bus, auditLogger, grpcSrv, metrics, "/bin/false", auth, nil)
+	modMgr, lifeMgr := initModuleManager(cfg, reg, bus, auditLogger, grpcSrv, metrics, "/bin/false", auth, nil, true)
 	if modMgr == nil || lifeMgr == nil {
 		t.Fatal("initModuleManager")
+	}
+	if !modMgr.RequireMarketplaceSignatures() {
+		t.Fatal("expected marketplace signatures required")
 	}
 	if metrics.ModuleSpawnCount == nil || metrics.ModuleRestartCount == nil || metrics.ModuleResolveCount == nil {
 		t.Fatal("expected metrics hooks from module manager")
@@ -287,14 +291,14 @@ func TestInitGRPCMesh_AutoMTLS(t *testing.T) {
 	cfg.GRPC.MaxMessageSizeMB = 0 // exercise default 32MB branch
 
 	bus := events.NewMemoryBus()
-	grpcSrv, meshClient, discovery, pool, reg, creds, auth, nodeID, cluster, certAuth := initGRPCMesh(ctx, cfg, bus)
+	grpcSrv, meshClient, discovery, pool, reg, sec, auth, nodeID, cluster := initGRPCMesh(ctx, cfg, bus, profile.Resolved{Name: profile.Household})
 	if grpcSrv == nil || meshClient == nil || discovery == nil || pool == nil || reg == nil {
 		t.Fatal("expected mesh components")
 	}
-	if creds == nil {
+	if sec.serverCreds == nil || sec.sidecar == nil {
 		t.Fatal("expected TLS creds")
 	}
-	if auth == nil || cluster == nil || certAuth == nil {
+	if auth == nil || cluster == nil || sec.certAuth == nil {
 		t.Fatal("expected auth/cluster/ca")
 	}
 	if nodeID == "" {
@@ -328,14 +332,14 @@ func TestInitGRPCMesh_InsecureDevSkip(t *testing.T) {
 	cfg.GRPC.CACertDir = ""
 
 	bus := events.NewMemoryBus()
-	grpcSrv, _, _, _, _, creds, _, _, cluster, certAuth := initGRPCMesh(ctx, cfg, bus)
+	grpcSrv, _, _, _, _, sec, _, _, cluster := initGRPCMesh(ctx, cfg, bus, profile.Resolved{Name: profile.Dev, Insecure: true})
 	if grpcSrv == nil {
 		t.Fatal("grpc server")
 	}
-	if creds != nil {
+	if sec.serverCreds != nil || sec.sidecar != nil {
 		t.Fatal("expected nil creds in insecure mode")
 	}
-	if certAuth != nil {
+	if sec.certAuth != nil {
 		t.Fatal("expected no CA without mtls/ca dir")
 	}
 	_ = cluster.Stop(ctx)

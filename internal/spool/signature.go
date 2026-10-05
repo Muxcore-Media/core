@@ -3,6 +3,8 @@
 // Env:
 //
 //	MUXCORE_SPOOL_REQUIRE_SIGNATURE=1  — fail deploy when signature missing/invalid
+//	                                     (always on for marketplace DeployTag and
+//	                                     orphan resurrection in the household profile)
 //	MUXCORE_SPOOL_PUBLIC_KEY=/path     — single ed25519 public key (raw 32B, hex, base64,
 //	                                     PKIX PEM, or minisign .pub format)
 //	MUXCORE_SPOOL_TRUSTED_KEYS_DIR=/d  — directory of trusted public key files (any of the
@@ -85,7 +87,16 @@ func CheckPublisherAllowlist(publisher string) error {
 // When REQUIRE_SIGNATURE is off and no signature material is present, returns nil.
 // When REQUIRE_SIGNATURE is on, a valid signature is mandatory.
 func VerifyArtifactSignature(artifactPath, inlineSignature string) error {
-	require := RequireSignature()
+	return VerifyArtifactSignatureRequired(artifactPath, inlineSignature, false)
+}
+
+// VerifyArtifactSignatureRequired is VerifyArtifactSignature with an extra
+// requirement from the caller: when require is true (household-profile
+// marketplace deploys, FR-EXT-003) a valid signature is mandatory even if
+// MUXCORE_SPOOL_REQUIRE_SIGNATURE is not set. The env opt-in still applies
+// when require is false.
+func VerifyArtifactSignatureRequired(artifactPath, inlineSignature string, require bool) error {
+	require = require || RequireSignature()
 	inlineSignature = strings.TrimSpace(inlineSignature)
 
 	kind, material, sigSrc, err := resolveSignatureMaterial(artifactPath, inlineSignature)
@@ -105,7 +116,7 @@ func VerifyArtifactSignature(artifactPath, inlineSignature string) error {
 	}
 	if len(pubs) == 0 {
 		if require {
-			return fmt.Errorf("MUXCORE_SPOOL_REQUIRE_SIGNATURE=1 but no public keys configured (MUXCORE_SPOOL_PUBLIC_KEY or MUXCORE_SPOOL_TRUSTED_KEYS_DIR)")
+			return fmt.Errorf("spool signature required but no public keys configured (MUXCORE_SPOOL_PUBLIC_KEY or MUXCORE_SPOOL_TRUSTED_KEYS_DIR)")
 		}
 		return nil
 	}

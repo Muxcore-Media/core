@@ -78,6 +78,13 @@ func main() {
 	slog.SetDefault(logger)
 	slog.Info("MuxCore starting...", "version", version.String())
 
+	// ADR-0016: resolve the security profile before anything listens.
+	prof, err := resolveProfile()
+	if err != nil {
+		slog.Error("security profile", "error", err)
+		os.Exit(1)
+	}
+
 	if len(cfg.Spool.AllowedHosts) > 0 {
 		spool.SetAllowedHosts(cfg.Spool.AllowedHosts)
 		slog.Info("spool host allow-list enabled", "hosts", cfg.Spool.AllowedHosts)
@@ -97,9 +104,11 @@ func main() {
 
 	bus := initEventBus()
 
-	grpcSrv, meshClient, discoveryGrpc, connPool, reg, creds, authInterceptor, nodeID, cluster, certAuth := initGRPCMesh(ctx, cfg, bus)
+	grpcSrv, meshClient, discoveryGrpc, connPool, reg, sec, authInterceptor, nodeID, cluster := initGRPCMesh(ctx, cfg, bus, prof)
+	creds := sec.serverCreds
+	sidecar := sec.sidecar
 
-	store, watchCancel := initStorage(ctx, cfg, reg, bus, creds, maxMsgBytes)
+	store, watchCancel := initStorage(ctx, cfg, reg, bus, sidecar, maxMsgBytes)
 
 	workerPool := workerpool.New(nodeID)
 	if *taskDir != "" {
@@ -127,6 +136,7 @@ func main() {
 	initEventStore(reg, nodeID)
 
 	srv, metricsProvider := initHTTPServer(cfg, reg, bus, store, meshClient, discoveryGrpc, connPool, workerPool)
+	srv.SetProfile(string(prof.Name), prof.Insecure)
 
 	auditLogger := initAudit(cfg, bus, store, srv)
 	defer func() { _ = auditLogger.Close() }()
@@ -134,15 +144,15 @@ func main() {
 	storageGrpc := grpcmesh.NewStorageServer(store)
 	storageGrpc.RegisterWithGRPC(grpcSrv)
 
-	wirePoliciesAndAuth(reg, meshClient, storageGrpc, bus, srv, authInterceptor, creds, maxMsgBytes)
+	wirePoliciesAndAuth(reg, meshClient, storageGrpc, bus, srv, authInterceptor, sidecar, maxMsgBytes)
 
 	discoveryGrpc.SetRegistry(reg)
 
-	modMgr, lifecycleMgr := initModuleManager(cfg, reg, bus, auditLogger, grpcSrv, metricsProvider, *watchdogPath, authInterceptor, certAuth)
+	modMgr, lifecycleMgr := initModuleManager(cfg, reg, bus, auditLogger, grpcSrv, metricsProvider, *watchdogPath, authInterceptor, sec.certAuth, prof.RequireMarketplaceSignatures())
 	modMgr.PostRegisterHook = func(moduleID string, caps []string) {
-		_ = bootstrap.WireCallPolicy(reg, meshClient, storageGrpc, creds, maxMsgBytes)
-		_ = bootstrap.WirePublishPolicy(reg, bus, creds, maxMsgBytes)
-		_ = bootstrap.WireAuth(reg, srv, authInterceptor, creds, maxMsgBytes)
+		_ = bootstrap.WireCallPolicy(reg, meshClient, storageGrpc, sidecar, maxMsgBytes)
+		_ = bootstrap.WirePublishPolicy(reg, bus, sidecar, maxMsgBytes)
+		_ = bootstrap.WireAuth(reg, srv, authInterceptor, sidecar, maxMsgBytes)
 	}
 
 	lifecycleMgr.SetRestarter(modMgr)
@@ -175,7 +185,7 @@ func main() {
 
 	fatalErr := startHTTPAndGRPC(cfg, srv, grpcSrv)
 
-	waitForSidecarPolicies(reg, meshClient, storageGrpc, bus, srv, authInterceptor, creds, maxMsgBytes)
+	waitForSidecarPolicies(reg, meshClient, storageGrpc, bus, srv, authInterceptor, sidecar, maxMsgBytes)
 
 	bootstrap.AutoJoinSeedNodes(ctx, cfg, creds, discoveryGrpc)
 

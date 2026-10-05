@@ -24,7 +24,6 @@ import (
 	"github.com/Muxcore-Media/core/internal/workerpool"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 )
 
 // Tunables for sidecar policy discovery (overridden in tests).
@@ -74,17 +73,17 @@ func wirePoliciesAndAuth(
 	bus *events.MemoryBus,
 	srv *api.Server,
 	authInterceptor *grpcmesh.AuthInterceptor,
-	creds credentials.TransportCredentials,
+	sidecar *grpcmesh.SidecarClientTLS,
 	maxMsgBytes int,
 ) {
-	if err := bootstrap.WireCallPolicy(reg, meshClient, storageGrpc, creds, maxMsgBytes); err != nil {
+	if err := bootstrap.WireCallPolicy(reg, meshClient, storageGrpc, sidecar, maxMsgBytes); err != nil {
 		slog.Warn("call policy setup", "error", err)
 	}
 	if meshClient.CallPolicy() == nil {
 		slog.Warn("no call policy provider registered — all inter-module mesh calls and storage operations are denied until a call.policy module is deployed")
 	}
 
-	if err := bootstrap.WirePublishPolicy(reg, bus, creds, maxMsgBytes); err != nil {
+	if err := bootstrap.WirePublishPolicy(reg, bus, sidecar, maxMsgBytes); err != nil {
 		slog.Warn("publish policy setup", "error", err)
 	}
 	if bus.PublishPolicy() == nil {
@@ -93,7 +92,7 @@ func wirePoliciesAndAuth(
 
 	warnEncryptionProviders(reg)
 
-	if err := bootstrap.WireAuth(reg, srv, authInterceptor, creds, maxMsgBytes); err != nil {
+	if err := bootstrap.WireAuth(reg, srv, authInterceptor, sidecar, maxMsgBytes); err != nil {
 		slog.Warn("auth setup", "error", err)
 	}
 	if len(reg.FindByCapability(contracts.CapabilityAuthorizer)) == 0 {
@@ -171,16 +170,16 @@ func waitForSidecarPolicies(
 	bus *events.MemoryBus,
 	srv *api.Server,
 	authInterceptor *grpcmesh.AuthInterceptor,
-	creds credentials.TransportCredentials,
+	sidecar *grpcmesh.SidecarClientTLS,
 	maxMsgBytes int,
 ) {
 	for _, discover := range []struct {
 		fn   func() error
 		name string
 	}{
-		{func() error { return bootstrap.WireCallPolicy(reg, meshClient, storageGrpc, creds, maxMsgBytes) }, "call.policy"},
-		{func() error { return bootstrap.WirePublishPolicy(reg, bus, creds, maxMsgBytes) }, "publish.policy"},
-		{func() error { return bootstrap.WireAuth(reg, srv, authInterceptor, creds, maxMsgBytes) }, "auth"},
+		{func() error { return bootstrap.WireCallPolicy(reg, meshClient, storageGrpc, sidecar, maxMsgBytes) }, "call.policy"},
+		{func() error { return bootstrap.WirePublishPolicy(reg, bus, sidecar, maxMsgBytes) }, "publish.policy"},
+		{func() error { return bootstrap.WireAuth(reg, srv, authInterceptor, sidecar, maxMsgBytes) }, "auth"},
 	} {
 		for i := 0; i < sidecarPolicyAttempts; i++ {
 			if err := discover.fn(); err != nil {

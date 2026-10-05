@@ -82,11 +82,13 @@ func DevTLSSkipCheck() bool {
 	return config.InsecureTLSSkipEnabled()
 }
 
-// DialSidecar creates a gRPC connection to a sidecar module at the given
-// address. Uses TLS when creds are available; falls back to insecure only
-// for localhost addresses in development mode. The maxMsgBytes parameter
-// sets the client-side send/recv message size limit.
-func DialSidecar(addr string, creds credentials.TransportCredentials, maxMsgBytes int) (*grpc.ClientConn, error) {
+// DialSidecar creates a gRPC connection to the sidecar module moduleID at
+// addr. When sc is non-nil the connection uses TLS: the sidecar's certificate
+// must chain to the core CA (or a configured CA) and its CN must equal
+// moduleID, and core presents its own certificate (T-M3-02b). When sc is nil
+// (insecure dev profile) plaintext is used, and only for localhost addresses.
+// The maxMsgBytes parameter sets the client-side send/recv message size limit.
+func DialSidecar(moduleID, addr string, sc *grpcmesh.SidecarClientTLS, maxMsgBytes int) (*grpc.ClientConn, error) {
 	if maxMsgBytes <= 0 {
 		maxMsgBytes = 32 * 1024 * 1024
 	}
@@ -99,13 +101,14 @@ func DialSidecar(addr string, creds credentials.TransportCredentials, maxMsgByte
 			MinConnectTimeout: 5 * time.Second,
 		}),
 	}
-	if creds != nil {
-		dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
-	} else if IsLocalhostAddr(addr) {
+	switch {
+	case sc != nil:
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(sc.Credentials(moduleID)))
+	case IsLocalhostAddr(addr):
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		slog.Warn("sidecar connection without TLS", "addr", addr)
-	} else {
-		return nil, fmt.Errorf("cannot connect to sidecar at %q: TLS is required for non-localhost connections", addr)
+		slog.Warn("sidecar connection without TLS", "module", moduleID, "addr", addr)
+	default:
+		return nil, fmt.Errorf("cannot connect to sidecar %q at %q: TLS is required for non-localhost connections", moduleID, addr)
 	}
 	return grpc.NewClient(addr, dialOpts...)
 }
@@ -113,7 +116,7 @@ func DialSidecar(addr string, creds credentials.TransportCredentials, maxMsgByte
 // WireCallPolicy discovers a CallPolicyProvider and sets it on the mesh client.
 // Checks in-process modules first (type assertion), then falls back to sidecar
 // modules registered with "call.policy" capability and an HTTPAddr.
-func WireCallPolicy(reg *registry.Registry, meshClient *grpcmesh.Client, storageGrpc *grpcmesh.StorageServer, creds credentials.TransportCredentials, maxMsgBytes int) error {
+func WireCallPolicy(reg *registry.Registry, meshClient *grpcmesh.Client, storageGrpc *grpcmesh.StorageServer, sc *grpcmesh.SidecarClientTLS, maxMsgBytes int) error {
 	entries := reg.FindByCapability("call.policy")
 	if len(entries) == 0 {
 		return nil
@@ -130,7 +133,7 @@ func WireCallPolicy(reg *registry.Registry, meshClient *grpcmesh.Client, storage
 
 	// Sidecar module: connect via gRPC to the module's HTTPAddr.
 	if addr := entry.Info.HTTPAddr; addr != "" {
-		conn, err := DialSidecar(addr, creds, maxMsgBytes)
+		conn, err := DialSidecar(entry.Info.ID, addr, sc, maxMsgBytes)
 		if err != nil {
 			return fmt.Errorf("dial sidecar call policy %s at %s: %w", entry.Info.ID, addr, err)
 		}
@@ -147,7 +150,7 @@ func WireCallPolicy(reg *registry.Registry, meshClient *grpcmesh.Client, storage
 
 // WirePublishPolicy discovers a PublishPolicyProvider and sets it on the event bus.
 // Checks in-process modules first, then sidecar modules with "publish.policy" capability.
-func WirePublishPolicy(reg *registry.Registry, bus *events.MemoryBus, creds credentials.TransportCredentials, maxMsgBytes int) error {
+func WirePublishPolicy(reg *registry.Registry, bus *events.MemoryBus, sc *grpcmesh.SidecarClientTLS, maxMsgBytes int) error {
 	entries := reg.FindByCapability("publish.policy")
 	if len(entries) == 0 {
 		return nil
@@ -163,7 +166,7 @@ func WirePublishPolicy(reg *registry.Registry, bus *events.MemoryBus, creds cred
 
 	// Sidecar module: connect via gRPC to the module's HTTPAddr.
 	if addr := entry.Info.HTTPAddr; addr != "" {
-		conn, err := DialSidecar(addr, creds, maxMsgBytes)
+		conn, err := DialSidecar(entry.Info.ID, addr, sc, maxMsgBytes)
 		if err != nil {
 			return fmt.Errorf("dial sidecar publish policy %s at %s: %w", entry.Info.ID, addr, err)
 		}
@@ -180,7 +183,7 @@ func WirePublishPolicy(reg *registry.Registry, bus *events.MemoryBus, creds cred
 // WireAuth discovers AuthProvider, Authorizer, and IdentityProvider from
 // the registry and wires them into the HTTP server and gRPC auth interceptor.
 // Handles both in-process modules (type assertion) and sidecar modules (gRPC).
-func WireAuth(reg *registry.Registry, srv *api.Server, authInterceptor *grpcmesh.AuthInterceptor, creds credentials.TransportCredentials, maxMsgBytes int) error {
+func WireAuth(reg *registry.Registry, srv *api.Server, authInterceptor *grpcmesh.AuthInterceptor, sc *grpcmesh.SidecarClientTLS, maxMsgBytes int) error {
 	// --- Authorizer ---
 	if entries := reg.FindByCapability(contracts.CapabilityAuthorizer); len(entries) > 0 {
 		entry := entries[0]
@@ -189,7 +192,7 @@ func WireAuth(reg *registry.Registry, srv *api.Server, authInterceptor *grpcmesh
 			authInterceptor.SetAuthorizer(az)
 			slog.Info("authorizer loaded from registry", "module", entry.Info.ID)
 		} else if addr := entry.Info.HTTPAddr; addr != "" {
-			conn, err := DialSidecar(addr, creds, maxMsgBytes)
+			conn, err := DialSidecar(entry.Info.ID, addr, sc, maxMsgBytes)
 			if err != nil {
 				return fmt.Errorf("dial sidecar authorizer %s at %s: %w", entry.Info.ID, addr, err)
 			}
@@ -207,7 +210,7 @@ func WireAuth(reg *registry.Registry, srv *api.Server, authInterceptor *grpcmesh
 			authInterceptor.SetIdentityProvider(ip)
 			slog.Info("identity provider loaded from registry", "module", entry.Info.ID)
 		} else if addr := entry.Info.HTTPAddr; addr != "" {
-			conn, err := DialSidecar(addr, creds, maxMsgBytes)
+			conn, err := DialSidecar(entry.Info.ID, addr, sc, maxMsgBytes)
 			if err != nil {
 				return fmt.Errorf("dial sidecar identity provider %s at %s: %w", entry.Info.ID, addr, err)
 			}
@@ -225,7 +228,7 @@ func WireAuth(reg *registry.Registry, srv *api.Server, authInterceptor *grpcmesh
 			ap = p
 			slog.Info("auth provider loaded from registry", "module", entry.Info.ID)
 		} else if addr := entry.Info.HTTPAddr; addr != "" {
-			conn, err := DialSidecar(addr, creds, maxMsgBytes)
+			conn, err := DialSidecar(entry.Info.ID, addr, sc, maxMsgBytes)
 			if err != nil {
 				return fmt.Errorf("dial sidecar auth provider %s at %s: %w", entry.Info.ID, addr, err)
 			}
