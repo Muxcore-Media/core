@@ -5,6 +5,11 @@ All notable changes to the MuxCore project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [sdk/go/module v0.6.1] — 2026-10-05 — upgrade-test helpers
+
+### Added
+- `sdk/go/module/moduletest` (to be released as `sdk/go/module/v0.6.1`): stdlib-only SQLite upgrade-test helpers `CopyFixture`, `Schema`, `RequireSchemaSuperset`, `RequireIntegrity` (ADR-0015, NFR-DATA-002, FR-INS-005). `modernc.org/sqlite` is a test-only dependency of the nested module.
+
 ## [v0.6.7] — 2026-10-05 — release workflow SBOM tool
 
 ### Fixed
