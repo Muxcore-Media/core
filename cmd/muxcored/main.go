@@ -51,6 +51,9 @@ const securityDisclaimer = `╔════════════════�
 ╚══════════════════════════════════════════════════════════════╝`
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "enroll" {
+		os.Exit(runEnrollCLI(os.Args[2:], os.Getenv, os.Stdout, os.Stderr))
+	}
 	sys.SetGOMAXPROCSFromCgroup()
 	tagName, spoolURL, watchdogPath, taskDir, idempotencyDir, deadletterDir, printVersion, dryRun := parseFlags()
 

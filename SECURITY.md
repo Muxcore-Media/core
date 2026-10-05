@@ -126,6 +126,19 @@ In `household`, gRPC and HTTP always use TLS; without configured certificate fil
 
 Module registration (ADR-0018): a verified certificate may only register its own CN; in `household` the security capabilities (`call.policy`, `publish.policy`, `authorizer`, `identity`, `auth`) need a verified certificate and have exactly one provider (a second is rejected `FailedPrecondition`), and `Unregister` requires a certificate for the module being removed. In `dev` these are warnings, `Unregister` is open, and the first-registered provider stays wired. Core always wires the first-registered provider of each security capability.
 
+### Module enrollment (ADR-0017)
+
+| Env | Where | Behavior |
+| --- | ----- | -------- |
+| `MUXCORE_ENROLL_SECRET` | core | HMAC key (≥ 16 bytes) for enrollment tokens `mct_2_<id>_<hex(HMAC-SHA256(secret, id))>`. Unset: only core's in-memory 5-minute tokens work. |
+| `MUXCORE_ENROLL_SAN_ALLOW` | core | Comma-separated extra SANs a module may request (exact names/IPs, or `*.suffix`). Default: none — certificates carry only the module ID, `localhost`, `127.0.0.1` and `::1`. |
+| `MUXCORE_BOOTSTRAP_TOKEN` | module | Token from `muxcored enroll token <id>`; used once, on first start. |
+| `MUXCORE_TLS_DIR` | module | Identity directory (default `<MUXCORE_DATA_DIR or ./data>/mesh-id`; keep it on a persistent volume). |
+| `MUXCORE_TLS_CA` / `MUXCORE_CA_EXPORT_DIR` | module | Core CA used to verify core during enrollment. |
+| `MUXCORE_ENROLL_DNS_NAMES` | module | Extra SANs to request (filtered by `MUXCORE_ENROLL_SAN_ALLOW`). |
+
+`BootstrapRegister` accepts a CSR: the module generates its own key and core signs it (CN = module ID; the CSR's subject and SANs are ignored) and writes no module key anywhere. Enrollment tokens require a CSR and are single-use: the ledger `<ca dir>/enrolled.json` (0600, atomic writes) records enrolled IDs and survives restarts. `muxcored enroll token <id>` prints a token, `muxcored enroll list` lists enrolled modules, and `muxcored enroll reset <id>` re-arms a token (needed if a module loses its identity volume). The Go module SDK (`modulesdk.Run` → `meshid.Ensure`) enrolls automatically and reuses the stored identity afterwards; `client.Dial` loads `MUXCORE_TLS_*` by default.
+
 ### Marketplace artifact trust
 
 | Env | Behavior |

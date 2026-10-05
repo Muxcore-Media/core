@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Muxcore-Media/core/internal/enroll"
 )
 
 const (
@@ -47,6 +49,11 @@ type CertAuthority struct {
 	tokens    map[string]*tokenRecord
 	cleanupCh chan struct{}
 	cleanupWG sync.WaitGroup
+
+	// enroll validates version-2 enrollment tokens (ADR-0017); nil when
+	// MUXCORE_ENROLL_SECRET is unset. sanPolicy is the SAN allow-list.
+	enroll    *enroll.Verifier
+	sanPolicy enroll.SANPolicy
 }
 
 type tokenRecord struct {
@@ -296,7 +303,14 @@ func (ca *CertAuthority) GenerateToken(moduleID string) (string, error) {
 
 // ValidateToken checks a bootstrap token and returns the claimed module ID
 // if valid. Single-use: after validation, the token is consumed.
+//
+// Version-1 tokens (mct_1_…) are core's in-memory 5-minute tokens.
+// Version-2 tokens (mct_2_…, ADR-0017) are HMAC tokens verified with
+// MUXCORE_ENROLL_SECRET and consumed in the persisted ledger.
 func (ca *CertAuthority) ValidateToken(token string) (string, error) {
+	if enroll.IsV2(token) {
+		return ca.validateEnrollToken(token)
+	}
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 

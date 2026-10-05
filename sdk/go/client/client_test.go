@@ -117,6 +117,9 @@ func TestMeshClient_Raw(t *testing.T) {
 
 func TestDial_NoOptions(t *testing.T) {
 	// Without transport security, gRPC should return an error.
+	for _, k := range []string{EnvTLSCert, EnvTLSKey, EnvTLSCA, envInsecure, envInsecureOld} {
+		t.Setenv(k, "")
+	}
 	_, err := Dial("localhost:19999")
 	if err == nil {
 		t.Fatal("expected error when no transport security is set")

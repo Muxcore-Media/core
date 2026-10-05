@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Muxcore-Media/core/internal/config"
+	"github.com/Muxcore-Media/core/internal/enroll"
 	"github.com/Muxcore-Media/core/internal/grpcmesh"
 	"github.com/Muxcore-Media/core/internal/profile"
 	"google.golang.org/grpc/credentials"
@@ -146,6 +147,10 @@ func setupMeshSecurity(cfg *config.Config, prof profile.Resolved, getenv func(st
 		}
 		sec.certAuth = ca
 		slog.Info("certificate authority ready", "dir", sec.caDir)
+		if err := configureEnrollment(ca, getenv); err != nil {
+			ca.Close()
+			return nil, err
+		}
 		if dir := profile.CAExportDir(getenv); dir != "" {
 			path, err := ca.ExportCACert(dir)
 			if err != nil {
@@ -153,6 +158,10 @@ func setupMeshSecurity(cfg *config.Config, prof profile.Resolved, getenv func(st
 			}
 			slog.Info("core CA certificate exported", "path", path)
 		}
+	}
+
+	if sec.certAuth == nil && strings.TrimSpace(getenv(enroll.EnvSecret)) != "" {
+		slog.Warn(enroll.EnvSecret + " is set but core has no CA in this configuration (insecure dev); enrollment is unavailable")
 	}
 
 	if tlsOn && !explicitCerts {
@@ -221,4 +230,23 @@ func setupMeshSecurity(cfg *config.Config, prof profile.Resolved, getenv func(st
 		"profile", string(prof.Name),
 	)
 	return sec, nil
+}
+
+// configureEnrollment applies MUXCORE_ENROLL_SECRET and
+// MUXCORE_ENROLL_SAN_ALLOW to the core CA (ADR-0017). A secret that is set
+// but too short is fatal.
+func configureEnrollment(ca *grpcmesh.CertAuthority, getenv func(string) string) error {
+	secret := strings.TrimSpace(getenv(enroll.EnvSecret))
+	sanAllow := getenv(enroll.EnvSANAllow)
+	if err := ca.ConfigureEnrollment(secret, sanAllow); err != nil {
+		return fmt.Errorf("enrollment: %w", err)
+	}
+	if secret == "" {
+		slog.Info("module enrollment tokens disabled (" + enroll.EnvSecret + " unset); only in-memory bootstrap tokens are accepted")
+	} else {
+		slog.Info("module enrollment enabled",
+			"ledger", enroll.NewLedger(ca.Dir()).Path(),
+			"san_allow", enroll.ParseSANAllow(sanAllow).Allow())
+	}
+	return nil
 }

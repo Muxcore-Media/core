@@ -10,6 +10,12 @@
 //	c, err := client.Dial("localhost:9090", client.WithInsecure())
 //	defer c.Close()
 //
+// Without WithInsecure, Dial uses TLS from the environment by default:
+// MUXCORE_TLS_CA verifies core and MUXCORE_TLS_CERT/MUXCORE_TLS_KEY are the
+// module's client certificate (meshid.Ensure in sdk/go/module exports them
+// after enrollment). With none of these set, MUXCORE_INSECURE_DISABLE_TLS
+// selects plaintext; otherwise pass credentials with WithGRPCOption.
+//
 //	modules, err := c.Discovery.FindByCapability(ctx, "storage")
 //	rc, err := c.Storage.Get(ctx, "media/movie.mkv")
 //
@@ -98,11 +104,14 @@ type dialOptions struct {
 	grpcOpts      []grpc.DialOption
 	addrs         []string
 	reconnectOpts ReconnectOptions
+	insecure      bool
 }
 
-// WithInsecure disables TLS. Use only for local development.
+// WithInsecure disables TLS. Use only for local development; it is an error
+// when MUXCORE_PROFILE is household (ADR-0016).
 func WithInsecure() Option {
 	return func(o *dialOptions) {
+		o.insecure = true
 		o.grpcOpts = append(o.grpcOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 }
@@ -216,6 +225,21 @@ func DialWithAddrs(addrs []string, opts ...Option) (*Client, error) {
 	allAddrs = append(allAddrs, do.addrs...)
 
 	applyDefaults(&do.reconnectOpts)
+
+	if do.insecure && householdProfile(os.Getenv) {
+		return nil, fmt.Errorf("client: %w", ErrInsecureInHousehold)
+	}
+	// Default transport credentials from MUXCORE_TLS_* (ADR-0017). They go
+	// first so that WithInsecure / WithGRPCOption credentials override them.
+	if !do.insecure {
+		envCreds, err := TransportCredentialsFromEnv(os.Getenv)
+		if err != nil {
+			return nil, fmt.Errorf("client: %w", err)
+		}
+		if envCreds != nil {
+			do.grpcOpts = append([]grpc.DialOption{grpc.WithTransportCredentials(envCreds)}, do.grpcOpts...)
+		}
+	}
 
 	// Prepend default message size limits so callers can override if needed.
 	msgSizeOpt := grpc.WithDefaultCallOptions(

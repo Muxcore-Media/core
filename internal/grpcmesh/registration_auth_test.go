@@ -20,13 +20,17 @@ import (
 
 // startRegistrationServer runs the ModuleRegistration service behind the
 // auth interceptor on a core-like mTLS listener (VerifyClientCertIfGiven
-// against the core CA) with the given ADR-0018 policy.
-func startRegistrationServer(t *testing.T, ca *CertAuthority, pol modulemgr.RegistrationPolicy) (string, *registry.Registry) {
+// against the core CA) with the given ADR-0018 policy. setup runs on the
+// manager before serving.
+func startRegistrationServer(t *testing.T, ca *CertAuthority, pol modulemgr.RegistrationPolicy, setup ...func(*modulemgr.Manager)) (string, *registry.Registry) {
 	t.Helper()
 	reg := registry.New()
 	life := modlifecycle.NewManager(reg, events.NewMemoryBus())
 	mgr := modulemgr.NewManager("127.0.0.1:9090", reg, life)
 	mgr.SetRegistrationPolicy(pol)
+	for _, f := range setup {
+		f(mgr)
+	}
 
 	auth := NewAuthInterceptor()
 	t.Cleanup(auth.StopCleanup)

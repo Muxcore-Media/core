@@ -4,6 +4,7 @@ package mgr
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/Muxcore-Media/contracts-reconciler/reconciler"
+	"github.com/Muxcore-Media/core/internal/enroll"
 	modulemgr "github.com/Muxcore-Media/core/internal/module"
 	"github.com/Muxcore-Media/core/internal/peerid"
 	"github.com/Muxcore-Media/core/internal/registry"
@@ -1333,32 +1335,66 @@ func (s *registrationServer) BootstrapRegister(ctx context.Context, req *modulev
 			Error:    "certificate authority not configured on this node",
 		}, nil
 	}
+	reject := func(msg string) (*modulev1.BootstrapRegisterResponse, error) {
+		return &modulev1.BootstrapRegisterResponse{Accepted: false, Error: msg}, nil
+	}
 
-	// Validate the one-time token.
+	// Everything that can be checked without consuming the token is checked
+	// first, so a malformed request does not burn a single-use token.
+	var csr *x509.CertificateRequest
+	var signer csrSigner
+	if req.GetCsrPem() != "" {
+		var err error
+		if csr, err = enroll.ParseCSR(req.GetCsrPem()); err != nil {
+			slog.Warn("bootstrap register: bad CSR", "claimed_id", req.GetModuleId(), "error", err)
+			return reject(fmt.Sprintf("invalid csr_pem: %v", err))
+		}
+		var ok bool
+		if signer, ok = ca.(csrSigner); !ok {
+			return reject("this node cannot sign CSRs")
+		}
+	}
+	if enroll.IsV2(req.GetToken()) {
+		// ADR-0017: enrollment tokens are only for module-generated keys.
+		if csr == nil {
+			return reject("enrollment tokens (mct_2_) require csr_pem: the module must generate its own key")
+		}
+		if id, ok := enroll.TokenModuleID(req.GetToken()); ok && id != req.GetModuleId() {
+			return reject(fmt.Sprintf("token issued for module %q, but request claims %q", id, req.GetModuleId()))
+		}
+	}
+
+	// Validate (and consume) the single-use token.
 	claimedID, err := ca.ValidateToken(req.GetToken())
 	if err != nil {
 		slog.Warn("bootstrap register: invalid token", "claimed_id", req.GetModuleId(), "error", err)
-		return &modulev1.BootstrapRegisterResponse{
-			Accepted: false,
-			Error:    fmt.Sprintf("invalid token: %v", err),
-		}, nil
+		return reject(fmt.Sprintf("invalid token: %v", err))
 	}
 
 	// Verify the claimed module ID matches the token's target.
 	if claimedID != req.GetModuleId() {
+		return reject(fmt.Sprintf("token issued for module %q, but request claims %q", claimedID, req.GetModuleId()))
+	}
+
+	ips, dns := bootstrapSANs(ca, claimedID, req.GetDnsNames())
+	if csr != nil {
+		certPEM, err := signer.SignModuleCSR(claimedID, csr, ips, dns)
+		if err != nil {
+			slog.Error("bootstrap register: sign CSR failed", "module", claimedID, "error", err)
+			return reject(fmt.Sprintf("certificate signing failed: %v", err))
+		}
+		slog.Info("module enrolled: signed module CSR", "module", claimedID, "dns_sans", dns)
 		return &modulev1.BootstrapRegisterResponse{
-			Accepted: false,
-			Error:    fmt.Sprintf("token issued for module %q, but request claims %q", claimedID, req.GetModuleId()),
+			Accepted:   true,
+			SignedCert: string(certPEM),
+			CaCert:     string(ca.CACertPEM()),
 		}, nil
 	}
 
-	certData, keyData, err := issueBootstrapCert(ca, claimedID)
+	certData, keyData, err := issueBootstrapCert(ca, claimedID, ips, dns)
 	if err != nil {
 		slog.Error("bootstrap register: issue cert failed", "module", claimedID, "error", err)
-		return &modulev1.BootstrapRegisterResponse{
-			Accepted: false,
-			Error:    fmt.Sprintf("certificate signing failed: %v", err),
-		}, nil
+		return reject(fmt.Sprintf("certificate signing failed: %v", err))
 	}
 
 	slog.Info("module bootstrap registered via token", "module", claimedID)
@@ -1376,17 +1412,44 @@ type memoryCertIssuer interface {
 	IssueModuleCert(moduleID string, ips []net.IP, dnsNames []string) (certPEM, keyPEM []byte, err error)
 }
 
+// csrSigner is implemented by issuers that sign a module-generated CSR
+// (grpcmesh.CertAuthority, ADR-0017).
+type csrSigner interface {
+	SignModuleCSR(moduleID string, csr *x509.CertificateRequest, ips []net.IP, dnsNames []string) ([]byte, error)
+}
+
+// sanPolicyIssuer is implemented by issuers that apply the operator SAN
+// allow-list (MUXCORE_ENROLL_SAN_ALLOW).
+type sanPolicyIssuer interface {
+	EnrollmentSANs(moduleID string, requested []string) (ips []net.IP, dns, dropped []string)
+}
+
+// bootstrapSANs returns the SANs for a bootstrap certificate: loopback,
+// localhost, the module ID, and the requested DNS names the issuer's
+// allow-list permits (none when the issuer has no policy).
+func bootstrapSANs(ca CertIssuer, moduleID string, requested []string) ([]net.IP, []string) {
+	var ips []net.IP
+	var dns, dropped []string
+	if p, ok := ca.(sanPolicyIssuer); ok {
+		ips, dns, dropped = p.EnrollmentSANs(moduleID, requested)
+	} else {
+		ips, dns, dropped = enroll.SANPolicy{}.SANs(moduleID, requested)
+	}
+	if len(dropped) > 0 {
+		slog.Warn("bootstrap register: requested SANs not in "+enroll.EnvSANAllow+"; dropped",
+			"module", moduleID, "dropped", dropped)
+	}
+	return ips, dns
+}
+
 // issueBootstrapCert issues a certificate and private key for a
-// BootstrapRegister caller. The key is kept in memory when the issuer
-// supports it; otherwise it is written to a fresh private (0700) temporary
-// directory that is removed before returning, so no module key is left on
-// disk after the handoff.
-func issueBootstrapCert(ca CertIssuer, moduleID string) (certPEM, keyPEM []byte, err error) {
+// BootstrapRegister caller without a CSR (legacy path). The key is kept in
+// memory when the issuer supports it; otherwise it is written to a fresh
+// private (0700) temporary directory that is removed before returning, so no
+// module key is left on disk after the handoff.
+func issueBootstrapCert(ca CertIssuer, moduleID string, ips []net.IP, dns []string) (certPEM, keyPEM []byte, err error) {
 	if mi, ok := ca.(memoryCertIssuer); ok {
-		return mi.IssueModuleCert(moduleID,
-			[]net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
-			[]string{"localhost", moduleID},
-		)
+		return mi.IssueModuleCert(moduleID, ips, dns)
 	}
 	dir, err := os.MkdirTemp("", "muxcore-bootstrap-*") // created 0700
 	if err != nil {
