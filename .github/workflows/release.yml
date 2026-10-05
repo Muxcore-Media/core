@@ -41,6 +41,10 @@ jobs:
         with:
           cosign-release: v2.4.3
 
+      # goreleaser `sboms:` shells out to syft, which the runner does not ship.
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:

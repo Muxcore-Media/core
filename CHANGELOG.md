@@ -5,6 +5,11 @@ All notable changes to the MuxCore project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.7] — 2026-10-05 — release workflow SBOM tool
+
+### Fixed
+- Release workflow installs `syft` before GoReleaser (the SBOM step failed with "executable file not found", so v0.6.6 published no binaries).
+
 ## [v0.6.6] — 2026-10-05 — release workflow toolchain
 
 ### Fixed
