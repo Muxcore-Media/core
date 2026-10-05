@@ -228,7 +228,7 @@ func awaitAndShutdown(
 		slog.Error("api drain", "error", err)
 	}
 
-	grpcSrv.GracefulStop()
+	gracefulStopGRPC(grpcSrv, 10*time.Second)
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer shutdownCancel()
@@ -249,4 +249,26 @@ func awaitAndShutdown(
 	}
 
 	slog.Info("MuxCore stopped.")
+}
+
+// gracefulStopGRPC drains in-flight RPCs but bounds the wait: long-lived
+// streams (e.g. EventService.Subscribe) never finish on their own, so after
+// timeout the server is stopped hard instead of hanging shutdown forever.
+func gracefulStopGRPC(srv interface {
+	GracefulStop()
+	Stop()
+}, timeout time.Duration,
+) {
+	done := make(chan struct{})
+	go func() {
+		srv.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		slog.Warn("gRPC graceful stop timed out; forcing stop", "timeout", timeout)
+		srv.Stop()
+		<-done
+	}
 }

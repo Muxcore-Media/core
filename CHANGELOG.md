@@ -5,6 +5,11 @@ All notable changes to the MuxCore project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.13] — 2026-10-05 — bounded gRPC shutdown
+
+### Fixed
+- Shutdown no longer hangs in `GracefulStop` when long-lived streams (EventService.Subscribe) stay open: after 10 s the gRPC server is stopped hard (found by the umbrella restore drill).
+
 ## [v0.6.12] — 2026-10-05 — module enrollment (sdk/go/module v0.6.2, sdk/go/client v0.6.1)
 
 ### Security
