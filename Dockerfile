@@ -22,7 +22,12 @@ RUN apk add --no-cache curl ca-certificates
 RUN adduser -D -h /app muxcore
 WORKDIR /app
 # Create writable directories for read-only root filesystem compatibility.
-RUN mkdir -p /app/data /app/tmp && chown muxcore /app/data /app/tmp
+# /app/ca (core CA key material, private) and /app/mesh-ca (exported public CA
+# for modules) are compose volume mount points; pre-creating them owned by
+# muxcore lets named volumes inherit that ownership (no root chown init step).
+RUN mkdir -p /app/data /app/tmp /app/ca /app/mesh-ca \
+    && chown muxcore /app/data /app/tmp /app/ca /app/mesh-ca \
+    && chmod 700 /app/ca && chmod 755 /app/mesh-ca
 COPY --from=build /muxcored .
 
 USER muxcore

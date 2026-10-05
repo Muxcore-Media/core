@@ -5,6 +5,14 @@ All notable changes to the MuxCore project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.15] — 2026-10-05 — sdk/go/module v0.6.5 meshtls; image mount points
+
+### Added
+- Go module SDK: new package `sdk/go/module/meshtls` (ADR-0016/0017) so sidecars serve and dial TLS from the `MUXCORE_*` environment instead of plaintext: `Insecure()`, `ServerOption()` (TLS from `MUXCORE_TLS_CERT`/`KEY`, client certificates verified against `MUXCORE_TLS_CA` when presented), `DialOption(serverName)` (roots from `MUXCORE_TLS_CA`, client certificate when set, `MUXCORE_TLS_SERVER_NAME` override), and the conveniences `NewServer` and `Dial`. Plaintext is refused in the household/staging profiles.
+
+### Fixed
+- `Dockerfile`: pre-create `/app/ca` (0700) and `/app/mesh-ca` (0755) owned by `muxcore`, the mount points compose volumes use, so the compose `mesh-init` chown service is no longer needed.
+
 ## [v0.6.14] — 2026-10-05 — dev restarts; SDK unregister and re-register (sdk/go/module v0.6.4)
 
 ### Fixed
