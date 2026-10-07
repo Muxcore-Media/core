@@ -1,12 +1,21 @@
 version: 3
 workdir: .
 
+vendors:
+  grpc:
+    in:
+      - google.golang.org/grpc
+      - google.golang.org/grpc/**
+
 components:
   cmd:
     in: cmd/**
 
   internal:
     in: internal/**
+
+  integsupport:
+    in: integsupport/**
 
   pkg:
     in: pkg/**
@@ -31,6 +40,12 @@ deps:
   internal:
     anyProjectDeps: true
     anyVendorDeps: true
+
+  integsupport:
+    mayDependOn:
+      - internal
+    canUse:
+      - grpc
 
   pkg:
     mayDependOn:
