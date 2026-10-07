@@ -60,6 +60,15 @@ That starts the loom and loads the official default modules from the spool. To s
 Config file: copy [`muxcore.example.json`](muxcore.example.json) to `muxcore.json` and edit.
 JSON Schema for editor validation: [`muxcore.schema.json`](muxcore.schema.json)
 
+Spool fetches require HTTPS. With an empty `spool.allowed_hosts`, only public
+destinations are allowed. To use a LAN spool, list its exact host and any explicit
+port, for example `"spool.example.lan:8443"`; every redirect must also match a
+listed host. Listed hosts may resolve to private or loopback addresses, but
+metadata and link-local destinations remain blocked. URL userinfo is not accepted.
+The spool client ignores `HTTP_PROXY` and `HTTPS_PROXY`: it connects directly to
+the IP addresses it has validated, so a proxy cannot resolve the target again.
+TLS certificate verification remains enabled, including for LAN spools.
+
 ---
 
 ## Documentation
