@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Additive `AuthService.ListSessions` and `RevokeSession` contracts for T-M5-11 (FR-AUTH-007): paginated active sessions with non-credential IDs, user-scoped idempotent revocation, and an explicit admin end-user authentication requirement. Existing auth providers remain compatible through `UnimplementedAuthServiceServer`; provider implementations and admin-ui integration are separate work.
 
+### Security
+- Spool tag fetches now resolve and validate destinations at connection time and dial only checked IP addresses, closing the DNS validation/connection gap and hostname redirect bypass (NFR-SEC-009, RULE-VAL-2). Exact operator host/port allow-lists retain LAN and loopback access; metadata, link-local, and unsafe address encodings remain forbidden even when listed. Each fetch keeps one policy snapshot through redirects. The client ignores implicit HTTP(S) proxy settings because proxy-side DNS would defeat address pinning; URL userinfo is rejected. HTTPS certificate verification, the ten-second timeout, the existing third-redirect refusal, and the one-MiB response read limit remain in place.
+
 ## [sdk/go/module v0.6.6] — 2026-10-05 — netguard and pathguard
 
 ### Added

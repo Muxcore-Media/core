@@ -32,8 +32,10 @@ type Config struct {
 
 // SpoolConfig controls spool URL validation to prevent SSRF.
 type SpoolConfig struct {
-	// AllowedHosts restricts spool URLs to specific hosts.
-	// Empty means all hosts are allowed (backward compatible).
+	// AllowedHosts restricts spool URLs and redirects to exact host strings,
+	// including any explicit port. Listed hosts may resolve to LAN/loopback;
+	// metadata and link-local addresses are always refused. Empty permits only
+	// public destinations. Fetches ignore environment proxies to pin checked IPs.
 	// Set to e.g., ["github.com"] to restrict fetching to GitHub-hosted spools.
 	AllowedHosts []string `json:"allowed_hosts"`
 }

@@ -29,6 +29,7 @@ Acknowledgment within **72 hours**. Target patch: **7 days** critical, **30 days
 - **gRPC mesh**: TLS encryption (required in production), mTLS with CA verification (when configured), keepalive enforcement
 - **Cluster discovery**: Join token authentication via gRPC metadata (constant-time comparison)
 - **Storage**: Key sanitization (path traversal prevention), max object size enforcement (100MB), capability-based access control via CallPolicyProvider
+- **Spool tag fetches**: HTTPS with checked-IP dialing and redirect validation. Public destinations are the default; exact operator host/port entries permit LAN and loopback spools. Metadata and link-local destinations are always denied, including DNS answers and supported embedded IPv4 encodings. Implicit HTTP(S) proxies are ignored to preserve IP pinning; TLS still verifies the original hostname. See the [spool configuration](README.md#quick-start).
 - **Event bus**: Per-handler timeouts (30s), structured logging, source node validation, deny-by-default publish policy with capability enforcement via PublishPolicyProvider
 - **Module capability enforcement**: Built-in call policy (mesh routing + storage access) and publish policy (event dispatch), both backed by the module registry. Deny-by-default: all inter-module calls and event publications are denied until a policy module is deployed.
 - **Config**: Environment variable overrides with validation, seed node address validation, TLS cert validation at boot
