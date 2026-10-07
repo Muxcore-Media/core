@@ -44,6 +44,8 @@ const (
 	AuthService_ListInvites_FullMethodName               = "/muxcore.auth.v1.AuthService/ListInvites"
 	AuthService_RevokeInvite_FullMethodName              = "/muxcore.auth.v1.AuthService/RevokeInvite"
 	AuthService_RedeemInvite_FullMethodName              = "/muxcore.auth.v1.AuthService/RedeemInvite"
+	AuthService_ListSessions_FullMethodName              = "/muxcore.auth.v1.AuthService/ListSessions"
+	AuthService_RevokeSession_FullMethodName             = "/muxcore.auth.v1.AuthService/RevokeSession"
 )
 
 // AuthServiceClient is the client API for AuthService service.
@@ -86,6 +88,14 @@ type AuthServiceClient interface {
 	ListInvites(ctx context.Context, in *ListInvitesRequest, opts ...grpc.CallOption) (*ListInvitesResponse, error)
 	RevokeInvite(ctx context.Context, in *RevokeInviteRequest, opts ...grpc.CallOption) (*RevokeInviteResponse, error)
 	RedeemInvite(ctx context.Context, in *RedeemInviteRequest, opts ...grpc.CallOption) (*RedeemInviteResponse, error)
+	// Administrative session management (FR-AUTH-007). Both methods require a
+	// current, fully authenticated end-user session in x-auth-token whose user
+	// still has the admin role. A verified mesh certificate alone is insufficient
+	// and must not override a missing, expired, partial, or non-admin token.
+	// Missing/invalid authentication returns Unauthenticated; a non-admin user
+	// returns PermissionDenied. Providers without this feature return Unimplemented.
+	ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error)
+	RevokeSession(ctx context.Context, in *RevokeSessionRequest, opts ...grpc.CallOption) (*RevokeSessionResponse, error)
 }
 
 type authServiceClient struct {
@@ -346,6 +356,26 @@ func (c *authServiceClient) RedeemInvite(ctx context.Context, in *RedeemInviteRe
 	return out, nil
 }
 
+func (c *authServiceClient) ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSessionsResponse)
+	err := c.cc.Invoke(ctx, AuthService_ListSessions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) RevokeSession(ctx context.Context, in *RevokeSessionRequest, opts ...grpc.CallOption) (*RevokeSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevokeSessionResponse)
+	err := c.cc.Invoke(ctx, AuthService_RevokeSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthServiceServer is the server API for AuthService service.
 // All implementations must embed UnimplementedAuthServiceServer
 // for forward compatibility.
@@ -386,6 +416,14 @@ type AuthServiceServer interface {
 	ListInvites(context.Context, *ListInvitesRequest) (*ListInvitesResponse, error)
 	RevokeInvite(context.Context, *RevokeInviteRequest) (*RevokeInviteResponse, error)
 	RedeemInvite(context.Context, *RedeemInviteRequest) (*RedeemInviteResponse, error)
+	// Administrative session management (FR-AUTH-007). Both methods require a
+	// current, fully authenticated end-user session in x-auth-token whose user
+	// still has the admin role. A verified mesh certificate alone is insufficient
+	// and must not override a missing, expired, partial, or non-admin token.
+	// Missing/invalid authentication returns Unauthenticated; a non-admin user
+	// returns PermissionDenied. Providers without this feature return Unimplemented.
+	ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error)
+	RevokeSession(context.Context, *RevokeSessionRequest) (*RevokeSessionResponse, error)
 	mustEmbedUnimplementedAuthServiceServer()
 }
 
@@ -470,6 +508,12 @@ func (UnimplementedAuthServiceServer) RevokeInvite(context.Context, *RevokeInvit
 }
 func (UnimplementedAuthServiceServer) RedeemInvite(context.Context, *RedeemInviteRequest) (*RedeemInviteResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RedeemInvite not implemented")
+}
+func (UnimplementedAuthServiceServer) ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSessions not implemented")
+}
+func (UnimplementedAuthServiceServer) RevokeSession(context.Context, *RevokeSessionRequest) (*RevokeSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RevokeSession not implemented")
 }
 func (UnimplementedAuthServiceServer) mustEmbedUnimplementedAuthServiceServer() {}
 func (UnimplementedAuthServiceServer) testEmbeddedByValue()                     {}
@@ -942,6 +986,42 @@ func _AuthService_RedeemInvite_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_ListSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSessionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).ListSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_ListSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).ListSessions(ctx, req.(*ListSessionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_RevokeSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).RevokeSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_RevokeSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).RevokeSession(ctx, req.(*RevokeSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuthService_ServiceDesc is the grpc.ServiceDesc for AuthService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1048,6 +1128,14 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RedeemInvite",
 			Handler:    _AuthService_RedeemInvite_Handler,
+		},
+		{
+			MethodName: "ListSessions",
+			Handler:    _AuthService_ListSessions_Handler,
+		},
+		{
+			MethodName: "RevokeSession",
+			Handler:    _AuthService_RevokeSession_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

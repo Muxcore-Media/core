@@ -45,6 +45,15 @@ service AuthService {
   rpc ListInvites(ListInvitesRequest) returns (ListInvitesResponse);
   rpc RevokeInvite(RevokeInviteRequest) returns (RevokeInviteResponse);
   rpc RedeemInvite(RedeemInviteRequest) returns (RedeemInviteResponse);
+
+  // Administrative session management (FR-AUTH-007). Both methods require a
+  // current, fully authenticated end-user session in x-auth-token whose user
+  // still has the admin role. A verified mesh certificate alone is insufficient
+  // and must not override a missing, expired, partial, or non-admin token.
+  // Missing/invalid authentication returns Unauthenticated; a non-admin user
+  // returns PermissionDenied. Providers without this feature return Unimplemented.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc RevokeSession(RevokeSessionRequest) returns (RevokeSessionResponse);
 }
 
 message AuthenticateRequest {
@@ -344,3 +353,50 @@ message RedeemInviteResponse {
   string tenant_id = 4;
   string error = 5;
 }
+
+message ListSessionsRequest {
+  // Empty lists active sessions for all users managed by this provider.
+  string user_id = 1;
+  // 0 selects 100. Values below 0 or above 500 return InvalidArgument.
+  int32 page_size = 2;
+  // Opaque continuation from a previous response. It is bound to user_id;
+  // malformed tokens or a different user filter return InvalidArgument.
+  string page_token = 3;
+}
+
+// A management view of an active session, never an authentication credential.
+message SessionInfo {
+  // Stable, independently generated opaque ID. Never a bearer token, its hash,
+  // or any value accepted by Authenticate, Validate, or ExtractIdentity.
+  string session_id = 1;
+  string user_id = 2;
+  string username = 3;
+  // Fully authenticated session kind: "full" or "api-token".
+  string kind = 4;
+  string created_at = 5; // UTC RFC 3339.
+  string expires_at = 6; // UTC RFC 3339.
+}
+
+message ListSessionsResponse {
+  // Excludes expired, revoked, and partial (not fully authenticated) sessions.
+  // Ordered by created_at ascending, then session_id ascending. Each page is
+  // evaluated against current state; pagination does not preserve a snapshot.
+  repeated SessionInfo sessions = 1;
+  // Empty at the end. Continuation is exclusive of the last returned session,
+  // including if that session expires or is revoked before the next request.
+  // Must not contain a bearer token or its hash.
+  string next_page_token = 2;
+}
+
+message RevokeSessionRequest {
+  // Both fields are required; empty values return InvalidArgument. The provider
+  // revokes only the exact (user_id, session_id) pair, atomically. An unknown or
+  // already revoked pair succeeds without affecting another user's session.
+  string user_id = 1;
+  string session_id = 2;
+}
+
+// Successful revocation invalidates the associated bearer on the next provider
+// validation. Apps with local session cookies must revalidate that bearer to
+// enforce revocation. This does not revoke an API key that minted a session.
+message RevokeSessionResponse {}

@@ -5,6 +5,11 @@ All notable changes to the MuxCore project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Additive `AuthService.ListSessions` and `RevokeSession` contracts for T-M5-11 (FR-AUTH-007): paginated active sessions with non-credential IDs, user-scoped idempotent revocation, and an explicit admin end-user authentication requirement. Existing auth providers remain compatible through `UnimplementedAuthServiceServer`; provider implementations and admin-ui integration are separate work.
+
 ## [sdk/go/module v0.6.6] — 2026-10-05 — netguard and pathguard
 
 ### Added
