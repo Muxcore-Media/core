@@ -6,6 +6,10 @@ import (
 )
 
 func FuzzSpoolURLValidation(f *testing.F) {
+	strict := newFetcher(nil, nil, nil)
+	listed := newFetcher([]string{"github.com", "127.0.0.1"}, nil, nil)
+	f.Cleanup(strict.client.CloseIdleConnections)
+	f.Cleanup(listed.client.CloseIdleConnections)
 	seeds := []string{
 		"https://github.com/Muxcore-Media/spool",
 		"https://example.com/spool",
@@ -30,15 +34,8 @@ func FuzzSpoolURLValidation(f *testing.F) {
 			return
 		}
 
-		// Scheme validation must never panic.
-		_ = u.Scheme
-		_ = u.Host
-		_ = u.Path
-
-		// Host matching simulation must never panic.
-		for _, allowed := range []string{"github.com", "example.com", "spool.muxcore.io"} {
-			_ = u.Host == allowed
-		}
+		_ = strict.validateURL(u)
+		_ = listed.validateURL(u)
 	})
 }
 
