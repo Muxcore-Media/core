@@ -3,7 +3,7 @@ module github.com/Muxcore-Media/core/sdk/go/module
 go 1.26.6
 
 require (
-	github.com/Muxcore-Media/core v0.6.12
+	github.com/Muxcore-Media/core v0.6.17
 	github.com/Muxcore-Media/core/pkg/contracts v0.6.0
 	google.golang.org/grpc v1.83.2
 	modernc.org/sqlite v1.55.0
