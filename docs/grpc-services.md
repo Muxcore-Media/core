@@ -68,7 +68,7 @@ authentication, authorization, and identity extraction to this service.
 | RPC | Request | Response | Description |
 |-----|---------|----------|-------------|
 | `CreateUser` | `CreateUserRequest` | `CreateUserResponse` | Create a new user account. |
-| `DeleteUser` | `DeleteUserRequest` | `DeleteUserResponse` | Delete a user account. |
+| `DeleteUser` | `DeleteUserRequest` | `DeleteUserResponse` | Erase a user account (ADR-0035 §1): current admin bearer in `x-auth-token` required (no mesh-peer bypass), target in the caller's tenant, never self or the last admin. Returns the tombstone's `erasure_id`; repeating it for a tombstoned id returns the same `erasure_id`. |
 | `ListUsers` | `ListUsersRequest` | `ListUsersResponse` | List all users. |
 | `SetPassword` | `SetPasswordRequest` | `SetPasswordResponse` | Set or reset a user's password. |
 | `SetRoles` | `SetRolesRequest` | `SetRolesResponse` | Update a user's role assignments. |
@@ -80,6 +80,20 @@ authentication, authorization, and identity extraction to this service.
 | `CreateAPIToken` | `CreateAPITokenRequest` | `CreateAPITokenResponse` | Create a scoped API token for automation. |
 | `ListAPITokens` | `ListAPITokensRequest` | `ListAPITokensResponse` | List all API tokens for a user. |
 | `DeleteAPIToken` | `DeleteAPITokenRequest` | `DeleteAPITokenResponse` | Revoke an API token. |
+
+### User Erasure Ledger (ADR-0035, NFR-DATA-003)
+
+The provider's ledger of erasure tombstones is the only authority for erasing a
+deleted user's data in other modules; it is never carried on the event bus.
+Every personal-data owner reconciles against it with the SDK helper
+`sdk/go/module/erasure`. Providers without a ledger (e.g. auth-oidc) return
+`Unimplemented` for all three RPCs, which consumers report as `unsupported`.
+
+| RPC | Request | Response | Description |
+|-----|---------|----------|-------------|
+| `ListUserErasures` | `ListUserErasuresRequest` | `ListUserErasuresResponse` | Page through every tombstone (`erasure_id`, `user_id`, `tenant_id`, `deleted_at`, `acknowledged_by_caller`). Verified mesh client certificate whose CN is in `AUTH_ERASURE_CONSUMERS` only; a user bearer is rejected. |
+| `AckUserErasure` | `AckUserErasureRequest` | `AckUserErasureResponse` | Record the caller's outcome (`OK`, `FAILED`, `UNSUPPORTED`), a short PII-free `detail_code` and per-store `counts`. Same caller rule; the acknowledging module is the verified CN, never a request field. Idempotent. |
+| `GetUserErasureStatus` | `GetUserErasureStatusRequest` | `GetUserErasureStatusResponse` | Per-module completion for one erasure or all/pending ones; complete when every `AUTH_ERASURE_REQUIRED` module acknowledged `OK`. Admin bearer required (ADR-0026). |
 
 ---
 
@@ -193,7 +207,7 @@ other modules across nodes.
 | Service | File | RPCs | Implemented By | Consumed By |
 |---------|------|------|----------------|-------------|
 | DiscoveryService | `discovery/v1/discovery.proto` | 8 | Core | All nodes, modules |
-| AuthService | `auth/v1/auth.proto` | 17 | `auth-local` module | Core (HTTP/gRPC middleware) |
+| AuthService | `auth/v1/auth.proto` | 30 | `auth-local` module | Core (HTTP/gRPC middleware) |
 | PolicyService | `policy/v1/policy.proto` | 2 | `call-policy-default`, `publish-policy-default` | Core (mesh client, event bus) |
 | ModuleRegistration | `module/v1/registration.proto` | 2 | Core | Sidecar modules |
 | StorageService | `storage/v1/storage.proto` | 6 | Core | Sidecar modules |

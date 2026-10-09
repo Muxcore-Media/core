@@ -22,6 +22,20 @@ service AuthService {
 
   // User management (admin only).
   rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  // DeleteUser starts a user erasure (ADR-0035 §1). It requires a current,
+  // fully authenticated end-user session in x-auth-token whose user still has
+  // the admin role, rechecked as in ADR-0026 §2; a verified mesh certificate
+  // alone is insufficient (no mesh-peer bypass for this method). Missing,
+  // expired or partial authentication returns Unauthenticated; a non-admin
+  // returns PermissionDenied. The target must exist in the caller's verified
+  // tenant (empty = the single household): an unknown or other-tenant id
+  // returns NotFound. Deleting oneself, or the last user holding admin in the
+  // tenant, returns FailedPrecondition; the admin count is taken inside the
+  // delete transaction. One provider transaction revokes every credential and
+  // session of the user and records a tombstone; DeleteUserResponse.erasure_id
+  // identifies it. Repeating DeleteUser for a tombstoned id succeeds and
+  // returns the same erasure_id. Providers that predate ADR-0035 leave
+  // erasure_id empty.
   rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
   rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
   rpc SetPassword(SetPasswordRequest) returns (SetPasswordResponse);
@@ -54,6 +68,29 @@ service AuthService {
   // returns PermissionDenied. Providers without this feature return Unimplemented.
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc RevokeSession(RevokeSessionRequest) returns (RevokeSessionResponse);
+
+  // User erasure ledger (ADR-0035 §2, NFR-DATA-003). The ledger of erasure
+  // tombstones is the only authority for erasing a user's data in other
+  // modules; no event, header or payload is. Providers without the ledger
+  // return Unimplemented for all three methods.
+  //
+  // ListUserErasures and AckUserErasure admit only a caller presenting a
+  // verified mesh client certificate whose CN is on the provider allowlist
+  // (AUTH_ERASURE_CONSUMERS, ADR-0020 pattern). A user bearer, admin or not,
+  // is rejected and never substitutes for the certificate. A missing or
+  // unverified certificate returns Unauthenticated; a CN that is not
+  // allowlisted returns PermissionDenied. The acknowledging module is the
+  // verified CN, never a request field. In the dev profile without
+  // certificates the provider may trust x-caller-id (ADR-0017 §2); dev has no
+  // household acceptance.
+  rpc ListUserErasures(ListUserErasuresRequest) returns (ListUserErasuresResponse);
+  rpc AckUserErasure(AckUserErasureRequest) returns (AckUserErasureResponse);
+  // GetUserErasureStatus reports per-module completion for administrators. It
+  // requires a current, fully authenticated end-user admin session in
+  // x-auth-token, rechecked as in ADR-0026 §2 (Unauthenticated /
+  // PermissionDenied); a verified mesh certificate alone is insufficient. It
+  // reports only erasures in the caller's verified tenant.
+  rpc GetUserErasureStatus(GetUserErasureStatusRequest) returns (GetUserErasureStatusResponse);
 }
 
 message AuthenticateRequest {
@@ -173,6 +210,10 @@ message DeleteUserRequest {
 
 message DeleteUserResponse {
   string error = 1;
+  // Opaque, random identifier of the erasure tombstone (ADR-0035 §1). Never
+  // derived from the user id or username. Empty from providers that predate
+  // ADR-0035 and whenever error is set.
+  string erasure_id = 2;
 }
 
 message ListUsersRequest {}
@@ -400,3 +441,117 @@ message RevokeSessionRequest {
 // validation. Apps with local session cookies must revalidate that bearer to
 // enforce revocation. This does not revoke an API key that minted a session.
 message RevokeSessionResponse {}
+
+// --- User erasure ledger (ADR-0035) ---
+
+// Outcome of one module's application of an erasure tombstone.
+enum ErasureOutcome {
+  // Not acknowledged yet (status only). Rejected by AckUserErasure.
+  ERASURE_OUTCOME_UNSPECIFIED = 0;
+  // The module applied the tombstone and its post-condition holds.
+  ERASURE_OUTCOME_OK = 1;
+  // Application or its post-condition failed; the module retries.
+  ERASURE_OUTCOME_FAILED = 2;
+  // The module cannot apply erasures. Never counts as complete.
+  ERASURE_OUTCOME_UNSUPPORTED = 3;
+}
+
+message ListUserErasuresRequest {
+  // Opaque continuation from a previous response; empty starts at the
+  // beginning. Malformed tokens return InvalidArgument.
+  string page_token = 1;
+  // 0 selects 100. Values below 0 or above 500 return InvalidArgument.
+  int32 page_size = 2;
+}
+
+// An erasure tombstone. It carries no username or other profile data.
+message UserErasure {
+  // Random, opaque and unique; never reused.
+  string erasure_id = 1;
+  // The erased user's id (globally unique and never reused by the provider).
+  // Owners erase by this id, never by username.
+  string user_id = 2;
+  // The user's tenant; empty means the single household.
+  string tenant_id = 3;
+  // UTC RFC 3339.
+  string deleted_at = 4;
+  // True when the calling module's (verified CN's) most recent
+  // acknowledgement of this erasure has outcome OK. It is a hint for skipping
+  // a redundant acknowledgement only: a consumer applies every tombstone that
+  // is missing from its own local record regardless of this flag (restores).
+  bool acknowledged_by_caller = 5;
+}
+
+message ListUserErasuresResponse {
+  // The whole ledger, every tenant, ordered by deleted_at ascending then
+  // erasure_id ascending. Tombstones are never pruned. Continuation is
+  // exclusive of the last returned tombstone.
+  repeated UserErasure erasures = 1;
+  // Empty at the end.
+  string next_page_token = 2;
+}
+
+message AckUserErasureRequest {
+  // Required. An unknown erasure_id returns NotFound.
+  string erasure_id = 1;
+  // Required; UNSPECIFIED returns InvalidArgument.
+  ErasureOutcome outcome = 2;
+  // Short machine-readable reason, e.g. "apply_failed": at most 64 characters
+  // from [a-z0-9_.-]. Never a user id, username or other personal data.
+  // Anything else returns InvalidArgument.
+  string detail_code = 3;
+  // Optional per-store counts of rows deleted or anonymised, e.g.
+  // {"user_blobs": 3}. Keys follow the detail_code rules; at most 32 entries;
+  // negative values return InvalidArgument.
+  map<string, int64> counts = 4;
+  // There is deliberately no module field: the acknowledging module is the
+  // caller's verified certificate CN.
+}
+
+// Acknowledgement is idempotent. The most recent acknowledgement per
+// (erasure_id, acknowledging module) is authoritative.
+message AckUserErasureResponse {}
+
+message GetUserErasureStatusRequest {
+  // When set, report only this erasure (NotFound if unknown in the caller's
+  // tenant) and ignore pending_only and paging.
+  string erasure_id = 1;
+  // When erasure_id is empty: true reports only erasures that are not yet
+  // complete; false reports all.
+  bool pending_only = 2;
+  // 0 selects 100. Values below 0 or above 500 return InvalidArgument.
+  int32 page_size = 3;
+  // Opaque continuation, bound to pending_only. Malformed tokens return
+  // InvalidArgument.
+  string page_token = 4;
+}
+
+message ErasureModuleStatus {
+  // The acknowledging module's verified CN, or a required module that has not
+  // acknowledged yet.
+  string module_id = 1;
+  // UNSPECIFIED: a required module has not acknowledged yet (pending).
+  ErasureOutcome outcome = 2;
+  string detail_code = 3;
+  // UTC RFC 3339 time of the most recent acknowledgement; empty when pending.
+  string acked_at = 4;
+  // True when the module is listed in AUTH_ERASURE_REQUIRED.
+  bool required = 5;
+}
+
+message ErasureStatus {
+  string erasure_id = 1;
+  // UTC RFC 3339.
+  string deleted_at = 2;
+  // Every required module, plus any other module that acknowledged.
+  repeated ErasureModuleStatus modules = 3;
+  // True when every module in AUTH_ERASURE_REQUIRED has acknowledged OK.
+  bool complete = 4;
+}
+
+message GetUserErasureStatusResponse {
+  // Ordered by deleted_at ascending then erasure_id ascending.
+  repeated ErasureStatus erasures = 1;
+  // Empty at the end.
+  string next_page_token = 2;
+}
