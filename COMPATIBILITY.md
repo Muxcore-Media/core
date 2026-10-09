@@ -76,6 +76,15 @@ uses one or more of these patterns:
 - **Implement the full interface.** When you implement a contract interface,
   implement all methods. Future optional interfaces will use type assertions,
   not additions to existing interfaces.
+- **Treat `Unimplemented` from a newer RPC as "not supported", never as
+  success.** Providers built against an older proto (or embedding
+  `Unimplemented<Service>Server`) answer new RPCs with `Unimplemented`. For
+  example, an identity provider without the ADR-0035 erasure ledger answers
+  `ListUserErasures`, `AckUserErasure` and `GetUserErasureStatus` with
+  `Unimplemented`, and `sdk/go/module/erasure` reports the reconciler as
+  `unsupported` rather than complete. New response fields such as
+  `DeleteUserResponse.erasure_id` are empty from older providers and ignored
+  by older clients.
 - **Declare MinCoreVersion in ModuleInfo.** This tells core what minimum
   version your module requires. Core checks this at registration and rejects
   incompatible modules with a clear error.

@@ -72,6 +72,8 @@ extraction.
 | `EnableTOTP` / `DisableTOTP` / `TOTPStatus` / `VerifyTOTPSetup` | TOTP 2FA management | Admin API | `auth` |
 | `CreateUser` / `DeleteUser` / `ListUsers` / `SetPassword` / `SetRoles` | User management | `authctl` CLI | `auth` |
 | `CreateAPIToken` / `ListAPITokens` / `DeleteAPIToken` | API token management | `authctl` CLI | `auth` |
+| `ListUserErasures` / `AckUserErasure` | User erasure ledger (ADR-0035): allowlisted module certificates only | `sdk/go/module/erasure` reconcilers in personal-data owners | `identity` |
+| `GetUserErasureStatus` | Per-module erasure completion (admin bearer) | admin-ui, `muxcorectl` | `identity` |
 
 ### Sidecar Adapters
 

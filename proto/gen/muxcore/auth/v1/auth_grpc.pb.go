@@ -46,6 +46,9 @@ const (
 	AuthService_RedeemInvite_FullMethodName              = "/muxcore.auth.v1.AuthService/RedeemInvite"
 	AuthService_ListSessions_FullMethodName              = "/muxcore.auth.v1.AuthService/ListSessions"
 	AuthService_RevokeSession_FullMethodName             = "/muxcore.auth.v1.AuthService/RevokeSession"
+	AuthService_ListUserErasures_FullMethodName          = "/muxcore.auth.v1.AuthService/ListUserErasures"
+	AuthService_AckUserErasure_FullMethodName            = "/muxcore.auth.v1.AuthService/AckUserErasure"
+	AuthService_GetUserErasureStatus_FullMethodName      = "/muxcore.auth.v1.AuthService/GetUserErasureStatus"
 )
 
 // AuthServiceClient is the client API for AuthService service.
@@ -68,6 +71,20 @@ type AuthServiceClient interface {
 	VerifyTOTPSetup(ctx context.Context, in *VerifyTOTPSetupRequest, opts ...grpc.CallOption) (*VerifyTOTPSetupResponse, error)
 	// User management (admin only).
 	CreateUser(ctx context.Context, in *CreateUserRequest, opts ...grpc.CallOption) (*CreateUserResponse, error)
+	// DeleteUser starts a user erasure (ADR-0035 §1). It requires a current,
+	// fully authenticated end-user session in x-auth-token whose user still has
+	// the admin role, rechecked as in ADR-0026 §2; a verified mesh certificate
+	// alone is insufficient (no mesh-peer bypass for this method). Missing,
+	// expired or partial authentication returns Unauthenticated; a non-admin
+	// returns PermissionDenied. The target must exist in the caller's verified
+	// tenant (empty = the single household): an unknown or other-tenant id
+	// returns NotFound. Deleting oneself, or the last user holding admin in the
+	// tenant, returns FailedPrecondition; the admin count is taken inside the
+	// delete transaction. One provider transaction revokes every credential and
+	// session of the user and records a tombstone; DeleteUserResponse.erasure_id
+	// identifies it. Repeating DeleteUser for a tombstoned id succeeds and
+	// returns the same erasure_id. Providers that predate ADR-0035 leave
+	// erasure_id empty.
 	DeleteUser(ctx context.Context, in *DeleteUserRequest, opts ...grpc.CallOption) (*DeleteUserResponse, error)
 	ListUsers(ctx context.Context, in *ListUsersRequest, opts ...grpc.CallOption) (*ListUsersResponse, error)
 	SetPassword(ctx context.Context, in *SetPasswordRequest, opts ...grpc.CallOption) (*SetPasswordResponse, error)
@@ -96,6 +113,28 @@ type AuthServiceClient interface {
 	// returns PermissionDenied. Providers without this feature return Unimplemented.
 	ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error)
 	RevokeSession(ctx context.Context, in *RevokeSessionRequest, opts ...grpc.CallOption) (*RevokeSessionResponse, error)
+	// User erasure ledger (ADR-0035 §2, NFR-DATA-003). The ledger of erasure
+	// tombstones is the only authority for erasing a user's data in other
+	// modules; no event, header or payload is. Providers without the ledger
+	// return Unimplemented for all three methods.
+	//
+	// ListUserErasures and AckUserErasure admit only a caller presenting a
+	// verified mesh client certificate whose CN is on the provider allowlist
+	// (AUTH_ERASURE_CONSUMERS, ADR-0020 pattern). A user bearer, admin or not,
+	// is rejected and never substitutes for the certificate. A missing or
+	// unverified certificate returns Unauthenticated; a CN that is not
+	// allowlisted returns PermissionDenied. The acknowledging module is the
+	// verified CN, never a request field. In the dev profile without
+	// certificates the provider may trust x-caller-id (ADR-0017 §2); dev has no
+	// household acceptance.
+	ListUserErasures(ctx context.Context, in *ListUserErasuresRequest, opts ...grpc.CallOption) (*ListUserErasuresResponse, error)
+	AckUserErasure(ctx context.Context, in *AckUserErasureRequest, opts ...grpc.CallOption) (*AckUserErasureResponse, error)
+	// GetUserErasureStatus reports per-module completion for administrators. It
+	// requires a current, fully authenticated end-user admin session in
+	// x-auth-token, rechecked as in ADR-0026 §2 (Unauthenticated /
+	// PermissionDenied); a verified mesh certificate alone is insufficient. It
+	// reports only erasures in the caller's verified tenant.
+	GetUserErasureStatus(ctx context.Context, in *GetUserErasureStatusRequest, opts ...grpc.CallOption) (*GetUserErasureStatusResponse, error)
 }
 
 type authServiceClient struct {
@@ -376,6 +415,36 @@ func (c *authServiceClient) RevokeSession(ctx context.Context, in *RevokeSession
 	return out, nil
 }
 
+func (c *authServiceClient) ListUserErasures(ctx context.Context, in *ListUserErasuresRequest, opts ...grpc.CallOption) (*ListUserErasuresResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListUserErasuresResponse)
+	err := c.cc.Invoke(ctx, AuthService_ListUserErasures_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) AckUserErasure(ctx context.Context, in *AckUserErasureRequest, opts ...grpc.CallOption) (*AckUserErasureResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AckUserErasureResponse)
+	err := c.cc.Invoke(ctx, AuthService_AckUserErasure_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) GetUserErasureStatus(ctx context.Context, in *GetUserErasureStatusRequest, opts ...grpc.CallOption) (*GetUserErasureStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetUserErasureStatusResponse)
+	err := c.cc.Invoke(ctx, AuthService_GetUserErasureStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthServiceServer is the server API for AuthService service.
 // All implementations must embed UnimplementedAuthServiceServer
 // for forward compatibility.
@@ -396,6 +465,20 @@ type AuthServiceServer interface {
 	VerifyTOTPSetup(context.Context, *VerifyTOTPSetupRequest) (*VerifyTOTPSetupResponse, error)
 	// User management (admin only).
 	CreateUser(context.Context, *CreateUserRequest) (*CreateUserResponse, error)
+	// DeleteUser starts a user erasure (ADR-0035 §1). It requires a current,
+	// fully authenticated end-user session in x-auth-token whose user still has
+	// the admin role, rechecked as in ADR-0026 §2; a verified mesh certificate
+	// alone is insufficient (no mesh-peer bypass for this method). Missing,
+	// expired or partial authentication returns Unauthenticated; a non-admin
+	// returns PermissionDenied. The target must exist in the caller's verified
+	// tenant (empty = the single household): an unknown or other-tenant id
+	// returns NotFound. Deleting oneself, or the last user holding admin in the
+	// tenant, returns FailedPrecondition; the admin count is taken inside the
+	// delete transaction. One provider transaction revokes every credential and
+	// session of the user and records a tombstone; DeleteUserResponse.erasure_id
+	// identifies it. Repeating DeleteUser for a tombstoned id succeeds and
+	// returns the same erasure_id. Providers that predate ADR-0035 leave
+	// erasure_id empty.
 	DeleteUser(context.Context, *DeleteUserRequest) (*DeleteUserResponse, error)
 	ListUsers(context.Context, *ListUsersRequest) (*ListUsersResponse, error)
 	SetPassword(context.Context, *SetPasswordRequest) (*SetPasswordResponse, error)
@@ -424,6 +507,28 @@ type AuthServiceServer interface {
 	// returns PermissionDenied. Providers without this feature return Unimplemented.
 	ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error)
 	RevokeSession(context.Context, *RevokeSessionRequest) (*RevokeSessionResponse, error)
+	// User erasure ledger (ADR-0035 §2, NFR-DATA-003). The ledger of erasure
+	// tombstones is the only authority for erasing a user's data in other
+	// modules; no event, header or payload is. Providers without the ledger
+	// return Unimplemented for all three methods.
+	//
+	// ListUserErasures and AckUserErasure admit only a caller presenting a
+	// verified mesh client certificate whose CN is on the provider allowlist
+	// (AUTH_ERASURE_CONSUMERS, ADR-0020 pattern). A user bearer, admin or not,
+	// is rejected and never substitutes for the certificate. A missing or
+	// unverified certificate returns Unauthenticated; a CN that is not
+	// allowlisted returns PermissionDenied. The acknowledging module is the
+	// verified CN, never a request field. In the dev profile without
+	// certificates the provider may trust x-caller-id (ADR-0017 §2); dev has no
+	// household acceptance.
+	ListUserErasures(context.Context, *ListUserErasuresRequest) (*ListUserErasuresResponse, error)
+	AckUserErasure(context.Context, *AckUserErasureRequest) (*AckUserErasureResponse, error)
+	// GetUserErasureStatus reports per-module completion for administrators. It
+	// requires a current, fully authenticated end-user admin session in
+	// x-auth-token, rechecked as in ADR-0026 §2 (Unauthenticated /
+	// PermissionDenied); a verified mesh certificate alone is insufficient. It
+	// reports only erasures in the caller's verified tenant.
+	GetUserErasureStatus(context.Context, *GetUserErasureStatusRequest) (*GetUserErasureStatusResponse, error)
 	mustEmbedUnimplementedAuthServiceServer()
 }
 
@@ -514,6 +619,15 @@ func (UnimplementedAuthServiceServer) ListSessions(context.Context, *ListSession
 }
 func (UnimplementedAuthServiceServer) RevokeSession(context.Context, *RevokeSessionRequest) (*RevokeSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RevokeSession not implemented")
+}
+func (UnimplementedAuthServiceServer) ListUserErasures(context.Context, *ListUserErasuresRequest) (*ListUserErasuresResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListUserErasures not implemented")
+}
+func (UnimplementedAuthServiceServer) AckUserErasure(context.Context, *AckUserErasureRequest) (*AckUserErasureResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AckUserErasure not implemented")
+}
+func (UnimplementedAuthServiceServer) GetUserErasureStatus(context.Context, *GetUserErasureStatusRequest) (*GetUserErasureStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetUserErasureStatus not implemented")
 }
 func (UnimplementedAuthServiceServer) mustEmbedUnimplementedAuthServiceServer() {}
 func (UnimplementedAuthServiceServer) testEmbeddedByValue()                     {}
@@ -1022,6 +1136,60 @@ func _AuthService_RevokeSession_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_ListUserErasures_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListUserErasuresRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).ListUserErasures(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_ListUserErasures_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).ListUserErasures(ctx, req.(*ListUserErasuresRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_AckUserErasure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AckUserErasureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).AckUserErasure(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_AckUserErasure_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).AckUserErasure(ctx, req.(*AckUserErasureRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_GetUserErasureStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetUserErasureStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).GetUserErasureStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_GetUserErasureStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).GetUserErasureStatus(ctx, req.(*GetUserErasureStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuthService_ServiceDesc is the grpc.ServiceDesc for AuthService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1136,6 +1304,18 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RevokeSession",
 			Handler:    _AuthService_RevokeSession_Handler,
+		},
+		{
+			MethodName: "ListUserErasures",
+			Handler:    _AuthService_ListUserErasures_Handler,
+		},
+		{
+			MethodName: "AckUserErasure",
+			Handler:    _AuthService_AckUserErasure_Handler,
+		},
+		{
+			MethodName: "GetUserErasureStatus",
+			Handler:    _AuthService_GetUserErasureStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
