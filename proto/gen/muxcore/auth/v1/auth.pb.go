@@ -21,6 +21,63 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Outcome of one module's application of an erasure tombstone.
+type ErasureOutcome int32
+
+const (
+	// Not acknowledged yet (status only). Rejected by AckUserErasure.
+	ErasureOutcome_ERASURE_OUTCOME_UNSPECIFIED ErasureOutcome = 0
+	// The module applied the tombstone and its post-condition holds.
+	ErasureOutcome_ERASURE_OUTCOME_OK ErasureOutcome = 1
+	// Application or its post-condition failed; the module retries.
+	ErasureOutcome_ERASURE_OUTCOME_FAILED ErasureOutcome = 2
+	// The module cannot apply erasures. Never counts as complete.
+	ErasureOutcome_ERASURE_OUTCOME_UNSUPPORTED ErasureOutcome = 3
+)
+
+// Enum value maps for ErasureOutcome.
+var (
+	ErasureOutcome_name = map[int32]string{
+		0: "ERASURE_OUTCOME_UNSPECIFIED",
+		1: "ERASURE_OUTCOME_OK",
+		2: "ERASURE_OUTCOME_FAILED",
+		3: "ERASURE_OUTCOME_UNSUPPORTED",
+	}
+	ErasureOutcome_value = map[string]int32{
+		"ERASURE_OUTCOME_UNSPECIFIED": 0,
+		"ERASURE_OUTCOME_OK":          1,
+		"ERASURE_OUTCOME_FAILED":      2,
+		"ERASURE_OUTCOME_UNSUPPORTED": 3,
+	}
+)
+
+func (x ErasureOutcome) Enum() *ErasureOutcome {
+	p := new(ErasureOutcome)
+	*p = x
+	return p
+}
+
+func (x ErasureOutcome) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ErasureOutcome) Descriptor() protoreflect.EnumDescriptor {
+	return file_muxcore_auth_v1_auth_proto_enumTypes[0].Descriptor()
+}
+
+func (ErasureOutcome) Type() protoreflect.EnumType {
+	return &file_muxcore_auth_v1_auth_proto_enumTypes[0]
+}
+
+func (x ErasureOutcome) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ErasureOutcome.Descriptor instead.
+func (ErasureOutcome) EnumDescriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{0}
+}
+
 type AuthenticateRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	CredentialType string                 `protobuf:"bytes,1,opt,name=credential_type,json=credentialType,proto3" json:"credential_type,omitempty"`
@@ -1202,8 +1259,12 @@ func (x *DeleteUserRequest) GetUserId() string {
 }
 
 type DeleteUserResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Error         string                 `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Error string                 `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
+	// Opaque, random identifier of the erasure tombstone (ADR-0035 §1). Never
+	// derived from the user id or username. Empty from providers that predate
+	// ADR-0035 and whenever error is set.
+	ErasureId     string `protobuf:"bytes,2,opt,name=erasure_id,json=erasureId,proto3" json:"erasure_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1241,6 +1302,13 @@ func (*DeleteUserResponse) Descriptor() ([]byte, []int) {
 func (x *DeleteUserResponse) GetError() string {
 	if x != nil {
 		return x.Error
+	}
+	return ""
+}
+
+func (x *DeleteUserResponse) GetErasureId() string {
+	if x != nil {
+		return x.ErasureId
 	}
 	return ""
 }
@@ -3342,6 +3410,598 @@ func (*RevokeSessionResponse) Descriptor() ([]byte, []int) {
 	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{58}
 }
 
+type ListUserErasuresRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Opaque continuation from a previous response; empty starts at the
+	// beginning. Malformed tokens return InvalidArgument.
+	PageToken string `protobuf:"bytes,1,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	// 0 selects 100. Values below 0 or above 500 return InvalidArgument.
+	PageSize      int32 `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListUserErasuresRequest) Reset() {
+	*x = ListUserErasuresRequest{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[59]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListUserErasuresRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListUserErasuresRequest) ProtoMessage() {}
+
+func (x *ListUserErasuresRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[59]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListUserErasuresRequest.ProtoReflect.Descriptor instead.
+func (*ListUserErasuresRequest) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{59}
+}
+
+func (x *ListUserErasuresRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+func (x *ListUserErasuresRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+// An erasure tombstone. It carries no username or other profile data.
+type UserErasure struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Random, opaque and unique; never reused.
+	ErasureId string `protobuf:"bytes,1,opt,name=erasure_id,json=erasureId,proto3" json:"erasure_id,omitempty"`
+	// The erased user's id (globally unique and never reused by the provider).
+	// Owners erase by this id, never by username.
+	UserId string `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	// The user's tenant; empty means the single household.
+	TenantId string `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	// UTC RFC 3339.
+	DeletedAt string `protobuf:"bytes,4,opt,name=deleted_at,json=deletedAt,proto3" json:"deleted_at,omitempty"`
+	// True when the calling module's (verified CN's) most recent
+	// acknowledgement of this erasure has outcome OK. It is a hint for skipping
+	// a redundant acknowledgement only: a consumer applies every tombstone that
+	// is missing from its own local record regardless of this flag (restores).
+	AcknowledgedByCaller bool `protobuf:"varint,5,opt,name=acknowledged_by_caller,json=acknowledgedByCaller,proto3" json:"acknowledged_by_caller,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *UserErasure) Reset() {
+	*x = UserErasure{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[60]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserErasure) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserErasure) ProtoMessage() {}
+
+func (x *UserErasure) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[60]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserErasure.ProtoReflect.Descriptor instead.
+func (*UserErasure) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{60}
+}
+
+func (x *UserErasure) GetErasureId() string {
+	if x != nil {
+		return x.ErasureId
+	}
+	return ""
+}
+
+func (x *UserErasure) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *UserErasure) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *UserErasure) GetDeletedAt() string {
+	if x != nil {
+		return x.DeletedAt
+	}
+	return ""
+}
+
+func (x *UserErasure) GetAcknowledgedByCaller() bool {
+	if x != nil {
+		return x.AcknowledgedByCaller
+	}
+	return false
+}
+
+type ListUserErasuresResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The whole ledger, every tenant, ordered by deleted_at ascending then
+	// erasure_id ascending. Tombstones are never pruned. Continuation is
+	// exclusive of the last returned tombstone.
+	Erasures []*UserErasure `protobuf:"bytes,1,rep,name=erasures,proto3" json:"erasures,omitempty"`
+	// Empty at the end.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListUserErasuresResponse) Reset() {
+	*x = ListUserErasuresResponse{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[61]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListUserErasuresResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListUserErasuresResponse) ProtoMessage() {}
+
+func (x *ListUserErasuresResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[61]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListUserErasuresResponse.ProtoReflect.Descriptor instead.
+func (*ListUserErasuresResponse) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{61}
+}
+
+func (x *ListUserErasuresResponse) GetErasures() []*UserErasure {
+	if x != nil {
+		return x.Erasures
+	}
+	return nil
+}
+
+func (x *ListUserErasuresResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
+type AckUserErasureRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Required. An unknown erasure_id returns NotFound.
+	ErasureId string `protobuf:"bytes,1,opt,name=erasure_id,json=erasureId,proto3" json:"erasure_id,omitempty"`
+	// Required; UNSPECIFIED returns InvalidArgument.
+	Outcome ErasureOutcome `protobuf:"varint,2,opt,name=outcome,proto3,enum=muxcore.auth.v1.ErasureOutcome" json:"outcome,omitempty"`
+	// Short machine-readable reason, e.g. "apply_failed": at most 64 characters
+	// from [a-z0-9_.-]. Never a user id, username or other personal data.
+	// Anything else returns InvalidArgument.
+	DetailCode string `protobuf:"bytes,3,opt,name=detail_code,json=detailCode,proto3" json:"detail_code,omitempty"`
+	// Optional per-store counts of rows deleted or anonymised, e.g.
+	// {"user_blobs": 3}. Keys follow the detail_code rules; at most 32 entries;
+	// negative values return InvalidArgument.
+	Counts        map[string]int64 `protobuf:"bytes,4,rep,name=counts,proto3" json:"counts,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AckUserErasureRequest) Reset() {
+	*x = AckUserErasureRequest{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[62]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AckUserErasureRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AckUserErasureRequest) ProtoMessage() {}
+
+func (x *AckUserErasureRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[62]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AckUserErasureRequest.ProtoReflect.Descriptor instead.
+func (*AckUserErasureRequest) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{62}
+}
+
+func (x *AckUserErasureRequest) GetErasureId() string {
+	if x != nil {
+		return x.ErasureId
+	}
+	return ""
+}
+
+func (x *AckUserErasureRequest) GetOutcome() ErasureOutcome {
+	if x != nil {
+		return x.Outcome
+	}
+	return ErasureOutcome_ERASURE_OUTCOME_UNSPECIFIED
+}
+
+func (x *AckUserErasureRequest) GetDetailCode() string {
+	if x != nil {
+		return x.DetailCode
+	}
+	return ""
+}
+
+func (x *AckUserErasureRequest) GetCounts() map[string]int64 {
+	if x != nil {
+		return x.Counts
+	}
+	return nil
+}
+
+// Acknowledgement is idempotent. The most recent acknowledgement per
+// (erasure_id, acknowledging module) is authoritative.
+type AckUserErasureResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AckUserErasureResponse) Reset() {
+	*x = AckUserErasureResponse{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[63]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AckUserErasureResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AckUserErasureResponse) ProtoMessage() {}
+
+func (x *AckUserErasureResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[63]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AckUserErasureResponse.ProtoReflect.Descriptor instead.
+func (*AckUserErasureResponse) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{63}
+}
+
+type GetUserErasureStatusRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// When set, report only this erasure (NotFound if unknown in the caller's
+	// tenant) and ignore pending_only and paging.
+	ErasureId string `protobuf:"bytes,1,opt,name=erasure_id,json=erasureId,proto3" json:"erasure_id,omitempty"`
+	// When erasure_id is empty: true reports only erasures that are not yet
+	// complete; false reports all.
+	PendingOnly bool `protobuf:"varint,2,opt,name=pending_only,json=pendingOnly,proto3" json:"pending_only,omitempty"`
+	// 0 selects 100. Values below 0 or above 500 return InvalidArgument.
+	PageSize int32 `protobuf:"varint,3,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// Opaque continuation, bound to pending_only. Malformed tokens return
+	// InvalidArgument.
+	PageToken     string `protobuf:"bytes,4,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetUserErasureStatusRequest) Reset() {
+	*x = GetUserErasureStatusRequest{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[64]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetUserErasureStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetUserErasureStatusRequest) ProtoMessage() {}
+
+func (x *GetUserErasureStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[64]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetUserErasureStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetUserErasureStatusRequest) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *GetUserErasureStatusRequest) GetErasureId() string {
+	if x != nil {
+		return x.ErasureId
+	}
+	return ""
+}
+
+func (x *GetUserErasureStatusRequest) GetPendingOnly() bool {
+	if x != nil {
+		return x.PendingOnly
+	}
+	return false
+}
+
+func (x *GetUserErasureStatusRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *GetUserErasureStatusRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+type ErasureModuleStatus struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The acknowledging module's verified CN, or a required module that has not
+	// acknowledged yet.
+	ModuleId string `protobuf:"bytes,1,opt,name=module_id,json=moduleId,proto3" json:"module_id,omitempty"`
+	// UNSPECIFIED: a required module has not acknowledged yet (pending).
+	Outcome    ErasureOutcome `protobuf:"varint,2,opt,name=outcome,proto3,enum=muxcore.auth.v1.ErasureOutcome" json:"outcome,omitempty"`
+	DetailCode string         `protobuf:"bytes,3,opt,name=detail_code,json=detailCode,proto3" json:"detail_code,omitempty"`
+	// UTC RFC 3339 time of the most recent acknowledgement; empty when pending.
+	AckedAt string `protobuf:"bytes,4,opt,name=acked_at,json=ackedAt,proto3" json:"acked_at,omitempty"`
+	// True when the module is listed in AUTH_ERASURE_REQUIRED.
+	Required      bool `protobuf:"varint,5,opt,name=required,proto3" json:"required,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ErasureModuleStatus) Reset() {
+	*x = ErasureModuleStatus{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[65]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ErasureModuleStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ErasureModuleStatus) ProtoMessage() {}
+
+func (x *ErasureModuleStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[65]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ErasureModuleStatus.ProtoReflect.Descriptor instead.
+func (*ErasureModuleStatus) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{65}
+}
+
+func (x *ErasureModuleStatus) GetModuleId() string {
+	if x != nil {
+		return x.ModuleId
+	}
+	return ""
+}
+
+func (x *ErasureModuleStatus) GetOutcome() ErasureOutcome {
+	if x != nil {
+		return x.Outcome
+	}
+	return ErasureOutcome_ERASURE_OUTCOME_UNSPECIFIED
+}
+
+func (x *ErasureModuleStatus) GetDetailCode() string {
+	if x != nil {
+		return x.DetailCode
+	}
+	return ""
+}
+
+func (x *ErasureModuleStatus) GetAckedAt() string {
+	if x != nil {
+		return x.AckedAt
+	}
+	return ""
+}
+
+func (x *ErasureModuleStatus) GetRequired() bool {
+	if x != nil {
+		return x.Required
+	}
+	return false
+}
+
+type ErasureStatus struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ErasureId string                 `protobuf:"bytes,1,opt,name=erasure_id,json=erasureId,proto3" json:"erasure_id,omitempty"`
+	// UTC RFC 3339.
+	DeletedAt string `protobuf:"bytes,2,opt,name=deleted_at,json=deletedAt,proto3" json:"deleted_at,omitempty"`
+	// Every required module, plus any other module that acknowledged.
+	Modules []*ErasureModuleStatus `protobuf:"bytes,3,rep,name=modules,proto3" json:"modules,omitempty"`
+	// True when every module in AUTH_ERASURE_REQUIRED has acknowledged OK.
+	Complete      bool `protobuf:"varint,4,opt,name=complete,proto3" json:"complete,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ErasureStatus) Reset() {
+	*x = ErasureStatus{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[66]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ErasureStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ErasureStatus) ProtoMessage() {}
+
+func (x *ErasureStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[66]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ErasureStatus.ProtoReflect.Descriptor instead.
+func (*ErasureStatus) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *ErasureStatus) GetErasureId() string {
+	if x != nil {
+		return x.ErasureId
+	}
+	return ""
+}
+
+func (x *ErasureStatus) GetDeletedAt() string {
+	if x != nil {
+		return x.DeletedAt
+	}
+	return ""
+}
+
+func (x *ErasureStatus) GetModules() []*ErasureModuleStatus {
+	if x != nil {
+		return x.Modules
+	}
+	return nil
+}
+
+func (x *ErasureStatus) GetComplete() bool {
+	if x != nil {
+		return x.Complete
+	}
+	return false
+}
+
+type GetUserErasureStatusResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Ordered by deleted_at ascending then erasure_id ascending.
+	Erasures []*ErasureStatus `protobuf:"bytes,1,rep,name=erasures,proto3" json:"erasures,omitempty"`
+	// Empty at the end.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetUserErasureStatusResponse) Reset() {
+	*x = GetUserErasureStatusResponse{}
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[67]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetUserErasureStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetUserErasureStatusResponse) ProtoMessage() {}
+
+func (x *GetUserErasureStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_muxcore_auth_v1_auth_proto_msgTypes[67]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetUserErasureStatusResponse.ProtoReflect.Descriptor instead.
+func (*GetUserErasureStatusResponse) Descriptor() ([]byte, []int) {
+	return file_muxcore_auth_v1_auth_proto_rawDescGZIP(), []int{67}
+}
+
+func (x *GetUserErasureStatusResponse) GetErasures() []*ErasureStatus {
+	if x != nil {
+		return x.Erasures
+	}
+	return nil
+}
+
+func (x *GetUserErasureStatusResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
 var File_muxcore_auth_v1_auth_proto protoreflect.FileDescriptor
 
 const file_muxcore_auth_v1_auth_proto_rawDesc = "" +
@@ -3423,9 +4083,11 @@ const file_muxcore_auth_v1_auth_proto_rawDesc = "" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\",\n" +
 	"\x11DeleteUserRequest\x12\x17\n" +
-	"\auser_id\x18\x01 \x01(\tR\x06userId\"*\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\"I\n" +
 	"\x12DeleteUserResponse\x12\x14\n" +
-	"\x05error\x18\x01 \x01(\tR\x05error\"\x12\n" +
+	"\x05error\x18\x01 \x01(\tR\x05error\x12\x1d\n" +
+	"\n" +
+	"erasure_id\x18\x02 \x01(\tR\terasureId\"\x12\n" +
 	"\x10ListUsersRequest\"\x8c\x01\n" +
 	"\bUserInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
@@ -3572,7 +4234,62 @@ const file_muxcore_auth_v1_auth_proto_rawDesc = "" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x02 \x01(\tR\tsessionId\"\x17\n" +
-	"\x15RevokeSessionResponse2\x9c\x14\n" +
+	"\x15RevokeSessionResponse\"U\n" +
+	"\x17ListUserErasuresRequest\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x01 \x01(\tR\tpageToken\x12\x1b\n" +
+	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\"\xb7\x01\n" +
+	"\vUserErasure\x12\x1d\n" +
+	"\n" +
+	"erasure_id\x18\x01 \x01(\tR\terasureId\x12\x17\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1b\n" +
+	"\ttenant_id\x18\x03 \x01(\tR\btenantId\x12\x1d\n" +
+	"\n" +
+	"deleted_at\x18\x04 \x01(\tR\tdeletedAt\x124\n" +
+	"\x16acknowledged_by_caller\x18\x05 \x01(\bR\x14acknowledgedByCaller\"|\n" +
+	"\x18ListUserErasuresResponse\x128\n" +
+	"\berasures\x18\x01 \x03(\v2\x1c.muxcore.auth.v1.UserErasureR\berasures\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\x99\x02\n" +
+	"\x15AckUserErasureRequest\x12\x1d\n" +
+	"\n" +
+	"erasure_id\x18\x01 \x01(\tR\terasureId\x129\n" +
+	"\aoutcome\x18\x02 \x01(\x0e2\x1f.muxcore.auth.v1.ErasureOutcomeR\aoutcome\x12\x1f\n" +
+	"\vdetail_code\x18\x03 \x01(\tR\n" +
+	"detailCode\x12J\n" +
+	"\x06counts\x18\x04 \x03(\v22.muxcore.auth.v1.AckUserErasureRequest.CountsEntryR\x06counts\x1a9\n" +
+	"\vCountsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01\"\x18\n" +
+	"\x16AckUserErasureResponse\"\x9b\x01\n" +
+	"\x1bGetUserErasureStatusRequest\x12\x1d\n" +
+	"\n" +
+	"erasure_id\x18\x01 \x01(\tR\terasureId\x12!\n" +
+	"\fpending_only\x18\x02 \x01(\bR\vpendingOnly\x12\x1b\n" +
+	"\tpage_size\x18\x03 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x04 \x01(\tR\tpageToken\"\xc5\x01\n" +
+	"\x13ErasureModuleStatus\x12\x1b\n" +
+	"\tmodule_id\x18\x01 \x01(\tR\bmoduleId\x129\n" +
+	"\aoutcome\x18\x02 \x01(\x0e2\x1f.muxcore.auth.v1.ErasureOutcomeR\aoutcome\x12\x1f\n" +
+	"\vdetail_code\x18\x03 \x01(\tR\n" +
+	"detailCode\x12\x19\n" +
+	"\backed_at\x18\x04 \x01(\tR\aackedAt\x12\x1a\n" +
+	"\brequired\x18\x05 \x01(\bR\brequired\"\xa9\x01\n" +
+	"\rErasureStatus\x12\x1d\n" +
+	"\n" +
+	"erasure_id\x18\x01 \x01(\tR\terasureId\x12\x1d\n" +
+	"\n" +
+	"deleted_at\x18\x02 \x01(\tR\tdeletedAt\x12>\n" +
+	"\amodules\x18\x03 \x03(\v2$.muxcore.auth.v1.ErasureModuleStatusR\amodules\x12\x1a\n" +
+	"\bcomplete\x18\x04 \x01(\bR\bcomplete\"\x82\x01\n" +
+	"\x1cGetUserErasureStatusResponse\x12:\n" +
+	"\berasures\x18\x01 \x03(\v2\x1e.muxcore.auth.v1.ErasureStatusR\berasures\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken*\x86\x01\n" +
+	"\x0eErasureOutcome\x12\x1f\n" +
+	"\x1bERASURE_OUTCOME_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12ERASURE_OUTCOME_OK\x10\x01\x12\x1a\n" +
+	"\x16ERASURE_OUTCOME_FAILED\x10\x02\x12\x1f\n" +
+	"\x1bERASURE_OUTCOME_UNSUPPORTED\x10\x032\xdd\x16\n" +
 	"\vAuthService\x12[\n" +
 	"\fAuthenticate\x12$.muxcore.auth.v1.AuthenticateRequest\x1a%.muxcore.auth.v1.AuthenticateResponse\x12O\n" +
 	"\bValidate\x12 .muxcore.auth.v1.ValidateRequest\x1a!.muxcore.auth.v1.ValidateResponse\x12I\n" +
@@ -3604,7 +4321,10 @@ const file_muxcore_auth_v1_auth_proto_rawDesc = "" +
 	"\fRevokeInvite\x12$.muxcore.auth.v1.RevokeInviteRequest\x1a%.muxcore.auth.v1.RevokeInviteResponse\x12[\n" +
 	"\fRedeemInvite\x12$.muxcore.auth.v1.RedeemInviteRequest\x1a%.muxcore.auth.v1.RedeemInviteResponse\x12[\n" +
 	"\fListSessions\x12$.muxcore.auth.v1.ListSessionsRequest\x1a%.muxcore.auth.v1.ListSessionsResponse\x12^\n" +
-	"\rRevokeSession\x12%.muxcore.auth.v1.RevokeSessionRequest\x1a&.muxcore.auth.v1.RevokeSessionResponseB@Z>github.com/Muxcore-Media/core/proto/gen/muxcore/auth/v1;authv1b\x06proto3"
+	"\rRevokeSession\x12%.muxcore.auth.v1.RevokeSessionRequest\x1a&.muxcore.auth.v1.RevokeSessionResponse\x12g\n" +
+	"\x10ListUserErasures\x12(.muxcore.auth.v1.ListUserErasuresRequest\x1a).muxcore.auth.v1.ListUserErasuresResponse\x12a\n" +
+	"\x0eAckUserErasure\x12&.muxcore.auth.v1.AckUserErasureRequest\x1a'.muxcore.auth.v1.AckUserErasureResponse\x12s\n" +
+	"\x14GetUserErasureStatus\x12,.muxcore.auth.v1.GetUserErasureStatusRequest\x1a-.muxcore.auth.v1.GetUserErasureStatusResponseB@Z>github.com/Muxcore-Media/core/proto/gen/muxcore/auth/v1;authv1b\x06proto3"
 
 var (
 	file_muxcore_auth_v1_auth_proto_rawDescOnce sync.Once
@@ -3618,133 +4338,157 @@ func file_muxcore_auth_v1_auth_proto_rawDescGZIP() []byte {
 	return file_muxcore_auth_v1_auth_proto_rawDescData
 }
 
-var file_muxcore_auth_v1_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 59)
+var file_muxcore_auth_v1_auth_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_muxcore_auth_v1_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 69)
 var file_muxcore_auth_v1_auth_proto_goTypes = []any{
-	(*AuthenticateRequest)(nil),               // 0: muxcore.auth.v1.AuthenticateRequest
-	(*AuthenticateResponse)(nil),              // 1: muxcore.auth.v1.AuthenticateResponse
-	(*ValidateRequest)(nil),                   // 2: muxcore.auth.v1.ValidateRequest
-	(*ValidateResponse)(nil),                  // 3: muxcore.auth.v1.ValidateResponse
-	(*RevokeRequest)(nil),                     // 4: muxcore.auth.v1.RevokeRequest
-	(*RevokeResponse)(nil),                    // 5: muxcore.auth.v1.RevokeResponse
-	(*CanRequest)(nil),                        // 6: muxcore.auth.v1.CanRequest
-	(*CanResponse)(nil),                       // 7: muxcore.auth.v1.CanResponse
-	(*ExtractIdentityRequest)(nil),            // 8: muxcore.auth.v1.ExtractIdentityRequest
-	(*ExtractIdentityResponse)(nil),           // 9: muxcore.auth.v1.ExtractIdentityResponse
-	(*EnableTOTPRequest)(nil),                 // 10: muxcore.auth.v1.EnableTOTPRequest
-	(*EnableTOTPResponse)(nil),                // 11: muxcore.auth.v1.EnableTOTPResponse
-	(*DisableTOTPRequest)(nil),                // 12: muxcore.auth.v1.DisableTOTPRequest
-	(*DisableTOTPResponse)(nil),               // 13: muxcore.auth.v1.DisableTOTPResponse
-	(*TOTPStatusRequest)(nil),                 // 14: muxcore.auth.v1.TOTPStatusRequest
-	(*TOTPStatusResponse)(nil),                // 15: muxcore.auth.v1.TOTPStatusResponse
-	(*VerifyTOTPSetupRequest)(nil),            // 16: muxcore.auth.v1.VerifyTOTPSetupRequest
-	(*VerifyTOTPSetupResponse)(nil),           // 17: muxcore.auth.v1.VerifyTOTPSetupResponse
-	(*CreateUserRequest)(nil),                 // 18: muxcore.auth.v1.CreateUserRequest
-	(*CreateUserResponse)(nil),                // 19: muxcore.auth.v1.CreateUserResponse
-	(*DeleteUserRequest)(nil),                 // 20: muxcore.auth.v1.DeleteUserRequest
-	(*DeleteUserResponse)(nil),                // 21: muxcore.auth.v1.DeleteUserResponse
-	(*ListUsersRequest)(nil),                  // 22: muxcore.auth.v1.ListUsersRequest
-	(*UserInfo)(nil),                          // 23: muxcore.auth.v1.UserInfo
-	(*ListUsersResponse)(nil),                 // 24: muxcore.auth.v1.ListUsersResponse
-	(*SetPasswordRequest)(nil),                // 25: muxcore.auth.v1.SetPasswordRequest
-	(*SetPasswordResponse)(nil),               // 26: muxcore.auth.v1.SetPasswordResponse
-	(*SetRolesRequest)(nil),                   // 27: muxcore.auth.v1.SetRolesRequest
-	(*SetRolesResponse)(nil),                  // 28: muxcore.auth.v1.SetRolesResponse
-	(*CreateAPITokenRequest)(nil),             // 29: muxcore.auth.v1.CreateAPITokenRequest
-	(*APITokenInfo)(nil),                      // 30: muxcore.auth.v1.APITokenInfo
-	(*CreateAPITokenResponse)(nil),            // 31: muxcore.auth.v1.CreateAPITokenResponse
-	(*ListAPITokensRequest)(nil),              // 32: muxcore.auth.v1.ListAPITokensRequest
-	(*ListAPITokensResponse)(nil),             // 33: muxcore.auth.v1.ListAPITokensResponse
-	(*DeleteAPITokenRequest)(nil),             // 34: muxcore.auth.v1.DeleteAPITokenRequest
-	(*DeleteAPITokenResponse)(nil),            // 35: muxcore.auth.v1.DeleteAPITokenResponse
-	(*WebAuthnCredentialInfo)(nil),            // 36: muxcore.auth.v1.WebAuthnCredentialInfo
-	(*ListWebAuthnCredentialsRequest)(nil),    // 37: muxcore.auth.v1.ListWebAuthnCredentialsRequest
-	(*ListWebAuthnCredentialsResponse)(nil),   // 38: muxcore.auth.v1.ListWebAuthnCredentialsResponse
-	(*DeleteWebAuthnCredentialRequest)(nil),   // 39: muxcore.auth.v1.DeleteWebAuthnCredentialRequest
-	(*DeleteWebAuthnCredentialResponse)(nil),  // 40: muxcore.auth.v1.DeleteWebAuthnCredentialResponse
-	(*BeginAdminRegistrationRequest)(nil),     // 41: muxcore.auth.v1.BeginAdminRegistrationRequest
-	(*BeginAdminRegistrationResponse)(nil),    // 42: muxcore.auth.v1.BeginAdminRegistrationResponse
-	(*CompleteAdminRegistrationRequest)(nil),  // 43: muxcore.auth.v1.CompleteAdminRegistrationRequest
-	(*CompleteAdminRegistrationResponse)(nil), // 44: muxcore.auth.v1.CompleteAdminRegistrationResponse
-	(*InviteInfo)(nil),                        // 45: muxcore.auth.v1.InviteInfo
-	(*CreateInviteRequest)(nil),               // 46: muxcore.auth.v1.CreateInviteRequest
-	(*CreateInviteResponse)(nil),              // 47: muxcore.auth.v1.CreateInviteResponse
-	(*ListInvitesRequest)(nil),                // 48: muxcore.auth.v1.ListInvitesRequest
-	(*ListInvitesResponse)(nil),               // 49: muxcore.auth.v1.ListInvitesResponse
-	(*RevokeInviteRequest)(nil),               // 50: muxcore.auth.v1.RevokeInviteRequest
-	(*RevokeInviteResponse)(nil),              // 51: muxcore.auth.v1.RevokeInviteResponse
-	(*RedeemInviteRequest)(nil),               // 52: muxcore.auth.v1.RedeemInviteRequest
-	(*RedeemInviteResponse)(nil),              // 53: muxcore.auth.v1.RedeemInviteResponse
-	(*ListSessionsRequest)(nil),               // 54: muxcore.auth.v1.ListSessionsRequest
-	(*SessionInfo)(nil),                       // 55: muxcore.auth.v1.SessionInfo
-	(*ListSessionsResponse)(nil),              // 56: muxcore.auth.v1.ListSessionsResponse
-	(*RevokeSessionRequest)(nil),              // 57: muxcore.auth.v1.RevokeSessionRequest
-	(*RevokeSessionResponse)(nil),             // 58: muxcore.auth.v1.RevokeSessionResponse
+	(ErasureOutcome)(0),                       // 0: muxcore.auth.v1.ErasureOutcome
+	(*AuthenticateRequest)(nil),               // 1: muxcore.auth.v1.AuthenticateRequest
+	(*AuthenticateResponse)(nil),              // 2: muxcore.auth.v1.AuthenticateResponse
+	(*ValidateRequest)(nil),                   // 3: muxcore.auth.v1.ValidateRequest
+	(*ValidateResponse)(nil),                  // 4: muxcore.auth.v1.ValidateResponse
+	(*RevokeRequest)(nil),                     // 5: muxcore.auth.v1.RevokeRequest
+	(*RevokeResponse)(nil),                    // 6: muxcore.auth.v1.RevokeResponse
+	(*CanRequest)(nil),                        // 7: muxcore.auth.v1.CanRequest
+	(*CanResponse)(nil),                       // 8: muxcore.auth.v1.CanResponse
+	(*ExtractIdentityRequest)(nil),            // 9: muxcore.auth.v1.ExtractIdentityRequest
+	(*ExtractIdentityResponse)(nil),           // 10: muxcore.auth.v1.ExtractIdentityResponse
+	(*EnableTOTPRequest)(nil),                 // 11: muxcore.auth.v1.EnableTOTPRequest
+	(*EnableTOTPResponse)(nil),                // 12: muxcore.auth.v1.EnableTOTPResponse
+	(*DisableTOTPRequest)(nil),                // 13: muxcore.auth.v1.DisableTOTPRequest
+	(*DisableTOTPResponse)(nil),               // 14: muxcore.auth.v1.DisableTOTPResponse
+	(*TOTPStatusRequest)(nil),                 // 15: muxcore.auth.v1.TOTPStatusRequest
+	(*TOTPStatusResponse)(nil),                // 16: muxcore.auth.v1.TOTPStatusResponse
+	(*VerifyTOTPSetupRequest)(nil),            // 17: muxcore.auth.v1.VerifyTOTPSetupRequest
+	(*VerifyTOTPSetupResponse)(nil),           // 18: muxcore.auth.v1.VerifyTOTPSetupResponse
+	(*CreateUserRequest)(nil),                 // 19: muxcore.auth.v1.CreateUserRequest
+	(*CreateUserResponse)(nil),                // 20: muxcore.auth.v1.CreateUserResponse
+	(*DeleteUserRequest)(nil),                 // 21: muxcore.auth.v1.DeleteUserRequest
+	(*DeleteUserResponse)(nil),                // 22: muxcore.auth.v1.DeleteUserResponse
+	(*ListUsersRequest)(nil),                  // 23: muxcore.auth.v1.ListUsersRequest
+	(*UserInfo)(nil),                          // 24: muxcore.auth.v1.UserInfo
+	(*ListUsersResponse)(nil),                 // 25: muxcore.auth.v1.ListUsersResponse
+	(*SetPasswordRequest)(nil),                // 26: muxcore.auth.v1.SetPasswordRequest
+	(*SetPasswordResponse)(nil),               // 27: muxcore.auth.v1.SetPasswordResponse
+	(*SetRolesRequest)(nil),                   // 28: muxcore.auth.v1.SetRolesRequest
+	(*SetRolesResponse)(nil),                  // 29: muxcore.auth.v1.SetRolesResponse
+	(*CreateAPITokenRequest)(nil),             // 30: muxcore.auth.v1.CreateAPITokenRequest
+	(*APITokenInfo)(nil),                      // 31: muxcore.auth.v1.APITokenInfo
+	(*CreateAPITokenResponse)(nil),            // 32: muxcore.auth.v1.CreateAPITokenResponse
+	(*ListAPITokensRequest)(nil),              // 33: muxcore.auth.v1.ListAPITokensRequest
+	(*ListAPITokensResponse)(nil),             // 34: muxcore.auth.v1.ListAPITokensResponse
+	(*DeleteAPITokenRequest)(nil),             // 35: muxcore.auth.v1.DeleteAPITokenRequest
+	(*DeleteAPITokenResponse)(nil),            // 36: muxcore.auth.v1.DeleteAPITokenResponse
+	(*WebAuthnCredentialInfo)(nil),            // 37: muxcore.auth.v1.WebAuthnCredentialInfo
+	(*ListWebAuthnCredentialsRequest)(nil),    // 38: muxcore.auth.v1.ListWebAuthnCredentialsRequest
+	(*ListWebAuthnCredentialsResponse)(nil),   // 39: muxcore.auth.v1.ListWebAuthnCredentialsResponse
+	(*DeleteWebAuthnCredentialRequest)(nil),   // 40: muxcore.auth.v1.DeleteWebAuthnCredentialRequest
+	(*DeleteWebAuthnCredentialResponse)(nil),  // 41: muxcore.auth.v1.DeleteWebAuthnCredentialResponse
+	(*BeginAdminRegistrationRequest)(nil),     // 42: muxcore.auth.v1.BeginAdminRegistrationRequest
+	(*BeginAdminRegistrationResponse)(nil),    // 43: muxcore.auth.v1.BeginAdminRegistrationResponse
+	(*CompleteAdminRegistrationRequest)(nil),  // 44: muxcore.auth.v1.CompleteAdminRegistrationRequest
+	(*CompleteAdminRegistrationResponse)(nil), // 45: muxcore.auth.v1.CompleteAdminRegistrationResponse
+	(*InviteInfo)(nil),                        // 46: muxcore.auth.v1.InviteInfo
+	(*CreateInviteRequest)(nil),               // 47: muxcore.auth.v1.CreateInviteRequest
+	(*CreateInviteResponse)(nil),              // 48: muxcore.auth.v1.CreateInviteResponse
+	(*ListInvitesRequest)(nil),                // 49: muxcore.auth.v1.ListInvitesRequest
+	(*ListInvitesResponse)(nil),               // 50: muxcore.auth.v1.ListInvitesResponse
+	(*RevokeInviteRequest)(nil),               // 51: muxcore.auth.v1.RevokeInviteRequest
+	(*RevokeInviteResponse)(nil),              // 52: muxcore.auth.v1.RevokeInviteResponse
+	(*RedeemInviteRequest)(nil),               // 53: muxcore.auth.v1.RedeemInviteRequest
+	(*RedeemInviteResponse)(nil),              // 54: muxcore.auth.v1.RedeemInviteResponse
+	(*ListSessionsRequest)(nil),               // 55: muxcore.auth.v1.ListSessionsRequest
+	(*SessionInfo)(nil),                       // 56: muxcore.auth.v1.SessionInfo
+	(*ListSessionsResponse)(nil),              // 57: muxcore.auth.v1.ListSessionsResponse
+	(*RevokeSessionRequest)(nil),              // 58: muxcore.auth.v1.RevokeSessionRequest
+	(*RevokeSessionResponse)(nil),             // 59: muxcore.auth.v1.RevokeSessionResponse
+	(*ListUserErasuresRequest)(nil),           // 60: muxcore.auth.v1.ListUserErasuresRequest
+	(*UserErasure)(nil),                       // 61: muxcore.auth.v1.UserErasure
+	(*ListUserErasuresResponse)(nil),          // 62: muxcore.auth.v1.ListUserErasuresResponse
+	(*AckUserErasureRequest)(nil),             // 63: muxcore.auth.v1.AckUserErasureRequest
+	(*AckUserErasureResponse)(nil),            // 64: muxcore.auth.v1.AckUserErasureResponse
+	(*GetUserErasureStatusRequest)(nil),       // 65: muxcore.auth.v1.GetUserErasureStatusRequest
+	(*ErasureModuleStatus)(nil),               // 66: muxcore.auth.v1.ErasureModuleStatus
+	(*ErasureStatus)(nil),                     // 67: muxcore.auth.v1.ErasureStatus
+	(*GetUserErasureStatusResponse)(nil),      // 68: muxcore.auth.v1.GetUserErasureStatusResponse
+	nil,                                       // 69: muxcore.auth.v1.AckUserErasureRequest.CountsEntry
 }
 var file_muxcore_auth_v1_auth_proto_depIdxs = []int32{
-	23, // 0: muxcore.auth.v1.ListUsersResponse.users:type_name -> muxcore.auth.v1.UserInfo
-	30, // 1: muxcore.auth.v1.ListAPITokensResponse.tokens:type_name -> muxcore.auth.v1.APITokenInfo
-	36, // 2: muxcore.auth.v1.ListWebAuthnCredentialsResponse.credentials:type_name -> muxcore.auth.v1.WebAuthnCredentialInfo
-	45, // 3: muxcore.auth.v1.ListInvitesResponse.invites:type_name -> muxcore.auth.v1.InviteInfo
-	55, // 4: muxcore.auth.v1.ListSessionsResponse.sessions:type_name -> muxcore.auth.v1.SessionInfo
-	0,  // 5: muxcore.auth.v1.AuthService.Authenticate:input_type -> muxcore.auth.v1.AuthenticateRequest
-	2,  // 6: muxcore.auth.v1.AuthService.Validate:input_type -> muxcore.auth.v1.ValidateRequest
-	4,  // 7: muxcore.auth.v1.AuthService.Revoke:input_type -> muxcore.auth.v1.RevokeRequest
-	6,  // 8: muxcore.auth.v1.AuthService.Can:input_type -> muxcore.auth.v1.CanRequest
-	8,  // 9: muxcore.auth.v1.AuthService.ExtractIdentity:input_type -> muxcore.auth.v1.ExtractIdentityRequest
-	10, // 10: muxcore.auth.v1.AuthService.EnableTOTP:input_type -> muxcore.auth.v1.EnableTOTPRequest
-	12, // 11: muxcore.auth.v1.AuthService.DisableTOTP:input_type -> muxcore.auth.v1.DisableTOTPRequest
-	14, // 12: muxcore.auth.v1.AuthService.TOTPStatus:input_type -> muxcore.auth.v1.TOTPStatusRequest
-	16, // 13: muxcore.auth.v1.AuthService.VerifyTOTPSetup:input_type -> muxcore.auth.v1.VerifyTOTPSetupRequest
-	18, // 14: muxcore.auth.v1.AuthService.CreateUser:input_type -> muxcore.auth.v1.CreateUserRequest
-	20, // 15: muxcore.auth.v1.AuthService.DeleteUser:input_type -> muxcore.auth.v1.DeleteUserRequest
-	22, // 16: muxcore.auth.v1.AuthService.ListUsers:input_type -> muxcore.auth.v1.ListUsersRequest
-	25, // 17: muxcore.auth.v1.AuthService.SetPassword:input_type -> muxcore.auth.v1.SetPasswordRequest
-	27, // 18: muxcore.auth.v1.AuthService.SetRoles:input_type -> muxcore.auth.v1.SetRolesRequest
-	29, // 19: muxcore.auth.v1.AuthService.CreateAPIToken:input_type -> muxcore.auth.v1.CreateAPITokenRequest
-	32, // 20: muxcore.auth.v1.AuthService.ListAPITokens:input_type -> muxcore.auth.v1.ListAPITokensRequest
-	34, // 21: muxcore.auth.v1.AuthService.DeleteAPIToken:input_type -> muxcore.auth.v1.DeleteAPITokenRequest
-	37, // 22: muxcore.auth.v1.AuthService.ListWebAuthnCredentials:input_type -> muxcore.auth.v1.ListWebAuthnCredentialsRequest
-	39, // 23: muxcore.auth.v1.AuthService.DeleteWebAuthnCredential:input_type -> muxcore.auth.v1.DeleteWebAuthnCredentialRequest
-	41, // 24: muxcore.auth.v1.AuthService.BeginAdminRegistration:input_type -> muxcore.auth.v1.BeginAdminRegistrationRequest
-	43, // 25: muxcore.auth.v1.AuthService.CompleteAdminRegistration:input_type -> muxcore.auth.v1.CompleteAdminRegistrationRequest
-	46, // 26: muxcore.auth.v1.AuthService.CreateInvite:input_type -> muxcore.auth.v1.CreateInviteRequest
-	48, // 27: muxcore.auth.v1.AuthService.ListInvites:input_type -> muxcore.auth.v1.ListInvitesRequest
-	50, // 28: muxcore.auth.v1.AuthService.RevokeInvite:input_type -> muxcore.auth.v1.RevokeInviteRequest
-	52, // 29: muxcore.auth.v1.AuthService.RedeemInvite:input_type -> muxcore.auth.v1.RedeemInviteRequest
-	54, // 30: muxcore.auth.v1.AuthService.ListSessions:input_type -> muxcore.auth.v1.ListSessionsRequest
-	57, // 31: muxcore.auth.v1.AuthService.RevokeSession:input_type -> muxcore.auth.v1.RevokeSessionRequest
-	1,  // 32: muxcore.auth.v1.AuthService.Authenticate:output_type -> muxcore.auth.v1.AuthenticateResponse
-	3,  // 33: muxcore.auth.v1.AuthService.Validate:output_type -> muxcore.auth.v1.ValidateResponse
-	5,  // 34: muxcore.auth.v1.AuthService.Revoke:output_type -> muxcore.auth.v1.RevokeResponse
-	7,  // 35: muxcore.auth.v1.AuthService.Can:output_type -> muxcore.auth.v1.CanResponse
-	9,  // 36: muxcore.auth.v1.AuthService.ExtractIdentity:output_type -> muxcore.auth.v1.ExtractIdentityResponse
-	11, // 37: muxcore.auth.v1.AuthService.EnableTOTP:output_type -> muxcore.auth.v1.EnableTOTPResponse
-	13, // 38: muxcore.auth.v1.AuthService.DisableTOTP:output_type -> muxcore.auth.v1.DisableTOTPResponse
-	15, // 39: muxcore.auth.v1.AuthService.TOTPStatus:output_type -> muxcore.auth.v1.TOTPStatusResponse
-	17, // 40: muxcore.auth.v1.AuthService.VerifyTOTPSetup:output_type -> muxcore.auth.v1.VerifyTOTPSetupResponse
-	19, // 41: muxcore.auth.v1.AuthService.CreateUser:output_type -> muxcore.auth.v1.CreateUserResponse
-	21, // 42: muxcore.auth.v1.AuthService.DeleteUser:output_type -> muxcore.auth.v1.DeleteUserResponse
-	24, // 43: muxcore.auth.v1.AuthService.ListUsers:output_type -> muxcore.auth.v1.ListUsersResponse
-	26, // 44: muxcore.auth.v1.AuthService.SetPassword:output_type -> muxcore.auth.v1.SetPasswordResponse
-	28, // 45: muxcore.auth.v1.AuthService.SetRoles:output_type -> muxcore.auth.v1.SetRolesResponse
-	31, // 46: muxcore.auth.v1.AuthService.CreateAPIToken:output_type -> muxcore.auth.v1.CreateAPITokenResponse
-	33, // 47: muxcore.auth.v1.AuthService.ListAPITokens:output_type -> muxcore.auth.v1.ListAPITokensResponse
-	35, // 48: muxcore.auth.v1.AuthService.DeleteAPIToken:output_type -> muxcore.auth.v1.DeleteAPITokenResponse
-	38, // 49: muxcore.auth.v1.AuthService.ListWebAuthnCredentials:output_type -> muxcore.auth.v1.ListWebAuthnCredentialsResponse
-	40, // 50: muxcore.auth.v1.AuthService.DeleteWebAuthnCredential:output_type -> muxcore.auth.v1.DeleteWebAuthnCredentialResponse
-	42, // 51: muxcore.auth.v1.AuthService.BeginAdminRegistration:output_type -> muxcore.auth.v1.BeginAdminRegistrationResponse
-	44, // 52: muxcore.auth.v1.AuthService.CompleteAdminRegistration:output_type -> muxcore.auth.v1.CompleteAdminRegistrationResponse
-	47, // 53: muxcore.auth.v1.AuthService.CreateInvite:output_type -> muxcore.auth.v1.CreateInviteResponse
-	49, // 54: muxcore.auth.v1.AuthService.ListInvites:output_type -> muxcore.auth.v1.ListInvitesResponse
-	51, // 55: muxcore.auth.v1.AuthService.RevokeInvite:output_type -> muxcore.auth.v1.RevokeInviteResponse
-	53, // 56: muxcore.auth.v1.AuthService.RedeemInvite:output_type -> muxcore.auth.v1.RedeemInviteResponse
-	56, // 57: muxcore.auth.v1.AuthService.ListSessions:output_type -> muxcore.auth.v1.ListSessionsResponse
-	58, // 58: muxcore.auth.v1.AuthService.RevokeSession:output_type -> muxcore.auth.v1.RevokeSessionResponse
-	32, // [32:59] is the sub-list for method output_type
-	5,  // [5:32] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	24, // 0: muxcore.auth.v1.ListUsersResponse.users:type_name -> muxcore.auth.v1.UserInfo
+	31, // 1: muxcore.auth.v1.ListAPITokensResponse.tokens:type_name -> muxcore.auth.v1.APITokenInfo
+	37, // 2: muxcore.auth.v1.ListWebAuthnCredentialsResponse.credentials:type_name -> muxcore.auth.v1.WebAuthnCredentialInfo
+	46, // 3: muxcore.auth.v1.ListInvitesResponse.invites:type_name -> muxcore.auth.v1.InviteInfo
+	56, // 4: muxcore.auth.v1.ListSessionsResponse.sessions:type_name -> muxcore.auth.v1.SessionInfo
+	61, // 5: muxcore.auth.v1.ListUserErasuresResponse.erasures:type_name -> muxcore.auth.v1.UserErasure
+	0,  // 6: muxcore.auth.v1.AckUserErasureRequest.outcome:type_name -> muxcore.auth.v1.ErasureOutcome
+	69, // 7: muxcore.auth.v1.AckUserErasureRequest.counts:type_name -> muxcore.auth.v1.AckUserErasureRequest.CountsEntry
+	0,  // 8: muxcore.auth.v1.ErasureModuleStatus.outcome:type_name -> muxcore.auth.v1.ErasureOutcome
+	66, // 9: muxcore.auth.v1.ErasureStatus.modules:type_name -> muxcore.auth.v1.ErasureModuleStatus
+	67, // 10: muxcore.auth.v1.GetUserErasureStatusResponse.erasures:type_name -> muxcore.auth.v1.ErasureStatus
+	1,  // 11: muxcore.auth.v1.AuthService.Authenticate:input_type -> muxcore.auth.v1.AuthenticateRequest
+	3,  // 12: muxcore.auth.v1.AuthService.Validate:input_type -> muxcore.auth.v1.ValidateRequest
+	5,  // 13: muxcore.auth.v1.AuthService.Revoke:input_type -> muxcore.auth.v1.RevokeRequest
+	7,  // 14: muxcore.auth.v1.AuthService.Can:input_type -> muxcore.auth.v1.CanRequest
+	9,  // 15: muxcore.auth.v1.AuthService.ExtractIdentity:input_type -> muxcore.auth.v1.ExtractIdentityRequest
+	11, // 16: muxcore.auth.v1.AuthService.EnableTOTP:input_type -> muxcore.auth.v1.EnableTOTPRequest
+	13, // 17: muxcore.auth.v1.AuthService.DisableTOTP:input_type -> muxcore.auth.v1.DisableTOTPRequest
+	15, // 18: muxcore.auth.v1.AuthService.TOTPStatus:input_type -> muxcore.auth.v1.TOTPStatusRequest
+	17, // 19: muxcore.auth.v1.AuthService.VerifyTOTPSetup:input_type -> muxcore.auth.v1.VerifyTOTPSetupRequest
+	19, // 20: muxcore.auth.v1.AuthService.CreateUser:input_type -> muxcore.auth.v1.CreateUserRequest
+	21, // 21: muxcore.auth.v1.AuthService.DeleteUser:input_type -> muxcore.auth.v1.DeleteUserRequest
+	23, // 22: muxcore.auth.v1.AuthService.ListUsers:input_type -> muxcore.auth.v1.ListUsersRequest
+	26, // 23: muxcore.auth.v1.AuthService.SetPassword:input_type -> muxcore.auth.v1.SetPasswordRequest
+	28, // 24: muxcore.auth.v1.AuthService.SetRoles:input_type -> muxcore.auth.v1.SetRolesRequest
+	30, // 25: muxcore.auth.v1.AuthService.CreateAPIToken:input_type -> muxcore.auth.v1.CreateAPITokenRequest
+	33, // 26: muxcore.auth.v1.AuthService.ListAPITokens:input_type -> muxcore.auth.v1.ListAPITokensRequest
+	35, // 27: muxcore.auth.v1.AuthService.DeleteAPIToken:input_type -> muxcore.auth.v1.DeleteAPITokenRequest
+	38, // 28: muxcore.auth.v1.AuthService.ListWebAuthnCredentials:input_type -> muxcore.auth.v1.ListWebAuthnCredentialsRequest
+	40, // 29: muxcore.auth.v1.AuthService.DeleteWebAuthnCredential:input_type -> muxcore.auth.v1.DeleteWebAuthnCredentialRequest
+	42, // 30: muxcore.auth.v1.AuthService.BeginAdminRegistration:input_type -> muxcore.auth.v1.BeginAdminRegistrationRequest
+	44, // 31: muxcore.auth.v1.AuthService.CompleteAdminRegistration:input_type -> muxcore.auth.v1.CompleteAdminRegistrationRequest
+	47, // 32: muxcore.auth.v1.AuthService.CreateInvite:input_type -> muxcore.auth.v1.CreateInviteRequest
+	49, // 33: muxcore.auth.v1.AuthService.ListInvites:input_type -> muxcore.auth.v1.ListInvitesRequest
+	51, // 34: muxcore.auth.v1.AuthService.RevokeInvite:input_type -> muxcore.auth.v1.RevokeInviteRequest
+	53, // 35: muxcore.auth.v1.AuthService.RedeemInvite:input_type -> muxcore.auth.v1.RedeemInviteRequest
+	55, // 36: muxcore.auth.v1.AuthService.ListSessions:input_type -> muxcore.auth.v1.ListSessionsRequest
+	58, // 37: muxcore.auth.v1.AuthService.RevokeSession:input_type -> muxcore.auth.v1.RevokeSessionRequest
+	60, // 38: muxcore.auth.v1.AuthService.ListUserErasures:input_type -> muxcore.auth.v1.ListUserErasuresRequest
+	63, // 39: muxcore.auth.v1.AuthService.AckUserErasure:input_type -> muxcore.auth.v1.AckUserErasureRequest
+	65, // 40: muxcore.auth.v1.AuthService.GetUserErasureStatus:input_type -> muxcore.auth.v1.GetUserErasureStatusRequest
+	2,  // 41: muxcore.auth.v1.AuthService.Authenticate:output_type -> muxcore.auth.v1.AuthenticateResponse
+	4,  // 42: muxcore.auth.v1.AuthService.Validate:output_type -> muxcore.auth.v1.ValidateResponse
+	6,  // 43: muxcore.auth.v1.AuthService.Revoke:output_type -> muxcore.auth.v1.RevokeResponse
+	8,  // 44: muxcore.auth.v1.AuthService.Can:output_type -> muxcore.auth.v1.CanResponse
+	10, // 45: muxcore.auth.v1.AuthService.ExtractIdentity:output_type -> muxcore.auth.v1.ExtractIdentityResponse
+	12, // 46: muxcore.auth.v1.AuthService.EnableTOTP:output_type -> muxcore.auth.v1.EnableTOTPResponse
+	14, // 47: muxcore.auth.v1.AuthService.DisableTOTP:output_type -> muxcore.auth.v1.DisableTOTPResponse
+	16, // 48: muxcore.auth.v1.AuthService.TOTPStatus:output_type -> muxcore.auth.v1.TOTPStatusResponse
+	18, // 49: muxcore.auth.v1.AuthService.VerifyTOTPSetup:output_type -> muxcore.auth.v1.VerifyTOTPSetupResponse
+	20, // 50: muxcore.auth.v1.AuthService.CreateUser:output_type -> muxcore.auth.v1.CreateUserResponse
+	22, // 51: muxcore.auth.v1.AuthService.DeleteUser:output_type -> muxcore.auth.v1.DeleteUserResponse
+	25, // 52: muxcore.auth.v1.AuthService.ListUsers:output_type -> muxcore.auth.v1.ListUsersResponse
+	27, // 53: muxcore.auth.v1.AuthService.SetPassword:output_type -> muxcore.auth.v1.SetPasswordResponse
+	29, // 54: muxcore.auth.v1.AuthService.SetRoles:output_type -> muxcore.auth.v1.SetRolesResponse
+	32, // 55: muxcore.auth.v1.AuthService.CreateAPIToken:output_type -> muxcore.auth.v1.CreateAPITokenResponse
+	34, // 56: muxcore.auth.v1.AuthService.ListAPITokens:output_type -> muxcore.auth.v1.ListAPITokensResponse
+	36, // 57: muxcore.auth.v1.AuthService.DeleteAPIToken:output_type -> muxcore.auth.v1.DeleteAPITokenResponse
+	39, // 58: muxcore.auth.v1.AuthService.ListWebAuthnCredentials:output_type -> muxcore.auth.v1.ListWebAuthnCredentialsResponse
+	41, // 59: muxcore.auth.v1.AuthService.DeleteWebAuthnCredential:output_type -> muxcore.auth.v1.DeleteWebAuthnCredentialResponse
+	43, // 60: muxcore.auth.v1.AuthService.BeginAdminRegistration:output_type -> muxcore.auth.v1.BeginAdminRegistrationResponse
+	45, // 61: muxcore.auth.v1.AuthService.CompleteAdminRegistration:output_type -> muxcore.auth.v1.CompleteAdminRegistrationResponse
+	48, // 62: muxcore.auth.v1.AuthService.CreateInvite:output_type -> muxcore.auth.v1.CreateInviteResponse
+	50, // 63: muxcore.auth.v1.AuthService.ListInvites:output_type -> muxcore.auth.v1.ListInvitesResponse
+	52, // 64: muxcore.auth.v1.AuthService.RevokeInvite:output_type -> muxcore.auth.v1.RevokeInviteResponse
+	54, // 65: muxcore.auth.v1.AuthService.RedeemInvite:output_type -> muxcore.auth.v1.RedeemInviteResponse
+	57, // 66: muxcore.auth.v1.AuthService.ListSessions:output_type -> muxcore.auth.v1.ListSessionsResponse
+	59, // 67: muxcore.auth.v1.AuthService.RevokeSession:output_type -> muxcore.auth.v1.RevokeSessionResponse
+	62, // 68: muxcore.auth.v1.AuthService.ListUserErasures:output_type -> muxcore.auth.v1.ListUserErasuresResponse
+	64, // 69: muxcore.auth.v1.AuthService.AckUserErasure:output_type -> muxcore.auth.v1.AckUserErasureResponse
+	68, // 70: muxcore.auth.v1.AuthService.GetUserErasureStatus:output_type -> muxcore.auth.v1.GetUserErasureStatusResponse
+	41, // [41:71] is the sub-list for method output_type
+	11, // [11:41] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_muxcore_auth_v1_auth_proto_init() }
@@ -3757,13 +4501,14 @@ func file_muxcore_auth_v1_auth_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_muxcore_auth_v1_auth_proto_rawDesc), len(file_muxcore_auth_v1_auth_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   59,
+			NumEnums:      1,
+			NumMessages:   69,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_muxcore_auth_v1_auth_proto_goTypes,
 		DependencyIndexes: file_muxcore_auth_v1_auth_proto_depIdxs,
+		EnumInfos:         file_muxcore_auth_v1_auth_proto_enumTypes,
 		MessageInfos:      file_muxcore_auth_v1_auth_proto_msgTypes,
 	}.Build()
 	File_muxcore_auth_v1_auth_proto = out.File

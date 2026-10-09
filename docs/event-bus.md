@@ -22,7 +22,18 @@ Publisher (module)
       │           └── subscriber-N worker goroutine
 ```
 
-The event bus is **deny-by-default**: if no `PublishPolicyProvider` is configured, all `Publish` calls return an error. The built-in policy (wired at bootstrap) allows core lifecycle events and delegates domain events to capability checks.
+The event bus is **deny-by-default**: if no `PublishPolicyProvider` is configured, every `Publish` call — core's own included — returns an error. Core has **no built-in publish policy**. At bootstrap `WirePublishPolicy` (`internal/bootstrap/wiring.go`) installs the provider of record of the `publish.policy` capability (an in-process module or a sidecar such as `publish-policy-default`); when no module provides it, nothing is installed and publishing stays denied. A policy that also implements `ResourcePublishPolicyProvider` is consulted with the full event; otherwise `CanPublish(caller, eventType)` is used.
+
+### Delivery guarantees
+
+Delivery is **at-most-once**. There is no acknowledgement, redelivery or dead-letter queue:
+
+- an event is dropped for a subscriber whose channel is full, and `Publish` still returns `nil`;
+- a handler error or timeout is logged and the event is not retried;
+- a subscriber that is not subscribed when the event is published (down, restarting, or a remote module whose `EventService/Subscribe` stream has ended and not yet resubscribed) never receives it;
+- the WAL below is opt-in and in-process only: it is not enabled unless `MUXCORE_EVENT_JOURNAL_PATH` is set, and segments are pruned beyond 100 regardless of subscriber progress.
+
+The publisher-supplied `Source` is not verified, and `EventService/Subscribe` is open to any mesh caller. Do not use the bus for anything that must reach every consumer or that grants authority — user erasure, for example, uses the identity provider's ledger RPCs in `proto/muxcore/auth/v1/auth.proto` (ADR-0035), not an event — and do not put identifying data in payloads.
 
 ---
 
@@ -97,20 +108,18 @@ stats := bus.SubscriberStats()
 typeCounts := bus.SubscriptionStats()
 ```
 
-### Per-module timeout override
+### Handler timeout
 
-```go
-// Allow this module's handlers up to 2 minutes (e.g., for long downloads)
-bus.SetSubscriberTimeout("downloader-qbittorrent", 2*time.Minute)
-```
-
-Default handler timeout: 30 seconds.
+Every handler invocation runs with a fixed 30-second deadline
+(`defaultHandlerTimeout` in `internal/events/memory.go`). There is no per-module
+override: `MemoryBus` has no `SetSubscriberTimeout` method. A handler that needs
+longer should hand the work to its own queue and return.
 
 ---
 
 ## Write-Ahead Log (WAL)
 
-The WAL provides event persistence and catch-up replay for subscribers that miss events during downtime or late registration.
+The WAL provides event persistence and in-process catch-up replay (`SubscribeFrom`) for subscribers that register late. It does not make delivery reliable: it is off unless configured, the gRPC `Replay` RPC has no live tail, events carry no sequence over gRPC, and old segments are pruned once more than 100 exist even if a subscriber has not read them.
 
 ### Enabling
 
@@ -202,8 +211,10 @@ n := bus.SubscriberCount()
 ```
 
 **Alert trigger:** `DroppedEvents()` growing means one or more subscribers
-are processing events slower than they're published. Tune with
-`SetSubscriberTimeout` or increase subscriber buffer capacity.
+are processing events slower than they're published, and those events are
+lost (at-most-once delivery). Make the handlers faster or move slow work off
+the handler; the buffer capacity (256) and handler timeout (30 s) are
+constants, not settings.
 
 ---
 
