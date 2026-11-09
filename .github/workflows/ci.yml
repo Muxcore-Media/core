@@ -209,7 +209,7 @@ jobs:
               predicate: $pred[0]
             }' > provenance.json
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3.8.2
+        uses: sigstore/cosign-installer@v4.1.3
         with:
           cosign-release: v2.4.3
       - name: Sign provenance with cosign
